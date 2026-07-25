@@ -31,13 +31,35 @@ QWEN_MODEL_ID = "Qwen/Qwen-Image"
 # profile is ``sdxl``; ``default`` is kept as an accepted alias (it was the profile's
 # name before ``controlnet`` became the default-selected pipeline, 2026-06-09).
 SDXL_PROFILE = "sdxl"
-_PROFILE_ALIASES = {"default": SDXL_PROFILE}
+QWEN_ZIMAGE_PROFILE = "qwen-zimage"
+_PROFILE_ALIASES = {
+    "default": SDXL_PROFILE,
+    "qwen_zimage": QWEN_ZIMAGE_PROFILE,
+}
 
 
 def normalize_profile(profile: str) -> str:
     """Canonicalize a pipeline-profile name, resolving the ``default`` -> ``sdxl`` alias."""
     normalized = profile.strip().lower()
     return _PROFILE_ALIASES.get(normalized, normalized)
+
+
+def resolve_steps(num_inference_steps: int | None, pipeline: str) -> int:
+    """Resolve a profile-specific step default while preserving explicit values.
+
+    The Lightning LoRA in ``qwen-zimage`` is distilled for four steps. Existing
+    SDXL and Qwen profiles keep the long-standing 50-step CLI default.
+    """
+    if num_inference_steps is not None:
+        return num_inference_steps
+    return 4 if normalize_profile(pipeline) == QWEN_ZIMAGE_PROFILE else 50
+
+
+def resolve_seed(seed: int | None, pipeline: str) -> int | None:
+    """Keep the oracle-verified qwen-zimage profile deterministic by default."""
+    if seed is not None:
+        return seed
+    return 0 if normalize_profile(pipeline) == QWEN_ZIMAGE_PROFILE else None
 
 
 # The SDXL-native canny ControlNet used by the ``controlnet`` pipeline. The
@@ -113,7 +135,8 @@ def strength_default_help() -> str:
     """
     return (
         f"vendor-adaptive (OpenAI {OPENAI_STRENGTH} / Google {GEMINI_STRENGTH} / "
-        f"unknown {UNKNOWN_STRENGTH}, from the C2PA issuer; same ladder for both pipelines)"
+        f"unknown {UNKNOWN_STRENGTH}, from the C2PA issuer; qwen-zimage instead uses "
+        "resolution-adaptive denoise)"
     )
 
 

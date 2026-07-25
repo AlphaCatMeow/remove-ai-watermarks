@@ -33,7 +33,7 @@ It does **not** target watermarks that protect someone else's paid or copyrighte
 - **AI metadata stripping** — EXIF, PNG text chunks, C2PA provenance manifests (PNG / JPEG / AVIF / HEIF / JPEG-XL, **MP4 / MOV / M4V / M4A** at the container level, and **WebM / MP3 / WAV / FLAC / OGG** losslessly via ffmpeg), XMP DigitalSourceType
 - **"Made with AI" label removal** — removes the AI-disclosure metadata that platforms read to apply automatic labels (useful for clearing a false-positive label from a human-edited photograph)
 - **Analog Humanizer** — optional film grain and chromatic aberration post-processing
-- **Text and face preservation (default)** — the default pipeline is a canny ControlNet that keeps text and face structure sharp through the removal pass (without copying original pixels, so SynthID is still removed). Use `--pipeline sdxl` for plain SDXL img2img (lighter, no extra model download) on inputs without text or faces. An experimental `--pipeline qwen` runs Qwen-Image (20B, Apache-2.0) img2img, which preserves **text** (including CJK and small text) better than SDXL at equal strength; it is CUDA/cloud-class (does not fit MPS), and its strength floors are not yet certified (pass an explicit `--strength`, especially for Gemini content). Note: measured fidelity (`scripts/fidelity_metrics.py`) shows Qwen wins on text but controlnet preserves **faces** better (Qwen smooths skin more), so Qwen is not a universal upgrade. Canny preserves face *structure*, not *identity* (the regenerated face drifts in likeness). The library does not ship a face-restore extra: every approach evaluated (GFPGAN-on-cleaned, PhotoMaker-V2, InstantID txt2img, InstantID img2img-on-cleaned) regenerated the face via SDXL and made the output look more AI-generated than the cleaned image. The cleaned controlnet output is the least-AI face state achievable without re-introducing SynthID.
+- **Two SynthID quality tiers** — SDXL with canny ControlNet remains the default because it is much faster, cheaper, and supports CUDA, XPU, MPS, and CPU. It is the compatibility baseline, not the highest-fidelity option: at the denoise strength needed to remove SynthID it can visibly drift face identity and soften or alter fine content. For the best available visual quality, especially on faces and face-heavy scenes, install `pip install "remove-ai-watermarks[qwen-zimage]"` and select `--pipeline qwen-zimage`. This CUDA-only profile ports the two-stage Synthid-Bypass architecture: Qwen-Image-2512 with the 4-step Lightning LoRA and DiffSynth Canny ControlNet regenerates the full image, then YuNet + SAM isolate faces and Z-Image Turbo regenerates the original face crops before a feathered paste. Direct comparison on two official upstream examples measured much higher ArcFace identity than the current ControlNet result, close to the published upstream output. On July 25, 2026, all six current outputs from the full `visible -> qwen-zimage -> metadata` candidate were checked in provider-separated groups with the corresponding OpenAI and Gemini oracles; none retained the provider watermark signal. This supports the high-quality recommendation for those exact outputs, but is not broad certification across seeds, resolutions, and content classes. The tradeoff is substantial: `qwen-zimage` uses a large model stack, costs much more, runs only on CUDA, does not support a custom `--model`, and can still degrade very small text. It supports `--tile` for the global Qwen pass; after the tiles are blended, face detection and Z-Image restoration run once on the full frame. Tiled outputs require separate oracle validation because the seed-0 certification covers only the exact non-tiled candidate bytes. YuNet replaces the reference workflow's YOLO detector to avoid an AGPL runtime dependency.
 - **Batch processing** — process entire directories
 - **Detection** — three-stage NCC watermark detection with confidence scoring
 - **Provenance detection (`identify`)** — aggregate C2PA issuer, the C2PA soft-binding forensic-watermark vendor (Adobe TrustMark, Digimarc, Imatag, ...), IPTC "Made with AI" plus the IPTC 2025.1 `AISystemUsed` field, embedded SD/ComfyUI params, EXIF/XMP generator tags, the xAI/Grok EXIF signature, the China TC260 AIGC label (XMP, PNG chunk, EXIF, or JPEG segment), the HuggingFace `hf-job-id` job marker, the SynthID metadata proxy, the C2PA cloud-manifest reference (Adobe Durable Content Credentials, when the embedded manifest is stripped), the visible marks (Gemini sparkle plus the Doubao "豆包AI生成" / Jimeng "即梦AI" / Qwen "千问AI生成" / Kling "可灵AI 3.0" / Baidu "百度 AI生成" / LibLibAI / RunningHub "RunningHub AI生成" / Samsung Galaxy AI "Contenuti generati dall'AI" text marks), the open SD/SDXL/FLUX invisible watermark, and (with the `trustmark` extra) the open Adobe TrustMark watermark into one origin-platform + watermark-inventory verdict (`--json` for machine output)
@@ -43,6 +43,21 @@ It does **not** target watermarks that protect someone else's paid or copyrighte
 | Before (Watermarked) | After (Cleaned) |
 | --- | --- |
 | ![Before](demo_banana_before.png) | ![After](demo_banana_after.png) |
+
+### High-quality SynthID removal with `qwen-zimage`
+
+The examples below use the complete `visible -> qwen-zimage -> metadata` pipeline
+with seed 0. These exact cleaned files were checked with the corresponding OpenAI
+and Gemini oracles on July 25, 2026; neither retained the provider watermark
+signal. Click an image to inspect it at full resolution.
+
+| Face-heavy OpenAI example: before | Face-heavy OpenAI example: after |
+| --- | --- |
+| [![OpenAI portrait grid before qwen-zimage](docs/images/qwen-zimage/ChatGPT/ChatGPT%20Image%20May%2030,%202026,%2010_31_08%20AM.png)](docs/images/qwen-zimage/ChatGPT/ChatGPT%20Image%20May%2030,%202026,%2010_31_08%20AM.png) | [![OpenAI portrait grid after qwen-zimage](docs/images/qwen-zimage/ChatGPT/ChatGPT%20Image%20May%2030,%202026,%2010_31_08%20AM_full_clean.png)](docs/images/qwen-zimage/ChatGPT/ChatGPT%20Image%20May%2030,%202026,%2010_31_08%20AM_full_clean.png) |
+
+| CJK text and visible Gemini mark: before | CJK text and visible Gemini mark: after |
+| --- | --- |
+| [![Gemini CJK sign before qwen-zimage](docs/images/qwen-zimage/Gemini/Gemini_Generated_Image_633uuy633uuy633u.png)](docs/images/qwen-zimage/Gemini/Gemini_Generated_Image_633uuy633uuy633u.png) | [![Gemini CJK sign after qwen-zimage](docs/images/qwen-zimage/Gemini/Gemini_Generated_Image_633uuy633uuy633u_full_clean.png)](docs/images/qwen-zimage/Gemini/Gemini_Generated_Image_633uuy633uuy633u_full_clean.png) |
 
 ## Supported models
 
@@ -127,18 +142,18 @@ The removal pipeline (default profile, SDXL):
 image → encode to latent space (VAE) at native resolution
       → add controlled noise (forward diffusion)
       → denoise (reverse diffusion, ~50 steps; strength is vendor-adaptive:
-        0.20 OpenAI / 0.30 Google / 0.30 unknown, same for both pipelines;
+        0.10 OpenAI / 0.15 Google / 0.15 unknown for SDXL and ControlNet;
         override with --strength)
       → decode back to pixels (VAE)
 ```
 
-- Large inputs run at native resolution (no down-then-up round-trip, which was the main quality loss in issue #10); use `--max-resolution N` only to cap GPU/MPS memory on very large inputs. For inputs that run out of GPU/MPS memory at native resolution, `--tile` is the lossless alternative to `--max-resolution`: it regenerates the image in overlapping, feather-blended tiles (each near SDXL's 1024 px size) so there is no downscale and no visible seam. It engages only when the long side exceeds `--tile-size` (default 1024; overlap `--tile-overlap`, default 128); pair it with `--max-resolution 0`. Small inputs (long side under 1024 px) are auto-upscaled to a 1024 px floor before diffusion, because SDXL distorts on a tiny latent, and the result is restored to the original size (a transparent quality boost). Disable the floor with `--min-resolution 0`. The floor upscale uses Lanczos by default; `--upscaler esrgan` (the `esrgan` extra) runs Real-ESRGAN first for sharper detail and falls back to Lanczos if the extra is absent. ESRGAN is a generic photo/texture GAN with no face/glyph prior, so it is best for photo/texture content -- it can degrade faces (the diffusion pass regenerates them, so the final recovers) and thin text; keep Lanczos for text-heavy inputs.
+- Large inputs run at native resolution (no down-then-up round-trip, which was the main quality loss in issue #10); use `--max-resolution N` only to cap GPU/MPS memory on very large inputs. For inputs that run out of GPU/MPS memory at native resolution, `--tile` is the lossless alternative to `--max-resolution`: it regenerates the image in overlapping, feather-blended tiles so there is no downscale and no visible seam. It engages only when the long side exceeds `--tile-size` (default 1024; overlap `--tile-overlap`, default 128); pair it with `--max-resolution 0`. SDXL and ControlNet run their complete pass per tile. `qwen-zimage` tiles only its global Qwen pass, then runs face detection, SAM masking, and Z-Image restoration once on the blended full frame. Small inputs (long side under 1024 px) are auto-upscaled to a 1024 px floor before diffusion, because SDXL distorts on a tiny latent, and the result is restored to the original size (a transparent quality boost). Disable the floor with `--min-resolution 0`. The floor upscale uses Lanczos by default; `--upscaler esrgan` (the `esrgan` extra) runs Real-ESRGAN first for sharper detail and falls back to Lanczos if the extra is absent. ESRGAN is a generic photo/texture GAN with no face/glyph prior, so it is best for photo/texture content -- it can degrade faces (the diffusion pass regenerates them, so the final recovers) and thin text; keep Lanczos for text-heavy inputs.
 
-> **Default strength is vendor-adaptive (no flag needed).** The tool reads the C2PA issuer to detect which vendor's SynthID is present and picks the strength accordingly: **OpenAI gpt-image → `0.20`**, **Google Gemini → `0.30`**, **unknown source → `0.30`**. The **same ladder applies to both pipelines** — these are the oracle-certified `controlnet` floors (June 2026 Modal cert, multi-seed). They also cover plain `sdxl`: the two pipelines have opposite hard cases (controlnet leaves SynthID on photoreal, sdxl on flat graphics), but on its own hard case sdxl is the weaker remover, so it needs at least controlnet's strength — using one certified ladder is the safe choice (margin-based for sdxl, not separately certified). The dominant factor is the vendor (Google's SynthID is ~3x more robust). There is no local SynthID detector, so if the oracle still reads SynthID, raise `--strength`; if you care more about preserving fine detail, lower it. (Caveat: Google's `0.30` was validated only at `--max-resolution 1536`; a very large native Gemini image may need ~`0.35`+.)
+> **Default strength is profile-aware (no flag needed).** SDXL and ControlNet read the C2PA issuer and use **OpenAI gpt-image `0.10`**, **Google Gemini `0.15`**, or **unknown source `0.15`**. The same ladder applies to those two profiles. `qwen` has its own measured ladder. `qwen-zimage` instead ports the upstream resolution-adaptive denoise formula: approximately `0.084` at 0.30 MP through `0.154` at 3.70 MP and above, plus a separate face-adaptive `0.05` through `0.28` pass. There is no local SynthID decoder, so if the corresponding provider oracle still reads the signal, raise `--strength` and re-check the output.
 >
-> **The default pipeline is `controlnet` — it preserves text and face structure.** It runs the same SDXL img2img scrub but adds a canny ControlNet that conditions the regeneration on the image's edge map, so text and structure stay sharp at the strengths that remove SynthID. The watermark removal still comes from the img2img regeneration (`--strength`); the ControlNet only preserves structure — no original pixels are copied or frozen. The default strength ladder (OpenAI `0.20` / Google `0.30`) is the oracle-certified controlnet floor. `--controlnet-scale` tunes the preservation strength (higher = closer to the original structure). Runs fp32 on mps/cpu (fp16 only on cuda/xpu, where the fp16-fixed SDXL VAE is loaded automatically). Pass `--pipeline sdxl` for plain SDXL img2img (lighter, no extra model download) on inputs without text or faces.
+> **The default pipeline is `controlnet` — it preserves text and face structure.** It runs the same SDXL img2img scrub but adds a canny ControlNet that conditions the regeneration on the image's edge map, so text and structure stay sharp at the strengths that remove SynthID. The watermark removal still comes from the img2img regeneration (`--strength`); the ControlNet only preserves structure — no original pixels are copied or frozen. The current default ladder is OpenAI `0.10` / Google `0.15` / unknown `0.15`. `--controlnet-scale` tunes the preservation strength (higher = closer to the original structure). Runs fp32 on mps/cpu (fp16 only on cuda/xpu, where the fp16-fixed SDXL VAE is loaded automatically). Pass `--pipeline sdxl` for plain SDXL img2img (lighter, no extra model download) on inputs without text or faces.
 >
-> **No face-restore extra in the library.** Every ArcFace-based regeneration approach we evaluated (GFPGAN-on-cleaned, PhotoMaker-V2, InstantID txt2img, InstantID img2img-on-cleaned at three parameter sweeps, 2026-06-04 - 2026-06-08 Modal cert sweeps) regenerated the face via SDXL diffusion — the output face pixels were diffusion-fresh (SynthID not re-introduced), but the face inherently looked more AI-generated than the cleaned image (SDXL "clean skin" gloss, lost original identity precision). The cleaned image from the main controlnet 0.20 pass is the least-AI face state we can reach without re-introducing SynthID. Empirical conclusion in `docs/synthid-robust-identity-research-2026-06-08.md`.
+> **For the best visual quality, prefer `qwen-zimage`.** ControlNet remains the default for compatibility and cost, but its canny conditioning preserves edges rather than identity. At the SynthID scrub floor, faces can drift substantially. The CUDA-only `qwen-zimage` profile instead regenerates SAM-masked crops from the original faces with Z-Image Turbo. On two direct upstream comparisons it retained ArcFace identity at `0.950` and `0.947`, versus `0.701` and `0.548` for polished ControlNet. Use `--pipeline qwen-zimage` when fidelity matters more than latency, model size, and GPU cost. It defaults to seed `0`, matching the exact six-output full-clean candidate that cleared the corresponding provider oracles after visible-mark removal, `qwen-zimage`, and metadata stripping. Broader cross-seed removal and text certification remain open.
 
 SDXL is the default since May 2026: empirically defeats SynthID v2 on Gemini 3 Pro outputs, where the older SD-1.5 pipeline at 768 px did not. The SD-1.5 path was removed once it was verified not to handle v2. Note the scope: this defeats the SynthID *verifier*, which is not the same as being forensically indistinguishable from a real photo. Recent work ([arXiv:2605.09203](https://arxiv.org/abs/2605.09203)) shows watermark-removal pipelines leave detectable traces, so a separate "this image was processed" classifier can still flag the output.
 
@@ -146,7 +161,7 @@ SDXL is the default since May 2026: empirically defeats SynthID v2 on Gemini 3 P
 
 > **Technical deep-dive:** see [`docs/synthid.md`](docs/synthid.md) for a primary-source-cited breakdown of how SynthID works mechanically (post-hoc encoder/decoder, 136-bit payload, pixel-space embedding), what it empirically survives (JPEG, crop, resize: ~99.98% TPR at 0.1% FPR from arXiv:2510.09263), what removes it, and the forensic-stealth tradeoff (all known removal attacks are detectable at >98% TPR@1%FPR per arXiv:2605.09203).
 
-**Text and face preservation** (the default pipeline; `--pipeline sdxl` opts down to plain SDXL): a canny ControlNet keeps text and face *structure* sharp through the removal pass, without copying or freezing any original pixels (so SynthID is still removed). Tune the preservation strength with `--controlnet-scale`. Canny preserves structure but not face *identity*: the regenerated face drifts in likeness. The library does not ship a face-restore extra (see the callout above).
+**Text and face preservation:** the default ControlNet pipeline is the fast, broadly compatible baseline. It keeps edge structure sharper than plain SDXL but can still change face identity and fine content substantially. For the best available output fidelity, use the CUDA-only `--pipeline qwen-zimage`; use `--pipeline sdxl` only as the lighter plain-SDXL option.
 
 **Analog Humanizer**: optional film grain and chromatic aberration injection that mimics a photo of a screen, raising the bar for AI-generated image classifiers. (It frustrates generic classifiers but does not guarantee forensic invisibility — see the [arXiv:2605.09203](https://arxiv.org/abs/2605.09203) note above.)
 
@@ -176,6 +191,14 @@ out of the Homebrew build; add it with the `gpu` extra via pip if you need it:
 
 ```bash
 pip install "remove-ai-watermarks[gpu]"
+```
+
+The recommended high-quality Qwen-Image-2512 plus Z-Image profile has its own
+CUDA-only extra:
+
+```bash
+pip install "remove-ai-watermarks[qwen-zimage]"
+remove-ai-watermarks invisible image.png -o clean.png --pipeline qwen-zimage --force
 ```
 
 ### conda
@@ -214,7 +237,7 @@ uv tool upgrade remove-ai-watermarks
 
 ### Install from repository
 
-**Prerequisites:** Python 3.10+ and `pip` (or [`uv`](https://docs.astral.sh/uv/)).
+**Prerequisites:** Python 3.10.1+ and `pip` (or [`uv`](https://docs.astral.sh/uv/)).
 
 ```bash
 # 1. Clone the repository
@@ -235,6 +258,12 @@ After installation the `remove-ai-watermarks` command is available system-wide.
 >
 > ```bash
 > pip install -e ".[gpu]"   # or: uv pip install -e ".[gpu]"
+> ```
+>
+> For the CUDA-only Qwen-Image-2512 + Z-Image face-preserving profile:
+>
+> ```bash
+> pip install -e ".[qwen-zimage]"
 > ```
 >
 > Without the `[gpu]` extra, `all` still runs the visible and metadata steps, but
@@ -360,21 +389,26 @@ remove-ai-watermarks erase image.png --region 1640,1930,400,100 -o clean.png
 
 # Invisible watermark only (SynthID etc.) — requires GPU
 remove-ai-watermarks invisible image.png -o clean.png --humanize 4.0 --unsharp 0.5
+# Recommended high-quality mode: full Qwen-Image-2512 Canny pass plus
+# SAM-masked Z-Image face repair. It is much slower and more expensive.
+remove-ai-watermarks invisible image.png -o clean.png --pipeline qwen-zimage --force
 # --humanize adds film grain, --unsharp counters the soft "AI" look (both opt-in).
 # Large images run at native resolution; small ones are upscaled to a 1024 floor
 # first (disable with --min-resolution 0); --upscaler esrgan uses Real-ESRGAN for
 # that floor upscale (needs the 'esrgan' extra). On a very large image that OOMs the
 # GPU/MPS, either cap the long side (--max-resolution 2048, lossy) or pass --tile
 # to regenerate in overlapping feather-blended tiles at native resolution (lossless).
-# Strength is vendor-adaptive by default (OpenAI 0.20 / Google 0.30, same
-# for both pipelines); override with --strength. controlnet (text/face
+# Strength is vendor-adaptive by default for SDXL/ControlNet (OpenAI 0.10 /
+# Google 0.15 / unknown 0.15); override with --strength. qwen-zimage instead
+# uses its upstream resolution-adaptive formula and defaults to seed 0.
+# controlnet (text/face
 # structure preservation) is the default pipeline; --pipeline sdxl opts down
 # to plain SDXL for non-structure inputs. Tune structure preservation with
 # --controlnet-scale, the CFG with --guidance-scale (default 7.5), and the
 # diffusion model with --model (default: SDXL base).
-# --adaptive-polish (ON by default) restores the input's detail level (sparing
-# text) to counter the over-smoothed look; it self-limits to a no-op where
-# there is no detail deficit. Disable with --no-adaptive-polish.
+# --adaptive-polish (ON by default except qwen-zimage) restores the input's
+# detail level (sparing text) to counter the over-smoothed look. Override the
+# profile default with --adaptive-polish or --no-adaptive-polish.
 # By default, if no invisible AI watermark is locally detectable, the diffusion
 # scrub is SKIPPED (regenerating pixels would only degrade a clean image): for
 # `invisible` that writes no output and exits 2, for `all` it skips step 2 but
@@ -394,7 +428,8 @@ remove-ai-watermarks metadata image.png --remove
 remove-ai-watermarks batch ./images/ --mode visible
 
 # Batch accepts the full invisible knob set (--strength/--guidance-scale/--model/
-# --pipeline/...); --adaptive-polish is on by default (--no-adaptive-polish to disable)
+# --pipeline/...); --adaptive-polish is on by default except qwen-zimage
+# (--adaptive-polish/--no-adaptive-polish overrides the profile default)
 remove-ai-watermarks batch ./images/ --mode all
 ```
 
@@ -432,17 +467,20 @@ report = identify("in.png")
 from pathlib import Path
 from remove_ai_watermarks.invisible_engine import InvisibleEngine
 
-# pipeline: "controlnet" (default, preserves text/face structure) or "sdxl" (plain).
+# pipeline: "controlnet" (default), "sdxl", "qwen", or CUDA-only "qwen-zimage".
 # model_id=None uses the SDXL base; controlnet_conditioning_scale tunes preservation.
 engine = InvisibleEngine(pipeline="controlnet")
+
+# Prefer this CUDA-only profile when output fidelity matters more than cost:
+# engine = InvisibleEngine(pipeline="qwen-zimage")
 
 engine.remove_watermark(
     Path("watermarked.png"),
     Path("clean.png"),
-    strength=None,          # None = vendor-adaptive default (OpenAI 0.20 / Google 0.30)
-    num_inference_steps=50,
-    guidance_scale=None,    # None = the library default (7.5)
-    seed=None,              # set for reproducible output
+    strength=None,          # None = profile default (ControlNet: OpenAI 0.10 / Google 0.15)
+    num_inference_steps=None,  # None = 4 for qwen-zimage, 100 via this API otherwise
+    guidance_scale=None,    # None = 1.0 for qwen-zimage, 7.5 otherwise
+    seed=None,              # random for ControlNet; qwen-zimage resolves None to seed 0
     adaptive_polish=True,   # detail-targeted polish, self-gating (default on in the CLI)
     min_resolution=1024,    # upscale tiny inputs to this floor before diffusion
     max_resolution=0,       # 0 = native; set only to cap GPU/MPS memory
@@ -462,7 +500,7 @@ if has_ai_metadata(Path("image.png")):
 
 ## Requirements
 
-- Python ≥ 3.10
+- Python ≥ 3.10.1
 - **Visible removal / metadata**: CPU only, no GPU required
 - **Invisible removal**: GPU recommended (CUDA or MPS), works on CPU (slow)
 
@@ -508,8 +546,8 @@ Won't fix:
 ## Limitations
 
 - **Visible-mark removal is localized inpainting; metadata removal is lossless.** Each visible mark is localized to a footprint mask and filled by inpainting (cv2, MI-GAN, or big-LaMa), so only the small masked region is reconstructed and it blends into its surroundings within a few LAB levels; a slightly-off localization just fills a small region near-losslessly rather than leaving a color-shifted smear. Metadata stripping never touches image data.
-- **The invisible (SynthID) path is lossy and not guaranteed.** It runs a low-strength SDXL img2img regeneration, so it softens fine detail and is content-dependent. There is no public SynthID decoder, so the tool cannot verify removal locally; confirm with the Gemini app's "Verify with SynthID" oracle and raise `--strength` if it still detects. A vendor can change the scheme at any time, so treat this as an arms race, not a permanent fix.
-- **Large images: native by default, opt-in tiling for OOM.** The SynthID path runs at the diffusion model's native resolution; on a memory-constrained GPU/MPS you can either cap the long side with `--max-resolution` (lossy downscale) or pass `--tile` to regenerate in overlapping, feather-blended tiles at native resolution (lossless, no seam). Tiling is a memory workaround, not a quality upgrade over a single native pass: each tile is an independent low-strength regeneration. (Nano Banana 2 is natively 1024px; GPT Image 2 supports 4K experimentally.)
+- **The invisible (SynthID) path is lossy and not guaranteed.** The default ControlNet mode is the fast compatibility tier, but it can visibly alter faces and fine content at the scrub floor. Use the CUDA-only `qwen-zimage` profile for the best available visual fidelity; it is substantially larger, slower, and more expensive, and very small text can still degrade. There is no public SynthID decoder, so the tool cannot verify removal locally; confirm with the vendor's oracle. A vendor can change the scheme at any time, so treat this as an arms race, not a permanent fix.
+- **Large images: native by default, opt-in tiling for OOM.** The SynthID path runs at the diffusion model's native resolution; on a memory-constrained GPU/MPS you can either cap the long side with `--max-resolution` (lossy downscale) or pass `--tile` to regenerate in overlapping, feather-blended tiles at native resolution (lossless, no seam). Tiling is a memory workaround, not a quality upgrade over a single native pass: each tile is an independent low-strength regeneration. With `qwen-zimage`, only the global Qwen pass is tiled; the face stage runs once after the full image is blended. The current seed-0 oracle verdict does not certify this tiled path. (Nano Banana 2 is natively 1024px; GPT Image 2 supports 4K experimentally.)
 - **Out of scope:** defeating trained AI-vs-real classifiers like Hive (see [Threat model](#threat-model)), visible-logo removal from video, and any guarantee that a stripped copy is untraceable server-side.
 
 ## Legal

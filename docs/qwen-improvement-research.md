@@ -25,9 +25,10 @@ faces). The strongest verified improvement path is to **add structure conditioni
 (a Qwen-Image ControlNet) to the existing base pass, the direct analog of the SDXL +
 canny conditioning that wins on faces. Separately, **Z-Image / Z-Image-Turbo** (6B,
 Apache-2.0) is the best-verified lighter alternative to evaluate before committing to
-the 20B cost. None of the improvements has measured face-fidelity numbers at our
-scrub floors yet, so each must be validated with `scripts/fidelity_metrics.py` plus
-the oracle before shipping.
+the 20B cost. At research time none of the improvements had measured face-fidelity
+numbers at our scrub floors. The later `qwen-zimage` follow-up below adds a crowded
+fixture, two direct upstream comparisons, and a provider-oracle-negative final candidate.
+A broader seeded text/face matrix is still needed for general certification.
 
 ## Follow-up: ControlNet experiment + deeper research (2026-06-20)
 
@@ -60,8 +61,8 @@ Measured on `gemini_3` (18 faces) at the Gemini scrub floor 0.25 vs base-Qwen 0.
   fix faces" lead is closed for good.**
 - **[high, unanimous] Z-Image / Z-Image-Turbo (6B, Apache-2.0 on code AND weights, ~1/3 of
   Qwen 20B)** ships a documented `ZImageImg2ImgPipeline` with standard strength denoising, so
-  it preserves the scrub mechanism. Its own SynthID scrub floor and face/text fidelity are
-  UNMEASURED -- this is the strongest concrete NEXT experiment.
+  it preserves the scrub mechanism. Its own SynthID scrub floor and broad text fidelity
+  remain unmeasured. The later `qwen-zimage` follow-up provides direct face metrics.
 - **[medium] Lowering Qwen's scrub floor has no off-the-shelf SynthID answer:** the "partial
   img2img ~0.3 breaks robust watermarks" literature tests open schemes
   (StegaStamp/TrustMark/VINE), NEVER SynthID (proprietary decoder) -- analogy, not proof. No
@@ -70,9 +71,58 @@ Measured on `gemini_3` (18 faces) at the Gemini scrub floor 0.25 vs base-Qwen 0.
   not carry the watermark back." So non-regenerative detail transfer is NOT safe by
   assumption -- the transferred high-frequency band must be gated against the SynthID oracle.
 
-**Net for the pipeline:** **faces stay on SDXL+controlnet**; there is no Qwen face-fix.
-The live frontier is Z-Image-Turbo (next experiment) and oracle-gated non-regenerative detail
-re-injection.
+**Net for the single-pass `qwen` pipeline:** faces stay on SDXL+controlnet; Canny alone is not
+a Qwen face fix. The next distinct architecture was Z-Image-Turbo on original masked face
+crops, not another Qwen geometry conditioner.
+
+**Implementation follow-up (2026-07-24):** that distinct architecture now exists as the
+manual `qwen-zimage` profile. It ports the upstream Synthid-Bypass v2 graph: Qwen-Image-2512
+Lightning + DiffSynth Canny for the full frame, then SAM-masked Z-Image Turbo regeneration
+from original face crops. The upstream result supplied by the user was Gemini-oracle negative.
+The active upstream face path is YOLO + SAM, not the unconnected MediaPipe node. The port
+matches its center-point + box prompts, IoU-0.93 proposal selection, detector-box intersection,
+crop factor, and paste feather; YuNet is the intentional detector substitution.
+
+The first exact-path Modal run completed without SAM fallback or face seams. On one crowded
+18-face `gemini_3` fixture, ArcFace identity improved materially over controlnet
+(0.795 vs 0.587/0.588 raw/polished), while face LPIPS was 0.082 vs 0.087/0.078.
+Two official upstream before/after pairs then reproduced the same identity advantage:
+local `qwen-zimage` scored 0.950/0.947 ArcFace identity versus polished ControlNet's
+0.701/0.548. The published upstream outputs remained slightly higher at 0.976/0.976.
+On the matched-size group example, local face LPIPS essentially matched upstream
+(0.015 vs 0.014) while whole-image LPIPS and SSIM were better (0.085/0.896 vs
+0.111/0.777). ControlNet retained more texture but changed the identities.
+
+That comparison also caught a real /16 alignment defect: DiffSynth dimensions were floored
+without resizing the corresponding PIL input. The official non-grid input failed with a
+VAE/noise-grid shape mismatch. Regression assertions were observed failing before global
+and face pixels were aligned to the same grid as their explicit dimensions.
+
+The final verifier follow-up is positive but exact-output scoped. On 2026-07-25 the user
+checked all six current outputs in the provider-separated
+`full-clean-final-candidate-2026-07-25-by-oracle` bundle with the corresponding provider
+oracles and confirmed that none retained SynthID or the provider generation signal. The
+checked bytes used the complete `visible -> qwen-zimage -> metadata` route, the calibrated
+YuNet 0.5 gate, and the shipped prompt-cache/model-residency optimizations. This supersedes
+the earlier first-port batch check as the release-candidate result, but it is not a
+certification across seeds, resolutions, and content classes. YuNet's threshold was
+calibrated independently from upstream YOLO: 0.5 retained the visible faces in the
+comparison fixtures while removing the false and duplicate boxes admitted by the copied
+0.2 gate. The remaining questions are now narrower: how well does text hold across a
+broader set and how stable removal is across seeds and Google content types. See
+`docs/known-limitations.md`.
+
+The shipped profile therefore resolves an omitted seed to `0`; explicit seeds still
+override it, and every other pipeline keeps its existing random default. This makes the
+documented `--pipeline qwen-zimage` command reproduce the seed condition used for the
+release-candidate oracle evidence without claiming cross-seed certification.
+
+**Product recommendation:** keep ControlNet as the default because it is much cheaper and
+supports CUDA, XPU, MPS, and CPU. Treat it as the compatibility baseline, not the
+highest-fidelity result. When CUDA is available and visual quality matters more than
+latency or cost, recommend `qwen-zimage`, especially for face-heavy content. This
+recommendation is based on the measured identity advantage and the oracle-negative exact
+candidate; it does not upgrade that exact-output result into broad certification.
 
 **Follow-up (2026-06-20) — the content-routed lane / mixed dual-pass was tested and DROPPED.**
 A `--pipeline auto` router (Haar+MSER → text→qwen / faces→controlnet / both→mixed) and a
@@ -148,11 +198,10 @@ original bbox and stayed collision-immune. Regression-guarded by
    **non-regenerative detail-restoration** technique (high-frequency residual transfer,
    guided filtering) that recovers smoothed faces without re-introducing the watermark.
    Research angle 4 produced zero surviving claims, so it is unanswered.
-2. No claim provides measured face-fidelity numbers (ArcFace/LPIPS/Laplacian) for ANY
-   recommended intervention at the project's scrub floors. All fidelity evidence is the
-   project's own internal measurement. The improvements are mechanistically sound but
-   unproven for this exact metric, so validate with `scripts/fidelity_metrics.py`
-   before shipping.
+2. No external claim provides measured face-fidelity numbers (ArcFace/LPIPS/Laplacian) for
+   any recommended intervention at the project's scrub floors. The later direct
+   `qwen-zimage` comparisons are the project's own measurements, not external evidence or
+   a certification.
 3. Several vendor model cards are marketing-register primary sources (Qwen blog,
    Z-Image card). Load-bearing facts (license, params, API levers) are independently
    corroborated, but comparative quality framings are author glosses.
@@ -172,14 +221,11 @@ original bbox and stayed collision-immune. Regression-guarded by
 - What **non-regenerative detail-restoration** method recovers smoothed faces WITHOUT
   re-introducing SynthID? Note: residual transfer from the ORIGINAL risks copying back
   watermark-carrying high frequencies, so it must be verified against the SynthID oracle.
-- Does adding Qwen-Image-ControlNet (canny/depth) at the certified floors (OpenAI 0.10,
-  Gemini 0.25) actually raise face Laplacian/LPIPS toward the SDXL+ControlNet numbers
-  (0.62 / 0.09) WITHOUT re-introducing SynthID, or does the structure constraint
-  preserve the watermark the way ControlNet can on photoreal content (the existing
-  "SynthID CAN survive controlnet at low strength" caveat)?
-- Head-to-head: does Z-Image-Turbo at its scrub floor match Qwen's text advantage
-  (CJK+Cyrillic CER) while not worsening faces, and what are Z-Image's own SynthID
-  scrub floors and seed-robustness (none exist yet)?
+- Head-to-head: does `qwen-zimage` retain its measured ArcFace gain across more portraits
+  and mixed scenes, match Qwen's text advantage (CJK+Cyrillic CER), and clear SynthID
+  robustly across content types and seeds?
+- Can YuNet's serial face workload be bounded to foreground/relevant faces without losing the
+  small faces the upstream YOLO path would process?
 
 ## Refuted claims (do NOT rely on these)
 
