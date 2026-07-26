@@ -83,9 +83,9 @@ that repository's sync workflow with the exact library version and waits for it
 to finish. The sync updates the dependency floor, runs compatibility tests,
 bumps the node patch version, and publishes to the ComfyUI Registry only when
 those tests pass. Its daily schedule remains as a recovery path if a release
-dispatch is interrupted. The `HOMEBREW_TAP_TOKEN` repository secret is also the
-cross-repository release token; it needs Actions read and write access to the
-ComfyUI node repository.
+dispatch is interrupted. The `COMFYUI_RELEASE_TOKEN` repository secret is a
+fine-grained token limited to the ComfyUI node repository, with Actions read and
+write access.
 
 ## Release verification
 

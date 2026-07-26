@@ -141,7 +141,7 @@ jobs:
     steps:
       - name: Sync and publish the ComfyUI nodes
         env:
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          GH_TOKEN: ${{ secrets.COMFYUI_RELEASE_TOKEN }}
         run: |
           set -euo pipefail
           repo=wiltodelta/ComfyUI-remove-ai-watermarks
