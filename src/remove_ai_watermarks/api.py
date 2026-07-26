@@ -128,9 +128,9 @@ def remove_visible(
     strip_metadata: bool = True,
     write_noop: bool = True,
 ) -> tuple[NDArray[Any], list[str]]:
-    """Remove every detected known visible AI mark (Gemini sparkle, Doubao/Jimeng/
-    Samsung text, the Jimeng pill) via localize -> fill, returning ``(result_bgr,
-    [labels removed])``.
+    """Remove every detected known visible AI mark (Gemini sparkle, the registered
+    vendor text marks including Tencent Yuanbao, and the Jimeng pill) via
+    localize -> fill, returning ``(result_bgr, [labels removed])``.
 
     ``source`` is a file path OR a BGR ndarray. For a PATH, metadata provenance is read
     automatically (so ``sensitivity="auto"`` recovers a moved/faint mark whenever the

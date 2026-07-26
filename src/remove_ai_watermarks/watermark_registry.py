@@ -22,6 +22,7 @@ Entries:
   - ``jimeng`` -- ByteDance Jimeng / Dreamina "★ 即梦AI" wordmark, bottom-right.
   - ``qwen`` -- Alibaba Tongyi Qianwen "千问AI生成" text strip, bottom-right.
   - ``kling`` -- Kuaishou Kling "可灵AI 3.0" text strip, bottom-right.
+  - ``yuanbao`` -- Tencent Yuanbao "元宝 / AI生成" two-line mark, bottom-right.
   - ``samsung`` -- Samsung Galaxy AI "Contenuti generati dall'AI" strip, bottom-left.
   - ``jimeng_pill`` -- Jimeng-basic "AI生成" pill, top-left (capture-less).
   - ``runninghub`` -- RunningHub "RunningHub AI生成" text, top-left (gray front-end).
@@ -90,6 +91,7 @@ _PRODUCT_OF: dict[str, str] = {
     "jimeng_pill": "jimeng",  # same product as the Jimeng wordmark
     "qwen": "qwen",
     "kling": "kling",
+    "yuanbao": "yuanbao",
     "samsung": "samsung",
     "runninghub": "runninghub",
     "baidu": "baidu",
@@ -371,6 +373,10 @@ def _engine(key: str) -> Any:
             from remove_ai_watermarks.kling_engine import KlingEngine
 
             _engines[key] = KlingEngine()
+        elif key == "yuanbao":
+            from remove_ai_watermarks.yuanbao_engine import YuanbaoEngine
+
+            _engines[key] = YuanbaoEngine()
         elif key == "samsung":
             from remove_ai_watermarks.samsung_engine import SamsungEngine
 
@@ -473,8 +479,8 @@ def _gemini_mask(
     return _engine("gemini").footprint_mask(image, force=force, region=region)
 
 
-# The three text-mark engines (Doubao/Jimeng/Samsung) share the TextMarkEngine
-# interface, so one parameterized adapter pair drives all of them -- a new
+# The registered text-mark engines share the TextMarkEngine interface, so one
+# parameterized adapter pair drives all of them -- a new
 # text mark is one `_text_mark(...)` row below, not another copy-paste of these
 # bodies. Detection matches the glyph silhouette; the mask is the template-free
 # glyph-bbox footprint (see TextMarkEngine.footprint_mask).
@@ -534,6 +540,7 @@ _REGISTRY: tuple[KnownMark, ...] = (
     _text_mark("jimeng", "Jimeng 即梦AI wordmark", "bottom-right"),
     _text_mark("qwen", "Qwen 千问AI生成 text", "bottom-right"),
     _text_mark("kling", "Kling 可灵AI 3.0 text", "bottom-right"),
+    _text_mark("yuanbao", "Tencent Yuanbao 元宝 / AI生成 mark", "bottom-right"),
     _text_mark("samsung", "Samsung Galaxy AI text", "bottom-left"),
     _text_mark("runninghub", "RunningHub AI生成 text", "top-left"),
     _text_mark("baidu", "Baidu 百度 AI生成 text", "bottom-right"),
@@ -615,10 +622,17 @@ def _keep_pill(keys: set[str], *, provenance: frozenset[str], footprint_flat: bo
         so real flat-scene pills (and harmless flat false fires) are cleaned while the
         damaging textured false fires are left untouched.
     A Doubao image is TC260 too but is not Jimeng-basic, so the pill never rides on a
-    Doubao detection; a Qwen image likewise (another vendor's bottom-right mark naming
-    its own product), so a confident Qwen detection suppresses the pill the same way.
+    Doubao detection; Qwen, Kling, Yuanbao, RunningHub, and Baidu detections likewise
+    name other products and suppress the pill.
     No confirmation at all -> never remove (blocks false fires on non-Jimeng content)."""
-    if "doubao" in keys or "qwen" in keys or "kling" in keys or "runninghub" in keys or "baidu" in keys:
+    if (
+        "doubao" in keys
+        or "qwen" in keys
+        or "kling" in keys
+        or "yuanbao" in keys
+        or "runninghub" in keys
+        or "baidu" in keys
+    ):
         return False
     if "jimeng" in keys:
         return True

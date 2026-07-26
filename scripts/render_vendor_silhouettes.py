@@ -9,10 +9,8 @@ Covered here:
   qwen     "千问AI生成"  -- Alibaba Tongyi Qianwen, bottom-right, 3-lobed logo + text
   xinghui  "星绘AI生成"  -- ByteDance 星绘, bottom-right, 4-point sparkle + text
   yuanbao  "元宝\nAI生成" -- Tencent Yuanbao, bottom-right, two-line italic block
-           (MEASURED NEGATIVE 2026-07-21, parked: the slanted two-line template does
-           not separate the cohort from clean corners on either front-end; the recipe
-           + MARK_OPTS stay as the starting point if a structural/learned lever is
-           built -- full record in docs/verification-plan.md)
+           (REGISTERED 2026-07-25 after fixing the negative-shear clipping in this
+           renderer and matching both light and dark mark polarities)
   kling    "可灵AI 3.0"  -- Kuaishou Kling, bottom-right, spiral logo + text
            (REGISTERED 2026-07-21, kling_engine.py)
 
@@ -158,11 +156,16 @@ MARKS = {
 
 # Per-mark post-processing for the multi-line / slanted stamps (see render()).
 MARK_OPTS: dict[str, dict[str, Any]] = {
-    # Fitted against real tophat responses on the Yuanbao cohort (2026-07-21): a
-    # right-aligned, gapped, unslanted render plateaued at ~0.34 NCC; left-align +
-    # tight gap + stroke dilation + shear -0.75 reaches 0.65-0.70 on the same frames,
-    # at/above the real-vs-real ceiling (~0.6).
-    "yuanbao_alpha.png": {"gap_frac": 0.05, "dilate": 2, "shear": -0.75},
+    # Re-fitted 2026-07-25 after the old affine transform was found to clip the
+    # lower line and retain a large blank right half. Hiragino Sans GB W6, tight
+    # leading, a 2px dilation, and -0.60 shear match the standard Yuanbao stamp.
+    "yuanbao_alpha.png": {
+        "gap_frac": 0.05,
+        "dilate": 2,
+        "shear": -0.60,
+        "font": "/System/Library/Fonts/Hiragino Sans GB.ttc",
+        "font_index": 2,
+    },
     # Qingyan's real stamp is a heavier weight than STHeiti Medium -- Hiragino
     # Sans GB W6 matches the measured stroke (2026-07-22; with Medium the
     # silhouette aspect came out 0.19 vs the real 0.28 and NCC plateaued ~0.3).
@@ -219,7 +222,16 @@ def render(text: str, width: int = 335, opts: dict[str, Any] | None = None) -> n
             sil = cv2.dilate(sil, np.ones((dilate, dilate), np.uint8))
         if shear_k:
             hh, ww = sil.shape
-            sil = cv2.warpAffine(sil, np.float32([[1, shear_k, 0], [0, 1, 0]]), (ww + int(abs(shear_k) * hh), hh))
+            extra = int(abs(shear_k) * hh)
+            offset = extra if shear_k < 0 else 0
+            sil = cv2.warpAffine(
+                sil,
+                np.float32([[1, shear_k, offset], [0, 1, 0]]),
+                (ww + extra, hh),
+            )
+            ys, xs = np.where(sil > 0)
+            if xs.size:
+                sil = sil[ys.min() : ys.max() + 1, xs.min() : xs.max() + 1]
     return sil
 
 

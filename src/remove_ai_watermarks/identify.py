@@ -451,6 +451,7 @@ _VISIBLE_MARK_PLATFORM = {
     "jimeng": "ByteDance Jimeng / Dreamina (visible 即梦AI mark detected)",
     "qwen": "Alibaba Tongyi Qianwen (visible 千问AI生成 mark detected)",
     "kling": "Kuaishou Kling (visible 可灵AI 3.0 mark detected)",
+    "yuanbao": "Tencent Yuanbao (visible 元宝 / AI生成 mark detected)",
     "samsung": "Samsung Galaxy AI (visible 'Contenuti generati dall'AI' mark detected)",
     "runninghub": "RunningHub (visible RunningHub AI生成 mark detected)",
     "baidu": "Baidu (visible 百度 AI生成 mark detected)",
@@ -555,7 +556,7 @@ def identify(image_path: Path, *, check_visible: bool = True, check_invisible: b
     Args:
         image_path: Path to the image (PNG, JPEG, WebP, or ISOBMFF container).
         check_visible: Also run the visible-mark detectors (cv2) -- the Gemini
-            sparkle and the Doubao/Jimeng text marks from the registry. Set
+            sparkle and vendor text marks from the registry. Set
             False for a pure-metadata, dependency-light scan.
         check_invisible: Also decode open invisible watermarks (SD/SDXL/FLUX) via
             the optional imwatermark library. No-op when it is not installed.

@@ -132,7 +132,10 @@ class TextMarkConfig:
     # max-normalization suppress the response to clean-arm levels (positives 0.16-0.23
     # vs clean p99 0.31), while raw gray NCC separates (positives 0.38-0.54 vs clean
     # p99 0.264 / max 0.304, measured 2026-07-22). Contrast-DEPENDENT, unlike tophat.
-    detect_frontend: Literal["binary", "tophat", "gray"] = "binary"
+    # "contrast" correlates against the ABSOLUTE local-luma residual. It is for a mark
+    # whose renderer switches between light-on-dark and dark-on-light while preserving
+    # one silhouette (Tencent Yuanbao); a one-polarity white top-hat misses the latter.
+    detect_frontend: Literal["binary", "tophat", "gray", "contrast"] = "binary"
     # Gaussian sigma applied to the template in the "tophat" front-end (0 = none).
     template_blur: float = 0.0
     # Which image dimension the mark's size and margins scale with. VENDOR-SPECIFIC,
@@ -398,6 +401,46 @@ class TextMarkEngine:
         """The detection score alone -- the box the removal mask needs is discarded here."""
         return self._tophat_best(image, loc)[0]
 
+    def _contrast_best(
+        self, image: NDArray[Any], loc: TextMarkLocation
+    ) -> tuple[float, tuple[int, int, int, int] | None]:
+        """Best silhouette match against the absolute local-luma residual.
+
+        Unlike the white top-hat, this response is polarity-independent: the same
+        watermark can be lighter or darker than its local background. Detection and
+        removal share the returned box, preserving the front-end parity contract.
+        """
+        c = self.config
+        x, y, bw, bh = loc.bbox
+        if bh < 16 or bw < 16:
+            return (0.0, None)
+        roi = image_io.to_bgr(image[y : y + bh, x : x + bw]).astype(np.float32)
+        luma = roi.mean(axis=2)
+        sat = roi.max(axis=2) - roi.min(axis=2)
+        sigma = max(4.0, bh * 0.4)
+        response = np.abs(luma - cv2.GaussianBlur(luma, (0, 0), sigmaX=sigma, sigmaY=sigma))
+        response *= sat < c.max_saturation
+        peak = float(response.max())
+        sil = self._glyph_silhouette()
+        if peak <= 1e-6 or sil is None:
+            return (0.0, None)
+        response = (response / peak * 255).astype(np.uint8)
+        base = self.scale_base(image)
+        best_score = 0.0
+        best_box: tuple[int, int, int, int] | None = None
+        for scale in c.ladder:
+            gw = max(c.min_gw, int(c.alpha_width_frac * base * scale))
+            gh = max(4, int(c.alpha_height_frac * base * scale))
+            if gw >= response.shape[1] or gh >= response.shape[0]:
+                continue
+            template = cv2.resize(sil, (gw, gh), interpolation=cv2.INTER_AREA)
+            result = cv2.matchTemplate(response, template, cv2.TM_CCOEFF_NORMED)
+            _, score, _, top_left = cv2.minMaxLoc(result)
+            if score > best_score:
+                tx, ty = int(top_left[0]), int(top_left[1])
+                best_score, best_box = float(score), (tx, ty, tx + gw - 1, ty + gh - 1)
+        return (best_score, best_box)
+
     def _gray_best(self, image: NDArray[Any], loc: TextMarkLocation) -> tuple[float, tuple[int, int, int, int] | None]:
         """Best TM_CCOEFF_NORMED of the silhouette against the raw GRAYSCALE ROI, and
         the ROI-local box (x0, y0, x1, y1) of that best match.
@@ -584,6 +627,19 @@ class TextMarkEngine:
             det.detected = score >= threshold and self._rival_margin_ok(score, box, self.scale_base(image))
             logger.debug("%s detect (gray): ncc=%.2f thr=%.2f detected=%s", c.name, score, threshold, det.detected)
             return det
+        if c.detect_frontend == "contrast":
+            score = self._contrast_best(image, loc)[0]
+            threshold = c.detect_ncc_threshold * (c.provenance_ncc_factor if provenance else 1.0)
+            det.confidence = score
+            det.detected = score >= threshold and self._rival_margin_ok(score, box, self.scale_base(image))
+            logger.debug(
+                "%s detect (contrast): ncc=%.2f thr=%.2f detected=%s",
+                c.name,
+                score,
+                threshold,
+                det.detected,
+            )
+            return det
         if coverage >= c.detect_min_coverage:
             score = self._template_match_score(box, self.scale_base(image))
             threshold = c.detect_ncc_threshold * (c.provenance_ncc_factor if provenance else 1.0)
@@ -643,6 +699,10 @@ class TextMarkEngine:
             # leftmost "Runni" of "RunningHub AI生成" unremoved (2026-07-22). Use the
             # detector's own best-match box, same as the tophat faint path below.
             _, box = self._gray_best(image, loc)
+        elif self.config.detect_frontend == "contrast" and self.detect(image).detected:
+            # A dark-on-light Yuanbao mark has no WHITE top-hat blob at all. Bound
+            # the fill by the polarity-independent detector's own match box.
+            _, box = self._contrast_best(image, loc)
         elif xs.size >= self._MIN_GLYPH_PIXELS:
             box = (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max()))
         elif self.config.detect_frontend == "tophat" and self.detect(image).detected:

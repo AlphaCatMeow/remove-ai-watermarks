@@ -20,6 +20,7 @@ class TestCatalog:
             "jimeng",
             "qwen",
             "kling",
+            "yuanbao",
             "samsung",
             "runninghub",
             "baidu",
@@ -42,6 +43,7 @@ class TestCatalog:
         assert by_key["gemini"].location == "bottom-right"
         assert by_key["doubao"].location == "bottom-right"
         assert by_key["jimeng"].location == "bottom-right"
+        assert by_key["yuanbao"].location == "bottom-right"
         assert by_key["samsung"].location == "bottom-left"
         assert by_key["jimeng_pill"].location == "top-left"
 
@@ -60,6 +62,7 @@ class TestScan:
             "jimeng",
             "qwen",
             "kling",
+            "yuanbao",
             "samsung",
             "runninghub",
             "baidu",
@@ -89,7 +92,7 @@ class TestScan:
         forced remove on a zero-size ndarray crashed (cv2.error on an empty Mat). detect
         already guarded this; footprint_mask must too. Covers the text + gemini engines."""
         empty = np.zeros(shape, np.uint8)
-        for key in ("doubao", "jimeng", "qwen", "samsung", "gemini"):
+        for key in ("doubao", "jimeng", "qwen", "yuanbao", "samsung", "gemini"):
             _result, mask = reg.get_mark(key).remove(empty, force=True)
             assert mask is None
 
@@ -353,6 +356,16 @@ class TestArbiter:
         keys = self._keys(cands, reg.Context(provenance=frozenset({"jimeng"})))
         assert "qwen" in keys
         assert "jimeng_pill" not in keys
+
+    def test_pill_dropped_on_yuanbao(self):
+        # The standard Yuanbao mark identifies a different TC260 product, so a
+        # coincident top-left pill match must not be treated as Jimeng-basic.
+        cands = [
+            self._c("yuanbao", strict=True, relaxed=True),
+            self._c("jimeng_pill", strict=True, relaxed=True, flat=True),
+        ]
+        keys = self._keys(cands, reg.Context(provenance=frozenset({"jimeng"})))
+        assert keys == {"yuanbao"}
 
     def test_pill_metadata_arm_gated_on_flatness(self):
         ctx = reg.Context(provenance=frozenset({"jimeng"}))

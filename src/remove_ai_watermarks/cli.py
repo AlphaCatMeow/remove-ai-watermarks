@@ -418,7 +418,7 @@ def _remove_visible_auto(
 
     Routes the ``all``/``batch`` visible step through the same registry path the
     standalone ``visible`` command uses, so EVERY registered mark is handled (the
-    Gemini sparkle AND the Doubao/Jimeng/Samsung text marks), not just the sparkle.
+    Gemini sparkle and all registered vendor text marks), not just the sparkle.
     Returns ``(result, label-or-None)``; when no ``in_auto`` mark fires the image is
     returned unchanged with ``None``. ``backend`` selects the shared fill; ``sensitivity``
     controls how hard a borderline mark is trusted (auto reads metadata provenance)."""
@@ -475,7 +475,7 @@ def _no_visible_mark_exit(source: Path) -> NoReturn:
     """Explain why no visible watermark was removed, then exit non-zero.
 
     The visible registry handles only known visual marks (the Gemini sparkle and
-    the Doubao/Jimeng/Qwen/Samsung text strips). Most real uploads carry no such mark
+    the registered vendor text marks). Most real uploads carry no such mark
     -- frequently an invisible/metadata watermark instead (e.g. an OpenAI or
     Gemini image whose only signal is C2PA + SynthID). Returning the input
     unchanged with exit 0 reads as success to a caller and re-serves the
@@ -639,7 +639,7 @@ def _run_visible_auto(
     console.print(f"  Input:  {source.name}  ({w}x{h})")
     if not removed:
         # write_noop=False means nothing was written, so a pre-existing output is intact.
-        console.print("  No known visible mark detected (gemini / doubao / jimeng / jimeng-pill / samsung).")
+        console.print("  No registered visible mark detected.")
         _no_visible_mark_exit(source)
     console.print(f"  Removed: {', '.join(removed)}")
     size_kb = output.stat().st_size / 1024

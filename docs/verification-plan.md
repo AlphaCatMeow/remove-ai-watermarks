@@ -737,17 +737,20 @@ priority order:
    measurement.
 2. **The two small correctness items** (open defects 3 and 4) -- both are contained, both
    have the fix written out below.
-3. **The bonus vendors from the harvest** (元宝 n=50, 可灵 n=30, cat-logo n=19) repeat
-   the 千问 playbook each: font-rendered silhouette, `--fit-geometry`, gate calibration
-   against the contamination-guarded clean arm, crossfire against doubao/jimeng. 可灵
-   additionally stamps a second mark bottom-LEFT, which no current text-mark config
-   expresses (the pill is top-left; a bottom-left CJK mark needs a `corner="bl"` CJK
-   config -- samsung is `bl` but Latin-script and width-based). 星绘 is NOT in the
-   corpus in labelable quantity -- verified, do not hunt it again. (百度 WAS found
-   later via the USCC cohort harvest and is registered since 2026-07-22 -- see
-   "The 2026-07-22 vendor round" below.)
+3. **The bonus vendors from the harvest** (元宝 n=50, 可灵 n=30, cat-logo n=19)
+   started with the 千问 playbook: font-rendered silhouette, `--fit-geometry`, gate
+   calibration against the contamination-guarded clean arm, and crossfire against
+   doubao/jimeng. 可灵 registered on 2026-07-21; 元宝 registered on 2026-07-25 after
+   correcting a clipped synthetic render and adding polarity-independent local
+   contrast. The cat-logo remains evidence-limited to two byte-unique carriers.
+   可灵 additionally stamps a second mark bottom-LEFT, which no current text-mark
+   config expresses (the pill is top-left; a bottom-left CJK mark needs a
+   `corner="bl"` CJK config -- samsung is `bl` but Latin-script and width-based).
+   星绘 is NOT in the corpus in labelable quantity -- verified, do not hunt it
+   again. (百度 WAS found later via the USCC cohort harvest and is registered since
+   2026-07-22 -- see "The 2026-07-22 vendor round" below.)
 
-   **STATUS 2026-07-21 (same day): 可灵 REGISTERED, 元宝 measured and PARKED.**
+   **STATUS 2026-07-25: 可灵 and 元宝 REGISTERED.**
    * **可灵 (`kling_engine.py`)** -- "可灵AI 3.0" bottom-right, strict-only, gate
      0.35, no rival margin, shared 3-rung ladder (the mark is UNIMODAL at 0.12 of the
      short side). Cohort-vs-clean (286 guarded clean frames): clean p99 0.304 / max
@@ -760,24 +763,18 @@ priority order:
      the jimeng pill exactly like doubao's/qwen's does. The bottom-LEFT `AI生成`
      pill variant was NOT seen in this cohort's contact sheet at registration time
      and stays unhandled.
-   * **元宝 -- MEASURED NEGATIVE, parked.** The mark is a TWO-LINE, italic-slanted
-     block (元宝 over AI生成), ~5% of the short side. After fitting the render
-     against real tophat responses (left-align, tight gap, stroke dilation, shear
-     -0.75 -- which lifted marked frames to 0.65-0.70, at the real-vs-real ceiling
-     ~0.6), the CLEAN arm rose in lockstep (clean p99 0.643 vs cohort p50 0.472):
-     the slanted two-line template correlates with generic corner texture at the
-     same rate it gains on the mark, on BOTH the tophat and binary front-ends, in
-     wide and tight boxes, in three CJK fonts. Every separation metric measured was
-     negative. This is the 2026-07-18 千问-style wall, except it survived the
-     geometry fix: the mark is small + slanted + half-shared-tail, and no synthetic
-     template separates it on this front-end. The residual levers are a structural
-     two-line verification stage or a learned patch classifier -- both outside the
-     cheap playbook. `yuanbao_alpha.png` + its `MARK_OPTS` recipe stay in
-     `render_vendor_silhouettes.py` as the documented starting point if that lever
-     is ever built. Fit-trap found en route (now guarded): `_fit_one`'s tiny-gw NCC
-     inflation -- a sub-30px template scores spuriously high on smooth tophat
-     responses, so the auto-fit picked a degenerate 0.026 width fraction; the
-     numbers above come from a gw-floored re-fit.
+   * **元宝 (`yuanbao_engine.py`) -- REGISTERED 2026-07-25.** The earlier measured
+     negative was invalid because the synthetic renderer applied negative shear
+     without an x translation. That clipped most of the lower `AI生成` line off the
+     left edge and left a wide blank tail, which the matcher then squeezed into the
+     fitted box. The corrected renderer translates before shearing and tightly
+     crops the result. A polarity-independent local-contrast front-end then covers
+     both light-on-dark and dark-on-light stamps. Gate 0.38 plus the measured
+     bottom-right anchor detects 26 of 28 standard two-line marks across 33
+     byte-unique cohort frames (92.9%) and fires on 0 of 286 byte-unique clean
+     controls (clean max 0.348). Detect -> cv2 fill -> re-detect is clean on 26/26.
+     The separate one-line photographer overlay remains unregistered because only
+     one example exists.
    * **cat-logo -- probe READY, parked on evidence.** The cohort (USCC
      91110108562144110X) is 19 frames but only **2 unique carriers** (byte-unique) --
      the xinghui rule (nothing registered off ~one frame) applies. The mark is an
@@ -848,7 +845,8 @@ Parked, both as measured negatives with the silhouette kept in
 * **Zhipu Qingyan (清言·AI生成)** -- 7-frame cohort, white semi-transparent text +
   swirl logo. On both front-ends the cohort scores 0.34-0.39 vs clean max
   0.34-0.37 -- no separation at any render/box setting (text-only and
-  logo-composite templates, two CJK fonts). Same wall class as 元宝.
+  logo-composite templates, two CJK fonts). Unlike the old Yuanbao result, no
+  malformed-render explanation has been found for this overlap.
 * **MiniMax / Hailuo AI** -- only 1 of 6 cohort frames carries a visible mark
   (Hailuo is a video product; the mark is a video-frame stamp). The xinghui rule:
   nothing registered off a single frame.
@@ -963,9 +961,9 @@ meant "no registered mark", not "no mark" -- and a calibration clean arm has to 
 re-filtered per candidate, or the gate is read off frames that carry the very mark being
 calibrated.
 
-The bonus vendors (元宝, 可灵, cat-logo) need their own font-rendered silhouettes before
-any of this repeats for them; 可灵 additionally puts a second mark bottom-LEFT, which no
-current text-mark config expresses.
+元宝 and 可灵 now have registered font-rendered silhouettes. The cat-logo still needs
+more than its two byte-unique carriers before registration; 可灵's separate second
+bottom-left mark remains uncovered.
 
 ### Open defects
 
@@ -1058,10 +1056,11 @@ evidence supports:
 2. **Coverage of uncovered vendors is the largest lever.** 千问 was the head of this item
    and is now CLOSED (registered 2026-07-21, see the harvest section above): the blocker
    turned out to be evidence, and the TC260 producer-USCC cohort trick removed it. The
-   remaining named vendors are 元宝 (n=50), 可灵 (n=30) and cat-logo (n=19) -- each needs
-   a font-rendered silhouette, then the same calibrate-and-crossfire chain. `百度` and the
-   星绘/抖音 class are NOT in the corpus in labelable quantity (verified twice; do not
-   hunt them again). Nothing may be registered off a single frame.
+   元宝 and 可灵 are now CLOSED (registered 2026-07-25 and 2026-07-21 respectively).
+   The cat-logo remains blocked by only two byte-unique carriers. `百度` was also
+   registered after a later cohort harvest; the 星绘/抖音 class is NOT in the corpus
+   in labelable quantity (verified twice; do not hunt it again). Nothing may be
+   registered off a single frame.
 3. **A generic shared-tail template is not a shortcut.** `AI生成` is guaranteed across
    compliant vendors by GB 45438-2025, so one template covering all of them is the obvious
    idea -- and measured on the tophat front-end it separates a bold 千问 positive from clean
