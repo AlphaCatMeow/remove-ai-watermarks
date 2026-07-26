@@ -335,7 +335,7 @@ def _yunet_model_path() -> Path:
 
     model_path.parent.mkdir(parents=True, exist_ok=True)
     log.info("Downloading YuNet face detector: %s", YUNET_MODEL_URL)
-    request = urllib.request.Request(  # noqa: S310 - fixed HTTPS source
+    request = urllib.request.Request(
         YUNET_MODEL_URL,
         headers={"User-Agent": "remove-ai-watermarks"},
     )

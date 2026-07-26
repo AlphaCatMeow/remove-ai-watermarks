@@ -200,6 +200,7 @@ addopts = "-v --tb=short"
 target-version = "py310"
 line-length = 120
 exclude = ["_refs"]
+extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "B", "I", "S", "UP", "SIM", "RET", "COM", "C4", "G", "PT", "PIE", "T20", "DTZ", "ICN", "TCH", "RUF", "ANN"]
