@@ -77,12 +77,15 @@ The package uses hatchling through the unpinned `hatchling` build requirement in
 
 The repository includes a conda recipe under `packaging/conda/recipe.yaml`.
 
-The ComfyUI nodes are maintained and versioned in their own repository. Its
-scheduled workflow detects a newer PyPI library release, updates the dependency
-floor, runs compatibility tests, bumps the node patch version, and publishes to
-the ComfyUI Registry only when those tests pass. The library release event does
-not publish the node package directly, so the registry update follows on that
-schedule rather than inside `distribute.yml`.
+The ComfyUI nodes are maintained and versioned in their own repository. After
+the matching source distribution appears on PyPI, `distribute.yml` dispatches
+that repository's sync workflow with the exact library version and waits for it
+to finish. The sync updates the dependency floor, runs compatibility tests,
+bumps the node patch version, and publishes to the ComfyUI Registry only when
+those tests pass. Its daily schedule remains as a recovery path if a release
+dispatch is interrupted. The `HOMEBREW_TAP_TOKEN` repository secret is also the
+cross-repository release token; it needs Actions read and write access to the
+ComfyUI node repository.
 
 ## Release verification
 
@@ -94,4 +97,5 @@ After publication, verify:
 - the distribution workflow completed successfully;
 - the repository's conda recipe matches the published version and source
   distribution;
+- the ComfyUI Registry node requires the new library version;
 - a clean install can run `remove-ai-watermarks --version`.

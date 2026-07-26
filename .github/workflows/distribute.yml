@@ -3,10 +3,11 @@ name: Distribute on release
 # Fans a published GitHub Release out to the channels that need a nudge.
 # PyPI is handled by publish.yml; the conda-forge channel is handled by its
 # autotick bot. This workflow updates the repository recipe and event-drives
-# the two channels that would otherwise be manual:
+# the three channels that would otherwise be manual:
 #   - Homebrew tap: rewrite the formula's url + sha256 to the new sdist.
 #   - HF Space: factory-rebuild so it reinstalls the latest sdist from PyPI.
-# Both wait for the freshly published sdist to appear on PyPI first, since the
+#   - ComfyUI: sync, test, and publish the node against the exact library release.
+# All wait for the freshly published sdist to appear on PyPI first, since the
 # Release event fires in parallel with publish.yml's upload.
 
 on:
@@ -133,3 +134,75 @@ jobs:
           )
           print("HF Space factory rebuild triggered")
           PY
+
+  comfyui:
+    needs: resolve
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync and publish the ComfyUI nodes
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          repo=wiltodelta/ComfyUI-remove-ai-watermarks
+          workflow=sync-library.yml
+          dispatched_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          gh workflow run "$workflow" \
+            --repo "$repo" \
+            --ref main \
+            --raw-field library_version="${{ needs.resolve.outputs.version }}"
+
+          run_id=""
+          for attempt in $(seq 1 30); do
+            run_id=$(
+              gh run list \
+                --repo "$repo" \
+                --workflow "$workflow" \
+                --event workflow_dispatch \
+                --limit 10 \
+                --json databaseId,createdAt \
+                | python3 -c '
+          import json
+          import sys
+
+          dispatched_at = sys.argv[1]
+          runs = json.load(sys.stdin)
+          print(next(
+              (run["databaseId"] for run in runs if run["createdAt"] >= dispatched_at),
+              "",
+          ))
+          ' "$dispatched_at"
+            )
+            if [ -n "$run_id" ]; then
+              break
+            fi
+            echo "ComfyUI sync run not visible yet (attempt $attempt), waiting..."
+            sleep 2
+          done
+
+          if [ -z "$run_id" ]; then
+            echo "::error::The dispatched ComfyUI sync run did not appear"
+            exit 1
+          fi
+
+          for attempt in $(seq 1 180); do
+            read -r status conclusion <<< "$(
+              gh run view "$run_id" \
+                --repo "$repo" \
+                --json status,conclusion \
+                --jq '[.status, (.conclusion // "")] | @tsv'
+            )"
+            if [ "$status" = "completed" ]; then
+              if [ "$conclusion" = "success" ]; then
+                echo "ComfyUI sync run $run_id succeeded"
+                exit 0
+              fi
+              echo "::error::ComfyUI sync run $run_id completed with $conclusion"
+              exit 1
+            fi
+            echo "ComfyUI sync run $run_id is $status (attempt $attempt), waiting..."
+            sleep 5
+          done
+          echo "::error::ComfyUI sync run $run_id did not finish in time"
+          exit 1
