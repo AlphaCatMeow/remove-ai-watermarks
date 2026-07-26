@@ -96,7 +96,7 @@ checked on one lucky image).
 
 ### Certified controlnet strength floors (Modal GPU sweep + oracle, 2026-06-04)
 
-Run via the isolated `raiw-controlnet-cert` Modal app (`raiw-app/modal_cert.py`):
+Run via an isolated Modal certification harness:
 controlnet, `restore_faces` OFF (it re-introduces SynthID), `--max-resolution 1536`,
 each image checked on ITS OWN vendor oracle (OpenAI -> openai.com/verify, Gemini -> the
 Gemini app; the two payloads are vendor-specific and never cross-checked):
