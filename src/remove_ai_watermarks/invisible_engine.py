@@ -100,6 +100,7 @@ class InvisibleEngine:
         hf_token: str | None = None,
         progress_callback: Callable[[str], None] | None = None,
         controlnet_conditioning_scale: float = 1.0,
+        cpu_offload: bool = False,
     ) -> None:
         """Initialize the invisible watermark removal engine.
 
@@ -117,6 +118,10 @@ class InvisibleEngine:
             progress_callback: Optional callback for progress messages.
             controlnet_conditioning_scale: ControlNet structure-preservation
                 strength (controlnet pipeline only).
+            cpu_offload: Offload model components to CPU between CUDA calls instead
+                of keeping the whole pipeline in VRAM, at the cost of speed. For
+                qwen-zimage, force the face stack to offload instead of using automatic
+                residency. CUDA only.
         """
 
         from remove_ai_watermarks.noai.watermark_remover import WatermarkRemover
@@ -130,6 +135,7 @@ class InvisibleEngine:
             hf_token=hf_token,
             pipeline=pipeline,
             controlnet_conditioning_scale=controlnet_conditioning_scale,
+            cpu_offload=cpu_offload,
         )
         self._progress_callback = progress_callback
 

@@ -148,6 +148,7 @@ image → encode to latent space (VAE) at native resolution
 ```
 
 - Large inputs run at native resolution (no down-then-up round-trip, which was the main quality loss in issue #10); use `--max-resolution N` only to cap GPU/MPS memory on very large inputs. For inputs that run out of GPU/MPS memory at native resolution, `--tile` is the lossless alternative to `--max-resolution`: it regenerates the image in overlapping, feather-blended tiles so there is no downscale and no visible seam. It engages only when the long side exceeds `--tile-size` (default 1024; overlap `--tile-overlap`, default 128); pair it with `--max-resolution 0`. SDXL and ControlNet run their complete pass per tile. `qwen-zimage` tiles only its global Qwen pass, then runs face detection, SAM masking, and Z-Image restoration once on the blended full frame. Small inputs (long side under 1024 px) are auto-upscaled to a 1024 px floor before diffusion, because SDXL distorts on a tiny latent, and the result is restored to the original size (a transparent quality boost). Disable the floor with `--min-resolution 0`. The floor upscale uses Lanczos by default; `--upscaler esrgan` (the `esrgan` extra) runs Real-ESRGAN first for sharper detail and falls back to Lanczos if the extra is absent. ESRGAN is a generic photo/texture GAN with no face/glyph prior, so it is best for photo/texture content -- it can degrade faces (the diffusion pass regenerates them, so the final recovers) and thin text; keep Lanczos for text-heavy inputs.
+- On a memory-constrained CUDA card, `--cpu-offload` moves Diffusers model components between CPU and GPU instead of keeping the full pipeline in VRAM. This lowers peak VRAM use at the cost of transfer overhead. With `qwen-zimage`, the flag forces the face stack to offload instead of using its automatic residency decision. It has no effect on CPU or MPS.
 
 > **Default strength is profile-aware (no flag needed).** SDXL and ControlNet read the C2PA issuer and use **OpenAI gpt-image `0.10`**, **Google Gemini `0.15`**, or **unknown source `0.15`**. The same ladder applies to those two profiles. `qwen` has its own measured ladder. `qwen-zimage` instead ports the upstream resolution-adaptive denoise formula: approximately `0.084` at 0.30 MP through `0.154` at 3.70 MP and above, plus a separate face-adaptive `0.05` through `0.28` pass. There is no local SynthID decoder, so if the corresponding provider oracle still reads the signal, raise `--strength` and re-check the output.
 >
@@ -392,6 +393,8 @@ remove-ai-watermarks invisible image.png -o clean.png --humanize 4.0 --unsharp 0
 # Recommended high-quality mode: full Qwen-Image-2512 Canny pass plus
 # SAM-masked Z-Image face repair. It is much slower and more expensive.
 remove-ai-watermarks invisible image.png -o clean.png --pipeline qwen-zimage --force
+# Low-VRAM CUDA mode. Slower because model components move between CPU and GPU.
+remove-ai-watermarks invisible image.png -o clean.png --cpu-offload --force
 # --humanize adds film grain, --unsharp counters the soft "AI" look (both opt-in).
 # Large images run at native resolution; small ones are upscaled to a 1024 floor
 # first (disable with --min-resolution 0); --upscaler esrgan uses Real-ESRGAN for
@@ -428,7 +431,7 @@ remove-ai-watermarks metadata image.png --remove
 remove-ai-watermarks batch ./images/ --mode visible
 
 # Batch accepts the full invisible knob set (--strength/--guidance-scale/--model/
-# --pipeline/...); --adaptive-polish is on by default except qwen-zimage
+# --pipeline/--cpu-offload/...); --adaptive-polish is on by default except qwen-zimage
 # (--adaptive-polish/--no-adaptive-polish overrides the profile default)
 remove-ai-watermarks batch ./images/ --mode all
 ```
@@ -469,7 +472,8 @@ from remove_ai_watermarks.invisible_engine import InvisibleEngine
 
 # pipeline: "controlnet" (default), "sdxl", "qwen", or CUDA-only "qwen-zimage".
 # model_id=None uses the SDXL base; controlnet_conditioning_scale tunes preservation.
-engine = InvisibleEngine(pipeline="controlnet")
+# cpu_offload=True lowers CUDA VRAM use at the cost of transfer overhead.
+engine = InvisibleEngine(pipeline="controlnet", cpu_offload=True)
 
 # Prefer this CUDA-only profile when output fidelity matters more than cost:
 # engine = InvisibleEngine(pipeline="qwen-zimage")

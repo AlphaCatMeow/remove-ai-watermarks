@@ -387,8 +387,12 @@ class WatermarkRemover:
         hf_token: str | None = None,
         pipeline: str = "controlnet",
         controlnet_conditioning_scale: float = 1.0,
+        cpu_offload: bool = False,
     ) -> None:
         self.model_id = model_id or self.DEFAULT_MODEL_ID
+        # Diffusers offloads whole model components between CUDA calls. The custom
+        # qwen-zimage runtime uses the same flag to keep its face stack off VRAM.
+        self.cpu_offload = cpu_offload
         # The pipeline profile is threaded explicitly (not inferred from model_id):
         # both "sdxl" and "controlnet" use the same SDXL base checkpoint. Normalize so
         # the legacy "default" alias resolves to "sdxl".
@@ -484,17 +488,29 @@ class WatermarkRemover:
         trigger the torch-CUDA reinstall+restart. Returns the moved pipeline.
         """
         self._set_progress(f"Moving model to device: {self.device}")
-        try:
-            pipeline = pipeline.to(self.device)
-        except (RuntimeError, AssertionError) as exc:
-            if self.device == "cuda" and not os.environ.get(_CUDA_FIX_ENV_KEY):
-                self._set_progress("CUDA failed. Reinstalling torch with CUDA support...")
-                _reinstall_torch_cuda_and_restart()
-            raise RuntimeError(
-                f"Failed to move model to {self.device} ({exc}). "
-                "Install CUDA-enabled PyTorch manually:\n"
-                f"  pip install torch --index-url {_detect_cuda_index_url()}"
-            ) from exc
+        if self.cpu_offload and self.device == "cuda":
+            enable_cpu_offload = getattr(pipeline, "enable_model_cpu_offload", None)
+            if not callable(enable_cpu_offload):
+                raise RuntimeError(
+                    "CPU offload was requested, but this pipeline does not support enable_model_cpu_offload()."
+                )
+            self._set_progress("Enabling CUDA model CPU offload (low-VRAM mode)...")
+            try:
+                enable_cpu_offload(device=self.device)
+            except (RuntimeError, AssertionError) as exc:
+                raise RuntimeError(f"Failed to enable model CPU offload ({exc}).") from exc
+        else:
+            try:
+                pipeline = pipeline.to(self.device)
+            except (RuntimeError, AssertionError) as exc:
+                if self.device == "cuda" and not os.environ.get(_CUDA_FIX_ENV_KEY):
+                    self._set_progress("CUDA failed. Reinstalling torch with CUDA support...")
+                    _reinstall_torch_cuda_and_restart()
+                raise RuntimeError(
+                    f"Failed to move model to {self.device} ({exc}). "
+                    "Install CUDA-enabled PyTorch manually:\n"
+                    f"  pip install torch --index-url {_detect_cuda_index_url()}"
+                ) from exc
 
         if hasattr(pipeline, "enable_xformers_memory_efficient_attention"):
             with contextlib.suppress(Exception):
@@ -638,6 +654,7 @@ class WatermarkRemover:
                 hf_token=self.hf_token,
                 progress_callback=self._progress_callback,
                 controlnet_conditioning_scale=self.controlnet_conditioning_scale,
+                keep_face_models_on_device=False if self.cpu_offload else None,
             )
         return self._qwen_zimage_pipeline
 
