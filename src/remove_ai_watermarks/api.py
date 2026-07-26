@@ -128,9 +128,11 @@ def remove_visible(
     strip_metadata: bool = True,
     write_noop: bool = True,
 ) -> tuple[NDArray[Any], list[str]]:
-    """Remove every detected known visible AI mark (Gemini sparkle, the registered
-    vendor text marks including Tencent Yuanbao, and the Jimeng pill) via
-    localize -> fill, returning ``(result_bgr, [labels removed])``.
+    """Remove every detected known visible AI mark through localize then fill.
+
+    The registry currently covers the Gemini sparkle; Doubao, Jimeng, Qwen, Kling,
+    Yuanbao, Samsung, RunningHub, Baidu, and LibLibAI text marks; and the Jimeng
+    pill. Returns ``(result_bgr, [labels removed])``.
 
     ``source`` is a file path OR a BGR ndarray. For a PATH, metadata provenance is read
     automatically (so ``sensitivity="auto"`` recovers a moved/faint mark whenever the
@@ -141,8 +143,7 @@ def remove_visible(
     known was found (e.g. route to the diffusion ``all`` path or ``erase``).
 
     ``sensitivity`` (``auto``/``strict``) and ``backend``
-    (``auto``/``cv2``/``migan``/``lama``) are the same knobs as the CLI. Pass
-    corner if the guess is wrong).
+    (``auto``/``cv2``/``migan``/``lama``) are the same controls as the CLI.
 
     ``strip_metadata`` (default True, matching the CLI ``visible --strip-metadata``)
     also strips AI provenance metadata (C2PA/EXIF/XMP/IPTC) from the written output via

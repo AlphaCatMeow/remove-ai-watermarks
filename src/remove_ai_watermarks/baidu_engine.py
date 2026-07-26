@@ -16,23 +16,9 @@ Removal is the shared **localize -> fill** (:meth:`footprint_mask` ->
 synthetic silhouette from ``scripts/render_vendor_silhouettes.py``, never cut
 from an upload).
 
-Measured on the vendor cohort (16 TC260 carriers whose producer USCC
-91110000802100433B names Baidu, harvested 2026-07-22 by
-``scripts/vendor_cohort_harvest.py``), NOT inherited from Doubao:
-
-  * The 百度 text run is 0.090 of the SHORT side wide (measured on 720/768/
-    1024-px frames), with its right edge ~0.099 of short off the right edge
-    (the pill tag sits between the text and the corner), bottom margin
-    ~0.006; the locate box below covers the whole mark (text + tag).
-  * Gate 0.43 (tophat front-end): on 278 hand-labelled clean frames
-    (cohort-contamination-guarded) the max is 0.352 / p99 0.314, and the
-    visibly-marked cohort frames score 0.386-0.65. Picked over the clean-arm
-    0.37 after a full-corpus check on the 741-frame blind-labelled eval set
-    surfaced 13 cross-fires at 0.38-0.43 (12 Qwen marks + one 抖音 mark) --
-    see DETECT_NCC_THRESHOLD below. At 0.43 the cohort keeps 7 detections
-    (0.61-0.65) and the whole 741 set fires only on the true Baidu frame.
-  * STRICT ONLY (``provenance_ncc_factor`` 1.0): the cohort is small (16) and
-    the sub-gate band is unmeasured, so no provenance relaxation exists.
+The detector uses a synthetic silhouette, short-side geometry, a strict
+confidence gate, and a Qwen rival margin. The footprint covers both the text
+run and its adjacent pill tag.
 """
 # The module-level _alpha_template / _glyph_silhouette / _template_match_score below
 # are thin test-facing shims (imported by tests/), so pyright's src-only pass sees them
@@ -67,20 +53,9 @@ LOGO_MIN_LUMA = 150
 TOPHAT_DELTA = 12
 
 DETECT_MIN_COVERAGE = 0.04  # unused by the tophat front-end (kept for config parity)
-# Calibrated 2026-07-22 on the vendor cohort vs 278 hand-labelled clean frames
-# (clean p99 0.314 / max 0.352), THEN raised 0.37 -> 0.43 after a full-corpus
-# check: on the 741-frame blind-labelled eval set the 0.37 gate fired 14 times
-# outside the cohort, and only ONE was the vendor -- 12 were 千问AI生成 (Qwen)
-# marks (the 百/千 first glyphs are near-identical after binarization) and one
-# was a 抖音 AI创作 mark at 0.425. The Qwen fires are handled by the rival
-# margin (Qwen scores 0.58-0.76 there, beating Baidu by 0.17-0.35), but the
-# 抖音 one named no registered rival, so the gate moved above it. Cost: the
-# cohort's low trio at 0.386 (3 genuine marks) -- precision over recall on a
-# small cohort. Raised again 0.43 -> 0.48 after the full-corpus sweep
-# (2026-07-22): outside-cohort true Baidu carriers score 0.50-0.66 while the
-# false fires (大众点评 UI, a math blackboard, an 80s banner, a checkerboard)
-# top out at 0.47. Remaining cohort detections: 7 at 0.61-0.65, plus the 6
-# metadata-stripped true carriers the cohort cannot see.
+# Calibrated against vendor, rival-mark, and clean compatibility examples.
+# The Qwen rival margin handles visually similar marks; the threshold rejects
+# remaining unrelated bottom-right text.
 DETECT_NCC_THRESHOLD = 0.48
 
 # Detection-silhouette geometry (fraction of the short side): the 百度 text run

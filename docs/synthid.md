@@ -1,5 +1,10 @@
 # SynthID-Image: technical reference
 
+> Technical research reference. Current package behavior is defined by the
+> [supported signals](supported-signals.md), [known limitations](known-limitations.md),
+> and [module internals](module-internals.md). Dated measurements below are
+> historical evidence and should not be read as current CLI defaults.
+
 This document covers how Google SynthID for images works mechanically, what it
 survives, what removes it, and the current deployment landscape. It is written
 for engineers working on watermark detection and removal -- specifically to
@@ -175,11 +180,11 @@ A controlled study (June 2026, clean v0.8.6 with text/face protection OFF,
 native resolution on this repo's default SDXL pipeline) measured the minimum
 img2img strength that removes the SynthID pixel watermark, verified per image on
 the vendor's own oracle (openai.com/verify for OpenAI, the Gemini app "Verify
-with SynthID" for Google). Each subject is archived in `data/synthid_corpus/` as a
-pos original plus its minimum-clearing cleaned output (manifest `verified_via` =
-`openai-verify` / `gemini-app`), EXCEPT one third-party image from issue #14, which
-was oracle-verified but is not committed (third-party content stays out of the
-public corpus).
+with SynthID" for Google). The reusable originals are stored once in
+`data/synthid/originals/`, with their input verification in `manifest.csv`.
+Generated cleaned outputs are not committed; the table below is the durable
+record of the historical oracle verdicts. One third-party image from issue #14
+was oracle-verified but is not committed.
 
 **Oracle validation order: start with OpenAI.** When validating removal across
 vendors, run the OpenAI arm first. `openai.com/verify` is more accessible than the
@@ -431,27 +436,14 @@ conditioning, never by copying original pixels.**
   OpenAI and Gemini oracles. This is a quality recommendation for the measured content,
   not broad removal certification; very small text can still degrade.
   See `docs/known-limitations.md` for the metrics, runtime, and validation scope.
-- **Face identity:** canny holds face *structure* but not *identity*. Shipped as the
-  optional `--restore-faces` GFPGAN post-pass (`face_restore.py`, the `restore`
-  extra, experimental/opt-in, off by default). It runs GFPGAN on the ORIGINAL
-  faces and feather-composites the restored face REGIONS into the cleaned image.
-  **WARNING (oracle-confirmed 2026-06-04): this pass can RE-INTRODUCE SynthID into
-  the face regions -- the earlier "GFPGAN re-synthesizes from a StyleGAN2 prior ->
-  scrubs SynthID -> oracle-confirmed clean" claim was WRONG.** At the default fidelity
-  weight `0.5` GFPGAN blends ~half the ORIGINAL (watermarked) face pixels with the
-  prior, and SynthID is robust to that partial blend, so the composited face carries
-  the watermark back in -- over the diffusion-cleaned face. Confirmed by a clean A/B:
-  `gemini_3` read SynthID-detected after controlnet @ 0.20/0.25 WITH restore, but
-  NOT-detected after the same controlnet @ 0.20 with `--no-restore-faces` (only
-  restore differed). Content-dependent (a second face image cleared WITH restore),
-  which is why a single-image check earlier read "clean". **Fix directions (not yet
-  done): run GFPGAN on the diffusion-CLEANED image not the original; or drop the
-  weight well below 0.5; or leave restore OFF for removal -- each needs oracle
-  re-validation.** Commercial-
-  safe (GFPGAN Apache-2.0 + RetinaFace MIT); the CodeFormer alternative is
-  NON-COMMERCIAL and is not shipped. (An IP-Adapter FaceID approach was tried and
-  REMOVED -- it needs high denoise strength and corrupts faces at removal strength;
-  see `docs/controlnet-removal-pipeline-research.md`.)
+- **Face identity:** canny holds face *structure* but not *identity*. The standard
+  SDXL and ControlNet profiles do not run a separate face-restoration option.
+  Earlier GFPGAN, PhotoMaker, and FaceID experiments were removed after they
+  degraded identity or risked reintroducing source pixels. The separate
+  `qwen-zimage` profile now provides the only shipped face-specific stage:
+  YuNet and SAM locate faces, then Z-Image regenerates the selected original
+  face crops before a feathered composite. See
+  `docs/controlnet-removal-pipeline-research.md` for the historical experiments.
 
 ### 5.2 Strength setting
 
@@ -536,7 +528,7 @@ manifest get `OPENAI_STRENGTH` 0.10, the one without C2PA falls to
 | image | content type | size | strength | `--auto`/controlnet | `default` |
 |---|---|---|---|---|---|
 | typography card | flat text | 1122x1402 | 0.10 | clean | clean |
-| raiw.cc poster | flat graphic (logo + flat fills) | 1024x1536 | 0.10 | clean | **detected** |
+| Flat poster | flat graphic (logo + flat fills) | 1024x1536 | 0.10 | clean | **detected** |
 | 9-face grid | photoreal | 1448x1086 | 0.10 | **detected** | clean |
 | bracelet product photo | photoreal | 1600x1600 | 0.15 | **detected** | clean |
 
@@ -575,16 +567,18 @@ content×pipeline table above conflates a borderline/non-deterministic 0.15 resu
 with deterministic content behavior -- the photoreal-survives-controlnet effect is
 solid at 0.10 but at 0.15 it is near-threshold noise; (2) for reliable removal pick
 a strength with MARGIN above the borderline (controlnet >= 0.20), not exactly on
-it; (3) **engineering follow-up for raiw.cc: the controlnet pipeline should use a
-HIGHER vendor strength than `default` (it currently shares `resolve_strength`) --
-e.g. controlnet floor 0.20 -- calibrated per vendor/content on the GPU worker where
-batches are cheap. The shared 0.10/0.15 is tuned for `default`, not controlnet.**
+it; (3) **historical engineering conclusion:** this dated run argued for a
+higher ControlNet strength than the then-current default. That proposal was
+later superseded. The current resolver intentionally shares the 0.10/0.15
+ladder between SDXL and ControlNet and uses a separate Qwen ladder; see
+`noai/watermark_profiles.py`.
 Source images are private (faces / product shots), not committed; reproduce on any
 photoreal + flat-graphic gpt-image pair, varying the seed, and re-checking the
 oracle.
 
 **Gemini pass + the face-restore re-introduction (2026-06-04).** Four Gemini
-originals via `--auto` (controlnet) at `--max-resolution 1024`, checked on the
+originals via the then-current `--auto` ControlNet path at `--max-resolution 1024`,
+checked on the
 Gemini "Verify with SynthID" oracle (Google content needs the Google oracle, not
 openai.com/verify):
 - Most cleared at controlnet 0.15-0.25; `gemini_3` (a large central FACE, +restore)
@@ -599,23 +593,21 @@ openai.com/verify):
   robust to downscaling by design, and the study's resolution trend says LOWER
   processing res needs LESS strength, so 1024 was never the wall.)
 
-**Certified controlnet floors (isolated Modal GPU sweep + oracle,
+**Historical controlnet certification, superseded by the current vendor-adaptive
+defaults (isolated GPU sweep + oracle,
 restore OFF, <= 1536, each vendor on its own oracle):** OpenAI **0.20** (2 photoreal x
 seed {1,2,3} = 6/6 clean; the 0.15-flipper is seed-robust at 0.20) and Gemini **0.30**
 (0.20 detected -> 0.30 clean on 2/2 seeds). OpenAI 0.20 transfers to prod
 (resolution-independent); Gemini 0.30 holds only <= 1536 -- Gemini is
-resolution-sensitive and raiw.cc runs NATIVE, so cap Gemini <= 1536 + use 0.30 or
+resolution-sensitive, so a native-resolution deployment should cap Gemini <= 1536 + use 0.30 or
 native-calibrate (~0.35+). See `docs/controlnet-removal-pipeline-research.md` for the
 table.
 
-**Net for raiw.cc:** (1) controlnet needs a higher, per-vendor strength than
-`default` -- CERTIFIED OpenAI 0.20 / Gemini 0.30 (above); add a controlnet-specific
-schedule to `resolve_strength`, do not reuse the default ladder; (2) the
-`--restore-faces` pass is now SynthID-safe by construction (the GFPGAN-on-original
-path that re-added SynthID was removed 2026-06-04; the shipped restore is
-PhotoMaker-V2, NON-COMMERCIAL, see `photomaker_restore.py`); (3)
-removal near threshold is seed-non-deterministic -> FIX the prod seed (kills the
-coin-flip; ship a deterministic certified config).
+**Current implication:** the old floor table remains evidence about the dated
+test set, not the current resolver. The shipped SDXL and ControlNet defaults are
+defined in `watermark_profiles.py`, and face restoration is available only
+through the separate `qwen-zimage` profile. Removal near a threshold remains
+seed dependent, so reproducible verification requires a fixed seed.
 
 ---
 

@@ -35,7 +35,7 @@ THE MEASUREMENT
   percentage is an upper bound on what a denser ladder buys.
 
 DATA SAFETY
-  Corpus images are user uploads: read-only, local analysis, gitignored output.
+  Treat input datasets as sensitive and read-only, and keep output gitignored.
 
     uv run python scripts/ladder_headroom.py --mark doubao --n 4000
 """
@@ -60,8 +60,8 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 REPO = Path(__file__).resolve().parents[1]
-CORPUS = REPO / "data" / "spaces" / "originals"
-OUT = REPO / "data" / "spaces" / "_ladder_headroom.jsonl"
+CORPUS = REPO / ".local-eval" / "originals"
+OUT = REPO / ".local-eval" / "ladder-headroom.jsonl"
 
 # The rungs the product ships today, and the dense ladder under evaluation. The dense one
 # is geometric with a ~6% step, chosen from the measured half-width of a rung's lobe
@@ -189,7 +189,7 @@ def main() -> None:
     # for a mark with rivals, `dense_crosses` would ignore the competitive margin and read
     # optimistically. Widening the binary front-end is a separate experiment.
     ap.add_argument("--mark", default="doubao", choices=["doubao"])
-    ap.add_argument("--n", type=int, default=4000, help="corpus files to scan")
+    ap.add_argument("--n", type=int, default=4000, help="local files to scan")
     ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 4) - 2))
     ap.add_argument("--out", type=Path, default=OUT)
     ap.add_argument("--report-only", action="store_true")

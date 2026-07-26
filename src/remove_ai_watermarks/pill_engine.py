@@ -7,14 +7,14 @@ silhouette; like every mark it is then removed by the shared localize -> fill:
 
   * Detect: edge-NCC of a font-rendered SILHOUETTE (``assets/jimeng_pill.png``,
     synthetic, data-safe -- see ``scripts/render_pill_silhouette.py``) against the
-    top-left ROI, at the pill's known width fraction. Corpus-calibrated threshold
-    (61 real positives + jimeng negatives): ``_DETECT_THRESHOLD`` 0.22.
+    top-left ROI, at the pill's known width fraction. The calibrated
+    ``_DETECT_THRESHOLD`` is 0.22.
   * Remove: place the pill footprint at the matched location and inpaint it
     (MI-GAN / cv2 via the registry). Quality comes from the inpaint backend, so the
     silhouette need not be pixel-accurate -- which is why a synthetic render is
-    sufficient and no corpus-derived asset is committed.
+    sufficient and no source-derived asset is committed.
 
-Geometry measured on 51 real examples (8 resolutions, all 3:4): width ~0.161*W,
+Geometry uses width ~0.161*W,
 height ~0.091*W, top-left, margins ~0.02-0.05.
 """
 
@@ -42,7 +42,7 @@ _ASSET = Path(__file__).parent / "assets" / "jimeng_pill.png"
 _WIDTH_FRAC = 0.161
 _ROI_W_FRAC = 0.34  # search window width (of W)
 _ROI_H_FRAC = 0.14  # search window height (of H)
-_DETECT_THRESHOLD = 0.22  # edge-NCC gate, corpus-calibrated
+_DETECT_THRESHOLD = 0.22  # calibrated edge-NCC gate
 # Inpaint mask GEOMETRY (fractions of W unless noted): a generous fixed top-left box
 # covering the pill (measured ~0.167*W wide, ~0.09*W tall, margin ~0.02-0.05) plus
 # margin. The mask uses stable geometry, NOT the NCC match position -- the synthetic
@@ -59,9 +59,8 @@ _MASK_W, _MASK_H = 0.205, 0.115  # width of W, height of W
 # corners (sky / wall / solid) where inpaint is invisible. So the metadata-only arm
 # removes the pill only when the footprint background is flat enough for a safe,
 # invisible inpaint. Threshold = median Sobel magnitude over the footprint box at a
-# normalized width; corpus-validated on 32k real uploads 2026-07 (real pills median
-# ~3.2, textured-ceiling false fires median ~8+). The reliable bottom-right wordmark
-# arm is NOT texture-gated -- a wordmark-confirmed pill is removed regardless.
+# normalized width. The reliable bottom-right wordmark arm is NOT texture-gated:
+# a wordmark-confirmed pill is removed regardless.
 _FLAT_TEXTURE_MAX = 6.0
 
 _silhouette: NDArray[Any] | None = None

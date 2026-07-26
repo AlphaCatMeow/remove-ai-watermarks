@@ -135,12 +135,11 @@ C2PA_AI_VENDORS: tuple[C2paAiVendor, ...] = (
     ),
     # Some Volcano Engine certs name the signer with the Chinese legal entity
     # "北京火山引擎科技有限公司" (Beijing Volcano Engine Technology Co., Ltd.) rather
-    # than the latin "volcengine" -- the latin needle misses it entirely, so real
-    # ByteDance output was un-attributed in production traffic. The issuer is the
+    # than the latin "volcengine" -- the latin needle misses it entirely. The issuer is the
     # UTF-8 of the Chinese name (it appears UTF-8-encoded in the manifest-store
     # JSON and the raw caBX bytes alike); it normalizes to the same "ByteDance"
     # needle and platform as the volcengine row, so the two collapse together for
-    # clash detection. Verified against the mined retained corpus, 2026-06-20.
+    # clash detection. Verified against compatible signed samples.
     C2paAiVendor(
         "北京火山引擎科技有限公司".encode(),
         "ByteDance (Volcano Engine)",
@@ -154,7 +153,7 @@ C2PA_AI_VENDORS: tuple[C2paAiVendor, ...] = (
     # clean manifest issuer matches "BytePlus (ByteDance)" directly. The platform
     # string mirrors the volcengine row: both share the "ByteDance" needle, so the
     # earlier row's label wins anyway -- they normalize together for clash
-    # detection. Verified on real signed files in production traffic, 2026-06-19.
+    # detection. Verified on compatible signed samples.
     C2paAiVendor(b"Byteplus", "BytePlus (ByteDance)", "ByteDance (Doubao / Jimeng / Volcano Engine)", "ByteDance"),
     # Dreamina (ByteDance's international Jimeng brand) signs C2PA as "Bytedance
     # Pte. Ltd." with a "Dreamina/x.y" claim generator and, unlike the Volcano
@@ -164,8 +163,8 @@ C2PA_AI_VENDORS: tuple[C2paAiVendor, ...] = (
     # active manifest is often a plain c2pa-tool transcode). ``asserts_ai`` lets the
     # issuer alone flag AI without trainedAlgorithmicMedia; "Dreamina" is a
     # distinctive brand string, so it does not risk the incidental-mention problem
-    # the common-word issuers have. Verified on real signed files in the retained
-    # corpus, 2026-07. Normalizes to the same "ByteDance" needle/platform as the
+    # the common-word issuers have. Verified on compatible signed samples.
+    # Normalizes to the same "ByteDance" needle/platform as the
     # volcengine row (they collapse together for clash detection).
     C2paAiVendor(
         b"Dreamina",
@@ -176,18 +175,17 @@ C2PA_AI_VENDORS: tuple[C2paAiVendor, ...] = (
     ),
     # Canva Magic Media signs AI-generated images as "Canva" with a generic
     # c2pa-rs claim generator + trainedAlgorithmicMedia; without this entry the
-    # source read AI but no platform was attributed. Verified on real signed files
-    # in production traffic, 2026-06-19. Canva does not use SynthID.
+    # source read AI but no platform was attributed. Verified on compatible signed
+    # samples. Canva does not use SynthID.
     C2paAiVendor(b"Canva", "Canva", "Canva (Magic Media)", "Canva"),
     # ElevenLabs is a pure generative-AI company (AI voice / audio, and image /
     # video via its API); it signs output as "Eleven Labs Inc.", so the C2PA
-    # manifest alone marks AI generation. Verified against the mined retained
-    # corpus, 2026-06-20. ElevenLabs does not use SynthID.
+    # manifest alone marks AI generation. Verified on compatible signed samples.
+    # ElevenLabs does not use SynthID.
     C2paAiVendor(b"Eleven Labs", "ElevenLabs", "ElevenLabs", "ElevenLabs"),
     # fal.ai (generative inference platform, issuer "fal - Features & Labels
     # Inc." / common name "fal.ai", claim generators like "fal-ai/seedvr",
-    # "fal-ai/gpt-image-2"). Corpus-measured 2026-07-23 on the retained
-    # uploads (17 files): the files carry trainedAlgorithmicMedia, so the
+    # "fal-ai/gpt-image-2"). The files carry trainedAlgorithmicMedia, so the
     # verdict already fired, but the platform stayed unattributed. fal.ai is
     # a pure generative platform, so ``asserts_ai`` also covers its output
     # that omits the source-type.
@@ -195,7 +193,7 @@ C2PA_AI_VENDORS: tuple[C2paAiVendor, ...] = (
     # Bria AI (bria.ai, generative platform) signs as "Bria Artificial
     # Intelligence" with a "Bria Ai" claim generator and source type
     # ``empty`` (NOT trainedAlgorithmicMedia), so a real signed file was
-    # completely missed by identify -- corpus-found 2026-07-23. A pure-AI
+    # completely missed by identify. A pure-AI
     # vendor with distinctive strings, so ``asserts_ai`` is safe here.
     C2paAiVendor(b"Bria", "Bria Artificial Intelligence", "Bria AI", "Bria", asserts_ai=True),
     # Truepic is a C2PA signing authority, not an AI generator: no platform label,
@@ -203,8 +201,7 @@ C2PA_AI_VENDORS: tuple[C2paAiVendor, ...] = (
     C2paAiVendor(b"Truepic", "Truepic", None, None),
 )
 
-# Deliberately NOT registered as AI-generation vendors (mined-corpus candidates
-# evaluated 2026-06-20):
+# Deliberately NOT registered as AI-generation vendors:
 #   - TikTok Inc.: signs C2PA as a content-provenance / AI-labeling authority on
 #     uploads, not as an image generator. The is_ai verdict keys off the
 #     digitalSourceType (trainedAlgorithmicMedia), which is already honored; a
@@ -234,12 +231,11 @@ C2PA_IDENTITY_AI_ORGS: frozenset[str] = frozenset(v.org for v in C2PA_AI_VENDORS
 #     images", updated 2026-05-21): "Images generated with ChatGPT, Codex, and
 #     our API include both C2PA metadata and SynthID watermarks." OpenAI also
 #     notes a signal may be absent if "the image was created before these
-#     signals were available" -- so OpenAI images from BEFORE the rollout carry
-#     C2PA WITHOUT SynthID (e.g. data/samples/openai-images-2/amur-leopard.png,
-#     C2PA timestamp 2026-04-22). For OpenAI the proxy is therefore "likely",
+#     signals were available" -- so OpenAI images from before the rollout can
+#     carry C2PA without SynthID. For OpenAI the proxy is therefore "likely",
 #     not certain; the verdict string is hedged accordingly. OpenAI's own oracle
 #     is openai.com/verify (Google's is the Gemini app "Verify with SynthID").
-# The issuer byte ("OpenAI"/"Google") is verified locally against data/samples;
+# The issuer byte ("OpenAI"/"Google") is verified locally against data/fixtures/provenance;
 # the SynthID pairing is documented behavior (Google: DeepMind; OpenAI: above).
 # Adobe Firefly and Microsoft Designer sign C2PA but do NOT use SynthID, so a
 # C2PA manifest alone is not a SynthID signal -- the issuer is. The pixel
@@ -311,8 +307,7 @@ AI_GENERATOR_TOKENS: frozenset[str] = frozenset(
         "leonardo",
         "flux",
         "dreamstudio",
-        # Mined from the retained corpus 2026-06-22 (no C2PA -- a plain EXIF/PNG
-        # generator stamp was the only signal and we read none of them):
+        # Generator stamps without C2PA:
         #   - NovelAI (anime SD): PNG tEXt Software="NovelAI", Source="NovelAI
         #     Diffusion V4.5 <hash>", Title="NovelAI generated image".
         #   - Reve Image (reve.com): EXIF Software / XMP CreatorTool = "reve.com"
@@ -321,11 +316,11 @@ AI_GENERATOR_TOKENS: frozenset[str] = frozenset(
         "novelai",
         "reve.com",
         "aphrodite ai",
-        # Corpus-mined 2026-07-23:
+        # Additional verified markers:
         #   - Apple Photos Clean Up (Apple Intelligence object removal): XMP
         #     photoshop:Credit / IPTC credit value; composite source-type
-        #     covered detection, this token covers removal parity (35 files).
-        #   - fal-ai: generative-platform generator string (17 files).
+        #     covered detection, this token covers removal parity.
+        #   - fal-ai: generative-platform generator string.
         "apple photos clean up",
         "fal-ai",
     }

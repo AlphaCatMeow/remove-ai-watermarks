@@ -130,8 +130,8 @@ lama = [
 # Lightweight inpaint backend -- MI-GAN via onnxruntime (andraniksargsyan/migan,
 # MIT). CPU, no torch. Model (~28 MB) downloaded on first use and cached by
 # huggingface_hub; never bundled. ~700-950 MB peak RAM / ~0.19 s/call -- the
-# droplet-friendly tier (vs big-LaMa's ~4.7 GB) and the preferred inpaint backend
-# for the visible-mark fallback when installed. Same runtime as `lama`.
+# memory-tight learned tier (vs big-LaMa's ~4.7 GB). Select it explicitly when
+# LaMa, the quality-first `auto` choice, is too large. Same runtime as `lama`.
 migan = [
     "onnxruntime>=1.16.0",
     "huggingface-hub>=0.20.0",
@@ -185,10 +185,8 @@ build-backend = "hatchling.build"
 packages = ["src/remove_ai_watermarks"]
 
 [tool.hatch.build.targets.sdist]
-# Keep the source distribution small: ship the package + metadata, not the
-# committed test corpora / calibration captures under data/ (tens of MB --
-# synthid_corpus images + the visible-mark captures), which pushed the 0.8.0
-# sdist past PyPI's per-project file-size limit (the wheel ships only src/).
+# Keep the source distribution small: ship the package and metadata, not
+# calibration or evaluation data under data/. The wheel ships only src/.
 exclude = ["/data"]
 
 [tool.pytest.ini_options]

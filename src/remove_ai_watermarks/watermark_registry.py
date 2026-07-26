@@ -104,8 +104,8 @@ _PRODUCT_OF: dict[str, str] = {
 # trust, which bypasses the sibling's false-positive gate outright -- so a detector
 # that false-fires often must not be able to hand that bypass to anyone.
 #
-# The pill qualifies on its own documented numbers: ~7% raw false-fire (5.5% measured
-# on 578 vendor negatives, 2026-07-18). Letting it corroborate produced a closed loop
+# The pill detector has a meaningful raw false-fire rate. Letting it corroborate
+# produced a closed loop
 # on the DEFAULT auto path, no user flag involved:
 #   pill false-fires on a clean non-ByteDance image
 #     -> _PRODUCT_OF maps it to "jimeng", so jimeng resolves to `confirmed`
@@ -113,10 +113,9 @@ _PRODUCT_OF: dict[str, str] = {
 #     -> _keep_pill now sees "jimeng" in keys and takes the WORDMARK arm, which
 #        removes the pill unrestricted -- skipping the flatness guard that exists
 #        precisely to stop the fill smearing a textured corner.
-# Measured on the corpus: 3 of 578 negatives ran the full loop, one of them with
-# footprint_flat=0 (the exact case the guard was written to block). Cutting the pill
-# out of corroboration removed all 3 and cost NOTHING on 4417 TC260 carriers
-# (jimeng fires 398 -> 398), so this is a defect fix, not a recall trade.
+# Calibration reproduced the full loop, including a textured footprint. Cutting the
+# pill out of corroboration removed the loop without reducing Jimeng detections, so
+# this is a defect fix, not a recall trade.
 #
 # `_keep_pill` already encodes the same distrust for the pill's own ACTION; this
 # closes the gap that its TESTIMONY was never gated.
@@ -293,11 +292,11 @@ class KnownMark:
 # confidence, shared by BOTH the removal arbitration here (`_gemini_detect`) and
 # the provenance detector in `identify` (which imports it as its sparkle threshold).
 # Defining it once removes the detect-vs-remove
-# threshold drift the retained-corpus mining surfaced (2026-06-20): identify
+# threshold drift found during compatibility testing: identify
 # would report a sparkle while removal declined it, or vice versa, whenever the
 # two independently-maintained 0.5 constants fell out of step. Now they cannot.
 #
-# Value 0.5 is corpus-validated: the gemini engine's own `detected` flag uses a
+# Value 0.5 is calibrated: the Gemini engine's own `detected` flag uses a
 # looser internal threshold (0.35) and weakly fires (~0.36-0.42) on unrelated
 # bottom-right text -- a real Doubao mark scores ~0.40-0.42 as a gemini match,
 # and its core-ring brightness margin is HIGHER than a genuine faint sparkle's,
@@ -451,7 +450,8 @@ def resolve_backend(backend: Backend) -> Literal["cv2", "migan", "lama"]:
 def fill(image: NDArray[Any], mask: NDArray[Any], *, backend: Backend = "auto") -> NDArray[Any]:
     """The ONE shared, mark-agnostic removal: erase ``mask`` (255 = remove) via the
     chosen inpaint backend. Delegates to :func:`region_eraser.erase`; ``auto``
-    resolves to MI-GAN when installed else cv2 (see :func:`resolve_backend`)."""
+    resolves in quality order, LaMa then MI-GAN then cv2 (see
+    :func:`resolve_backend`)."""
     from remove_ai_watermarks import region_eraser
 
     return region_eraser.erase(image, mask=mask, backend=resolve_backend(backend))
@@ -479,8 +479,8 @@ def _gemini_mask(
     return _engine("gemini").footprint_mask(image, force=force, region=region)
 
 
-# The registered text-mark engines share the TextMarkEngine interface, so one
-# parameterized adapter pair drives all of them -- a new
+# The text-mark engines share the TextMarkEngine interface, so one parameterized
+# adapter pair drives all of them -- a new
 # text mark is one `_text_mark(...)` row below, not another copy-paste of these
 # bodies. Detection matches the glyph silhouette; the mask is the template-free
 # glyph-bbox footprint (see TextMarkEngine.footprint_mask).
@@ -505,8 +505,7 @@ def _text_mark_mask(key: str) -> Callable[..., NDArray[Any] | None]:
 
 
 def _text_mark(key: str, label: str, location: str) -> KnownMark:
-    """A text-mark registry row (Doubao/Jimeng/Samsung): glyph-silhouette detect +
-    template-free glyph-bbox mask."""
+    """Build a text-mark registry row from its shared detector and mask adapters."""
     return KnownMark(key, label, location, True, _text_mark_detect(key, label, location), _text_mark_mask(key))
 
 
@@ -611,12 +610,11 @@ def _keep_pill(keys: set[str], *, provenance: frozenset[str], footprint_flat: bo
     """Whether to auto-remove the capture-less 'AI生成' pill given the fired marks.
 
     Pure decision (the flatness feature is precomputed at perception time and passed
-    in). The pill detector is weak (~7% raw false-fire) and metadata/intent confirms
-    the platform, not pill presence, so a naive confirmation-OR gate over-fires: on a
-    32k real-upload corpus (2026-07) the metadata-only arm was only ~27% precise and
-    its false fires were textured ceilings/walls that the fill visibly SMEARS. Arms:
+    in). The pill detector is weak and metadata/intent confirms the platform, not pill
+    presence, so a naive confirmation-OR gate over-fires on textured ceilings and walls
+    that the fill visibly smears. Arms:
       * bottom-right "★ 即梦AI" wordmark fired -> ~94% precise, and it survives
-        metadata-STRIPPED uploads: remove the pill unrestricted;
+        metadata-STRIPPED images: remove the pill unrestricted;
       * TC260 metadata confirms Jimeng (``"jimeng" in provenance``, no wordmark) -> remove ONLY when the
         top-left footprint is flat enough for an invisible fill (``footprint_flat``),
         so real flat-scene pills (and harmless flat false fires) are cleaned while the

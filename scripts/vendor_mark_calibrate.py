@@ -26,7 +26,7 @@ THE TRAPS, INHERITED FROM THE 2026-07-18 MEASUREMENT
       chances to match, which flatters the positives and the negatives alike
 
 DATA SAFETY
-  Corpus images are real user uploads: read-only, local, gitignored output. The template
+  Treat input datasets as sensitive and read-only, and keep output gitignored. The template
   is font-rendered synthetic (`render_vendor_silhouettes.py`), never cut from an upload.
 
     uv run python scripts/vendor_mark_calibrate.py --cohort 91440101MA9Y9T4H7A \\
@@ -47,9 +47,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent))
 
 REPO = Path(__file__).resolve().parents[1]
-COHORTS = REPO / "data" / "spaces" / "_vendor_cohorts.jsonl"
-SHEET_DIR = REPO / "data" / "spaces" / "_vendor_calib_sheets"
-OUT = REPO / "data" / "spaces" / "_vendor_calibration.jsonl"
+COHORTS = REPO / ".local-eval" / "vendor-cohorts.jsonl"
+SHEET_DIR = REPO / ".local-eval" / "vendor-calibration-sheets"
+OUT = REPO / ".local-eval" / "vendor-calibration.jsonl"
 
 
 def build_config(
@@ -103,7 +103,7 @@ def _score(args: ScoreArgs) -> dict[str, Any] | None:
     return {"path": path_str, "score": round(float(score), 4), "box": box}
 
 
-NEGATIVES = REPO / "data" / "spaces" / "_research_20260718_textmark_relaxation" / "groundtruth.jsonl"
+NEGATIVES = REPO / ".local-eval" / "textmark-relaxation" / "groundtruth.jsonl"
 
 
 def load_sets(cohort: str) -> tuple[list[str], list[str]]:
@@ -332,7 +332,7 @@ def fit_geometry(
                 rows.append(r)
 
     strong = [r for r in rows if r["best"] >= floor]
-    fit_out = REPO / "data" / "spaces" / f"_vendor_fit_{paths_name}.jsonl"
+    fit_out = REPO / ".local-eval" / f"vendor-fit-{paths_name}.jsonl"
     fit_out.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
     print(f"\n{'=' * 78}\nGEOMETRY FIT  (n={len(rows)}, usable best>={floor}: {len(strong)})\n{'=' * 78}")
     print(f"rows -> {fit_out}")
@@ -428,11 +428,11 @@ def fit_geometry(
     print("fitted geometry before reading any gate off the clean arm.")
 
 
-FIRED = REPO / "data" / "spaces" / "_visible_positives.jsonl"
+FIRED = REPO / ".local-eval" / "visible-positives.jsonl"
 
 
 def _fired_pool(mark: str, limit: int, seed: int = 7) -> list[str]:
-    """Paths where ``mark`` fired, from the COMPLETED full-corpus artifact -- the
+    """Paths where ``mark`` fired, from a completed local evaluation artifact -- the
     standing rule: detector firings are joined, never re-run."""
     import random
 

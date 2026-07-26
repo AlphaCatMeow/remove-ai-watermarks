@@ -1,5 +1,10 @@
 # ControlNet-as-removal-pipeline research: can structure-conditioned regeneration scrub SynthID and keep text?
 
+> Research archive. This document records experiments, superseded defaults, and
+> deployment considerations from the time of the study. It does not define the
+> current CLI or Python API. See `README.md`, `docs/cli.md`, and
+> `docs/known-limitations.md` for current behavior.
+
 Date: 2026-06-02. Source: a manual primary-source pass (WebSearch + WebFetch over the
 watermark-removal-attack and SDXL-ControlNet literature). Prompted by issue #35
 (@newideas99 / Jacob): "as we use SDXL even at low strength that kills small text ... Do you
@@ -109,11 +114,11 @@ Gemini app; the two payloads are vendor-specific and never cross-checked):
 - **OpenAI 0.20 transfers to prod as-is** (OpenAI removal is resolution-independent:
   the study clears it at 0.05 across 1024-1600).
 - **Gemini 0.30 is the floor at <= 1536 only.** Gemini is resolution-sensitive (study:
-  native 2816 likely needs >= 0.30 even on `default`), and **raiw.cc runs NATIVE**
-  (`max_resolution=0` in `modal_app.py`). So either CAP Gemini to <= 1536 in raiw.cc and
+  native 2816 likely needs >= 0.30 even on `default`). A native-resolution
+  deployment should either cap Gemini to <= 1536 and
   use 0.30, or run a native-resolution Gemini cert and expect a higher floor (~0.35+).
 
-### Recommendations for a removal pipeline (raiw.cc)
+### Recommendations for a removal pipeline
 
 - **Treat controlnet as PRESERVATION, not removal.** Choose it for text/structure content,
   `default` for photoreal; removal efficacy comes from STRENGTH in both.
@@ -205,7 +210,9 @@ on each tile. This mirrors the `_run_region_hires` insight (text needs MORE pixe
 regeneration so strokes exceed the VAE's ~8 px latent floor), but ctrlregen runs the regeneration
 at LOW res, the opposite. CtrlRegen's paper gives no resolution/tiling spec to contradict this.
 
-**Sources.** internal (`src/remove_ai_watermarks/noai/ctrlregen/engine.py`); resolution-omission
+**Sources.** the former internal
+`src/remove_ai_watermarks/noai/ctrlregen/engine.py` (removed after this study);
+resolution-omission
 confirmed against https://arxiv.org/html/2410.05470v1
 
 ### Finding 5 — confidence: high
@@ -287,7 +294,7 @@ ControlNet + activations in **fp32** (MPS fp16 decodes to all-black NaN — issu
 on run 1 below; fp32 is the required default on mps/cpu) — fits the 32 GB budget with vae-tiling +
 attention-slicing; ~1-2 min/image, so a coarse sweep is a sub-hour background run. A dedicated GPU
 is needed ONLY for the separate
-native-large-Gemini (2816 px) case, which OOMs even without a ControlNet (that stays a raiw.cc
+native-large-Gemini (2816 px) case, which OOMs even without a ControlNet (that requires a
 GPU task). The genuine external dependency is NOT compute but the **manual SynthID oracle**:
 there is no local SynthID detector, so removal is verified by hand in the Gemini app
 ("Verify with SynthID") per image, regardless of where the diffusion runs.

@@ -11,7 +11,7 @@ import pytest
 import remove_ai_watermarks as raiw
 from remove_ai_watermarks import api
 
-SAMPLES = Path(__file__).resolve().parents[1] / "data" / "samples"
+SAMPLES = Path(__file__).resolve().parents[1] / "data" / "fixtures" / "provenance"
 DOUBAO = SAMPLES / "doubao-1.png"
 CHATGPT = SAMPLES / "chatgpt-1.png"
 

@@ -75,7 +75,7 @@ CONTROLNET_CANNY_MODEL = "xinsir/controlnet-canny-sdxl-1.0"
 # ladder" below.
 #
 # Data basis (see docs/synthid.md sections 2.2 / 5.5): ORACLE-CERTIFIED controlnet floors.
-# A 2026-06-14 re-test on the deployed Modal worker (the production controlnet pipeline)
+# Oracle re-testing
 # LOWERED the ladder back to OpenAI 0.10 / Google 0.15: each output verified on its own
 # oracle (openai.com/verify for OpenAI, the Google Gemini app for Google), all clean ->
 #   - OpenAI 0.10: 2 photoreal images (1402 / 1448 px), SynthID not found on either.
@@ -98,9 +98,8 @@ CONTROLNET_CANNY_MODEL = "xinsir/controlnet-canny-sdxl-1.0"
 # case (flat fills) `sdxl` is the WEAKER remover -- plain img2img at low strength barely
 # perturbs a flat region -- so it needs AT LEAST as much strength as controlnet, not
 # less. Hence the certified controlnet floor is the right floor for `sdxl` too. The
-# higher strength costs little quality where it matters: `controlnet` is now the default
-# pipeline, so `sdxl` is reached only for structure-less inputs (via `--auto`) or an
-# explicit `--pipeline sdxl`, where over-regeneration has no faces/text to damage. NOTE:
+# higher strength costs little quality where it matters. `controlnet` is now the default
+# pipeline and `sdxl` is reached only through an explicit `--pipeline sdxl`. NOTE:
 # this is a MARGIN argument for `sdxl`, not a fresh certification -- there is no local
 # SynthID detector, so if an oracle still reads SynthID on a flat `sdxl` output, raise
 # `--strength`.

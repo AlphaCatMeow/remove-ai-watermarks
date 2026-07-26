@@ -8,8 +8,8 @@ Aggregates every locally-readable signal into a single :class:`ProvenanceReport`
 - **PNG text / EXIF generation parameters** (Stable Diffusion, ComfyUI, InvokeAI).
 - **SynthID metadata proxy** -- a C2PA companion from a SynthID-using vendor
   (Google / OpenAI) implies the invisible pixel watermark.
-- **Visible marks** (optional; needs cv2/numpy, no GPU): the Gemini sparkle and
-  the ByteDance Doubao 豆包AI生成 / Jimeng 即梦AI text marks.
+- **Registered visible marks** (optional; needs cv2/numpy, no GPU) through the
+  shared watermark registry.
 
 Hard limit: a stripped image (re-encoded, screenshotted, social-media upload)
 loses all metadata, and the SynthID *pixel* watermark is not locally decodable
@@ -65,9 +65,8 @@ _SCAN_BYTES = 1024 * 1024
 # Visible-sparkle confidence above which the signal is trusted as provenance.
 # Shared with the removal arbitration (watermark_registry.GEMINI_SPARKLE_TRUST_CONF)
 # so the provenance "is there a sparkle" verdict and the removal "take the sparkle"
-# decision can never drift apart -- the detect-vs-remove desync the retained-corpus
-# mining surfaced (2026-06-20). On the corpus Gemini-family sparkles score >= 0.56
-# while non-sparkle images top out at 0.49, so 0.5 cleanly separates them and avoids
+# decision can never drift apart. Calibration showed that 0.5 separates Gemini-family
+# sparkles from non-sparkle images and avoids
 # false positives when the sparkle is the only signal (e.g. an OpenAI image scored
 # 0.37 -- below threshold, correctly dropped).
 _SPARKLE_THRESHOLD = GEMINI_SPARKLE_TRUST_CONF
@@ -463,7 +462,7 @@ def _visible_text_marks(image_path: Path, *, image: NDArray[Any] | None = None) 
     """Detected visible text marks (registry ``MarkDetection`` list).
 
     The Gemini sparkle keeps its own ``_visible_sparkle`` path (file-level
-    confidence); these two text marks reuse the registry detectors, which apply
+    confidence); the text marks reuse the registry detectors, which apply
     each engine's calibrated NCC threshold via ``MarkDetection.detected``.
     Optional: needs cv2/numpy; returns ``[]`` if the engines/assets are missing
     or the image can't be read. ``image`` is a pre-decoded BGR array shared
@@ -555,9 +554,8 @@ def identify(image_path: Path, *, check_visible: bool = True, check_invisible: b
 
     Args:
         image_path: Path to the image (PNG, JPEG, WebP, or ISOBMFF container).
-        check_visible: Also run the visible-mark detectors (cv2) -- the Gemini
-            sparkle and vendor text marks from the registry. Set
-            False for a pure-metadata, dependency-light scan.
+        check_visible: Also run the registered visible-mark detectors through cv2.
+            Set False for a pure-metadata, dependency-light scan.
         check_invisible: Also decode open invisible watermarks (SD/SDXL/FLUX) via
             the optional imwatermark library. No-op when it is not installed.
 
@@ -679,8 +677,8 @@ def identify(image_path: Path, *, check_visible: bool = True, check_invisible: b
         if platform is None:
             # Apple Photos Clean Up (Apple Intelligence object removal) marks
             # the edit with photoshop:Credit / IPTC "Apple Photos Clean Up"
-            # next to compositeWithTrainedAlgorithmicMedia -- corpus-measured
-            # 2026-07-23 (35 files); it was detected but never attributed.
+            # next to compositeWithTrainedAlgorithmicMedia. It was detected but
+            # previously never attributed.
             platform = (
                 "Apple Photos (Clean Up AI edit)"
                 if b"Apple Photos Clean Up" in head

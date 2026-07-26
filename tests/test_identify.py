@@ -1,7 +1,7 @@
 """Tests for the provenance identifier (identify.py).
 
 Pure attribution logic is unit-tested directly; end-to-end verdicts assert
-against the real committed C2PA / IPTC fixtures in data/samples/.
+against the real committed C2PA / IPTC fixtures in data/fixtures/provenance/.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from remove_ai_watermarks.watermark_registry import GEMINI_SPARKLE_TRUST_CONF
 # Where the lazy import inside identify._visible_sparkle resolves the detector.
 _SPARKLE_TARGET = "remove_ai_watermarks.gemini_engine.detect_sparkle_confidence"
 
-SAMPLES_DIR = Path(__file__).resolve().parent.parent / "data" / "samples"
+SAMPLES_DIR = Path(__file__).resolve().parent.parent / "data" / "fixtures" / "provenance"
 
 
 # ── Pure attribution logic (no file IO) ─────────────────────────────
@@ -173,7 +173,7 @@ class TestIdentifyNonPng:
 
     def test_fal_ai_attributed(self, tmp_path: Path):
         # fal.ai signs as "fal - Features & Labels Inc." with a "fal-ai/<model>"
-        # claim generator; corpus-measured 2026-07-23 (17 files).
+        # claim generator.
         path = self._c2pa_jpeg(tmp_path, b"fal - Features & Labels Inc. fal-ai/seedvr trainedAlgorithmicMedia")
         r = identify(path, check_visible=False, check_invisible=False)
         assert r.is_ai_generated is True
@@ -182,7 +182,7 @@ class TestIdentifyNonPng:
     def test_bria_attributed_without_source_type(self, tmp_path: Path):
         # Bria signs as "Bria Artificial Intelligence" with source type ``empty``
         # (NO trainedAlgorithmicMedia) -- a pure-generator asserts_ai vendor, so
-        # the issuer/generator strings alone must flag AI. Corpus-found 2026-07-23.
+        # the issuer/generator strings alone must flag AI.
         path = self._c2pa_jpeg(tmp_path, b"Bria Artificial Intelligence Bria Ai c2pa.created c2pa.edited")
         r = identify(path, check_visible=False, check_invisible=False)
         assert r.is_ai_generated is True
@@ -279,7 +279,7 @@ class TestIdentifySamsungGalaxy:
 # ── End-to-end verdicts on real fixtures ────────────────────────────
 
 
-@pytest.mark.skipif(not SAMPLES_DIR.exists(), reason="data/samples not present")
+@pytest.mark.skipif(not SAMPLES_DIR.exists(), reason="data/fixtures/provenance not present")
 class TestIdentifyRealSamples:
     def test_openai_chatgpt(self):
         r = identify(SAMPLES_DIR / "chatgpt-1.png", check_visible=False)
@@ -306,7 +306,7 @@ class TestIdentifyRealSamples:
         # Apple Photos Clean Up (Apple Intelligence object removal) marks the
         # AI edit via photoshop:Credit next to compositeWithTrainedAlgorithmicMedia
         # -- it must be attributed, not reported as a generic made-with-AI tag.
-        # Corpus-measured 2026-07-23 (35 files).
+        # This attribution must survive metadata consolidation.
         p = tmp_path / "apple_cleanup.jpg"
         p.write_bytes(
             b'\xff\xd8\xff\xe1<x:xmpmeta photoshop:Credit="Apple Photos Clean Up" '
@@ -491,7 +491,7 @@ class TestIdentifyHuggingFaceJob:
 
 
 class TestIdentifyVisibleSparkle:
-    """The visible-sparkle signal gates on the corpus-tuned threshold (0.5)."""
+    """The visible-sparkle signal gates on the calibrated threshold (0.5)."""
 
     def test_above_threshold_promotes_to_medium(self, tmp_clean_png: Path):
         with patch(_SPARKLE_TARGET, return_value=0.7):
@@ -537,7 +537,7 @@ _DEMO_AFTER = REPO_ROOT / "demo_banana_after.png"
 @pytest.mark.skipif(not (_DEMO_BEFORE.exists() and _DEMO_AFTER.exists()), reason="demo banana pair not present")
 class TestSparkleDetectRemoveAlignment:
     """Detect (identify) and remove (registry.detect_marks) must agree on the
-    same image -- the retained-corpus desync where identify reported a sparkle the
+    same image. A prior desync let identify report a sparkle that
     removal arbitration declined (or vice versa). Both gate on the single shared
     GEMINI_SPARKLE_TRUST_CONF, so a sparkle just over the line is taken by BOTH
     and one just under is declined by BOTH. Fixtures composite the real captured
@@ -666,7 +666,7 @@ class TestIdentifyVisibleTextMarks:
 # ── Caveats and serialization ───────────────────────────────────────
 
 
-@pytest.mark.skipif(not SAMPLES_DIR.exists(), reason="data/samples not present")
+@pytest.mark.skipif(not SAMPLES_DIR.exists(), reason="data/fixtures/provenance not present")
 class TestIdentifyCaveats:
     def test_openai_hedge_caveat_present(self):
         r = identify(SAMPLES_DIR / "chatgpt-1.png", check_visible=False)
@@ -1126,7 +1126,7 @@ class TestIntegrityClashEndToEnd:
         assert payload["integrity_clashes"] == r.integrity_clashes
 
 
-@pytest.mark.skipif(not SAMPLES_DIR.exists(), reason="data/samples not present")
+@pytest.mark.skipif(not SAMPLES_DIR.exists(), reason="data/fixtures/provenance not present")
 @pytest.mark.parametrize("fixture", ["chatgpt-1.png", "firefly-1.png", "doubao-1.png", "grok-1.jpg", "mj-1.png"])
 class TestRealSamplesHaveNoClash:
     """Every real single-origin fixture must report zero clashes (false-positive guard)."""

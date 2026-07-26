@@ -6,8 +6,8 @@ blind against contact sheets with a two-sided control in every round. Rounds so 
   2026-07-18 text-mark/pill round : 423 cells (doubao / jimeng / jimeng_pill arms)
   2026-07-18 gemini round         : 356 cells (gemini relaxation additions)
 
-DATA SAFETY: the corpus is real user uploads. This script reads the gitignored
-corpus and writes a gitignored ground-truth file. Neither the images nor this
+DATA SAFETY: treat the input dataset as sensitive. This script reads a gitignored
+dataset and writes a gitignored ground-truth file. Neither the images nor this
 output may be committed; only the harness is. See the repo CLAUDE.md.
 
 The labels record what the LABELLER SAW in the crop, one of:
@@ -77,7 +77,7 @@ def metadata_provenance(path: str) -> list[str]:
 
 
 def main() -> None:
-    root = Path(sys.argv[1] if len(sys.argv) > 1 else "data/spaces/_research_20260718_textmark_relaxation")
+    root = Path(sys.argv[1] if len(sys.argv) > 1 else ".local-eval/textmark-relaxation")
     out = root / "groundtruth.jsonl"
     rows: dict[str, dict] = {}
     stats: dict[str, int] = {}

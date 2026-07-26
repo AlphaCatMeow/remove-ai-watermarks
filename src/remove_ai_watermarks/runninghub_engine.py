@@ -135,15 +135,8 @@ class RunningHubEngine(TextMarkEngine):
     def __init__(self) -> None:
         super().__init__(_CONFIG)
 
-    # Anchor window for the match position, as a fraction of the FRAME: the true
-    # mark hugs the corner (measured x 0.008-0.014, y 0.005-0.007 of the frame on
-    # every cohort positive), while the full-corpus false fires (hair, shelves,
-    # window frames, CJK banners -- 37 of 42009 outside-cohort frames at the 0.34
-    # gate, 2026-07-22 sweep) match off-anchor at x 0.013-0.150 / y 0.009-0.045.
-    # No NCC gate separates them (false max 0.384 vs two positives at 0.381), but
-    # position does: every false fire sits outside this window, every positive
-    # inside. Contrast-dependent raw-gray NCC keys on "some text-like structure
-    # anywhere in the box"; the anchor is what makes it about THIS mark.
+    # Anchor window for the match position, as a fraction of the frame. The true
+    # mark hugs the corner, while common false matches sit farther from the anchor.
     _ANCHOR_MAX_X = 0.025
     _ANCHOR_MAX_Y = 0.015
 

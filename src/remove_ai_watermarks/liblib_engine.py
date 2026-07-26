@@ -11,19 +11,9 @@ This module supplies only LibLibAI's tuned :class:`TextMarkConfig`
 (``assets/liblib_alpha.png`` from ``scripts/render_vendor_silhouettes.py``,
 never cut from an upload).
 
-Measured on the vendor cohort (15 TC260 carriers, harvested 2026-07-22 by
-``scripts/vendor_cohort_harvest.py``), NOT inherited from Doubao:
-
-  * The wordmark is ~0.10 of the frame WIDTH wide, centered horizontally, its
-    baseline ~0.94-0.95 of the height; consistent across 768..2240-px frames.
-  * The silhouette font is Arial, NOT the STHeiti the CJK marks use: the real
-    wordmark is a grotesque, and measured across 7 candidate fonts Arial lifts
-    the cohort positives from 0.31-0.47 to 0.42-0.73 while the full-corpus
-    false arm (latin UI text) drops to max 0.398. A 200x200 icon false-fired
-    at 0.444, so a per-mark size floor (``_MIN_SHORT_SIDE``) backs the gate.
-  * Gate 0.42 (tophat front-end): false arm max 0.398, cohort 0.43-0.59.
-  * STRICT ONLY (``provenance_ncc_factor`` 1.0): small cohort, the relaxed band
-    is unmeasured.
+The detector uses an Arial-class synthetic silhouette, width-based geometry, a
+strict confidence gate, and a minimum image size. The footprint includes both
+the logo and wordmark.
 """
 # The module-level _alpha_template / _glyph_silhouette / _template_match_score below
 # are thin test-facing shims (imported by tests/), so pyright's src-only pass sees them
@@ -57,13 +47,8 @@ LOGO_MIN_LUMA = 150
 TOPHAT_DELTA = 12
 
 DETECT_MIN_COVERAGE = 0.04  # unused by the tophat front-end (kept for config parity)
-# Calibrated 2026-07-22 on the vendor cohort vs 286 hand-labelled clean frames
-# (clean p99 0.315 / max 0.367) and re-measured after the font fix: the wordmark
-# is set in an Arial-class grotesque, and the Arial silhouette lifts the cohort
-# positives to 0.43-0.59 while the full-corpus false arm (latin UI text bands,
-# website screenshots) drops to max 0.398 -- generic latin text matches the
-# wrong font less, which is exactly where the discrimination comes from. Gate
-# 0.42 keeps all 8 marked cohort frames with a 0.022 margin over the false arm.
+# Calibrated against vendor and clean compatibility examples. The Arial-class
+# silhouette separates the wordmark from generic Latin UI text.
 DETECT_NCC_THRESHOLD = 0.42
 
 # Detection-silhouette geometry (fraction of the frame width): the wordmark,
@@ -120,11 +105,7 @@ def _template_match_score(box_mask: NDArray[Any], scale_base: int) -> float:
 class LibLibEngine(TextMarkEngine):
     """Detect/localize the visible LibLibAI wordmark (bottom-center; localize -> fill)."""
 
-    # Per-mark size floor: the wordmark template is 0.10 of the frame width, so
-    # below ~480px short side it degrades under ~48px -- the one full-corpus
-    # false fire with the final Arial template was a 200x200 icon (0.444, above
-    # the gate, on a 20px template; measured 2026-07-22). The smallest true
-    # carrier in the cohort is 768px.
+    # Per-mark size floor prevents small generic icons from matching the wordmark.
     _MIN_SHORT_SIDE = 480
 
     def __init__(self) -> None:

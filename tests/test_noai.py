@@ -152,10 +152,10 @@ class TestC2PA:
         assert not has_c2pa_metadata(tmp_jpeg_path)
 
 
-SAMPLES_DIR = Path(__file__).resolve().parent.parent / "data" / "samples"
+SAMPLES_DIR = Path(__file__).resolve().parent.parent / "data" / "fixtures" / "provenance"
 
 
-@pytest.mark.skipif(not SAMPLES_DIR.exists(), reason="data/samples not present")
+@pytest.mark.skipif(not SAMPLES_DIR.exists(), reason="data/fixtures/provenance not present")
 class TestC2PARealSamples:
     """Parser behavior on real committed C2PA images."""
 

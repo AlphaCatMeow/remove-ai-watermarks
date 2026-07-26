@@ -312,7 +312,7 @@ def cmd_train(pattern: str, model_path: str, schema: FeatureSchema = "v2") -> No
     from sklearn.metrics import average_precision_score, roc_auc_score
 
     # keep the feature vector, not the record: a parsed scan record is an order of
-    # magnitude larger than the row it collapses to, and the corpus is ~5-digit.
+    # magnitude larger than the row it collapses to.
     labeled: dict[str, tuple[list[float], int, str]] = {}
     missing_hash_index = 0
     for r in iter_records(pattern):

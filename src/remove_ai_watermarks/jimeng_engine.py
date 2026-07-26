@@ -6,13 +6,13 @@ class as the Doubao text strip.
 
 Detection matches the bundled glyph silhouette against the corner; removal is the
 shared **localize -> fill** (the glyph-bbox :meth:`footprint_mask` feeds
-``region_eraser``), NOT reverse-alpha. This is one of the registered text-mark engines that
-share :class:`remove_ai_watermarks._text_mark_engine.TextMarkEngine`; this module
+``region_eraser``), NOT reverse-alpha. This module shares
+:class:`remove_ai_watermarks._text_mark_engine.TextMarkEngine` and
 supplies only Jimeng's tuned :class:`TextMarkConfig` (bottom-right corner,
 ``assets/jimeng_alpha.png`` -- the detection silhouette, rebuilt by
 ``scripts/visible_alpha_solve.py`` from the gray capture). Jimeng images are also caught
-by the China TC260 AIGC metadata label, so this is the visible-mark *removal* path, not
-a new ``identify`` signal.
+by the China TC260 AIGC metadata label. The visual detector also feeds
+``identify`` when metadata is absent.
 """
 # The module-level _alpha_template / _glyph_silhouette / _template_match_score below
 # are thin test-facing shims (imported by tests/), so pyright's src-only pass sees them
@@ -44,9 +44,8 @@ TOPHAT_DELTA = 12
 # (>=0.81) from the Doubao strip (0.21), so the two ByteDance marks do not cross-fire.
 #
 # That separation holds at the STRICT threshold ONLY. Relaxed under provenance it
-# collapses: at the old shared 0.7 factor (gate 0.315) the arm ran at 17% precision
-# and 33 of its 68 false additions were Doubao marks (corpus-measured 2026-07-18 --
-# full table at _DEFAULT_PROVENANCE_NCC_FACTOR). That was patched with a tighter 0.85
+# collapses: at the old shared 0.7 factor, many false additions were Doubao marks.
+# That was patched with a tighter 0.85
 # factor at the time; the competitive rival margin replaced it -- see below.
 DETECT_MIN_COVERAGE = 0.02
 DETECT_NCC_THRESHOLD = 0.45

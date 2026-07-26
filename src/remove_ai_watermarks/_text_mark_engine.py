@@ -1,22 +1,13 @@
-"""Shared base for the visible text-mark detectors/localizers (localize -> fill).
+"""Shared base for visible text-mark detectors and localizers.
 
-The Doubao "豆包AI生成", Jimeng "★ 即梦AI", and Samsung "✦ Contenuti generati
-dall'AI" marks are the SAME algorithm: anchor a bottom-corner box by geometry
-relative to the image's SHORT side, extract the light low-saturation glyph candidate (white top-hat), detect
-by matching the bundled alpha-glyph silhouette via ``TM_CCOEFF_NORMED``, and build a
-removal MASK from the glyph blob's bounding box (:meth:`footprint_mask`) for the
-shared fill (region_eraser). The mask is template-FREE -- the top-hat glyph bbox, not
-a fixed alpha-template placement -- so a re-rendered or differently-placed mark (e.g.
-a non-Italian Samsung string) is still masked. The old reverse-alpha pixel recovery
-(``original = (wm - a*logo)/(1-a)``) is gone.
+Each mark supplies a :class:`TextMarkConfig` with its silhouette, expected area,
+scale ladder, detector frontend, and calibrated gates. The shared engine locates the
+candidate, scores the silhouette with normalized correlation, and builds a removal
+footprint for the common fill backend. Individual engines may override detection or
+footprint behavior when their measured variant requires it.
 
-They differ ONLY in a bounded set of tuned values captured by :class:`TextMarkConfig`:
-the constants, the bundled silhouette asset, the corner (Doubao/Jimeng bottom-right,
-Samsung bottom-left), and a few structural knobs. Each engine module is a thin
-:class:`TextMarkEngine` subclass plus the test-facing module constants/helpers.
-
-Gemini stays a SEPARATE engine (``gemini_engine``): its multi-size sparkle model is
-genuinely different, not a tuned variant of this one.
+The removal path never performs reverse-alpha pixel recovery. Gemini and the Jimeng
+pill remain separate engines because their geometry and gating differ from text marks.
 """
 
 # cv2/numpy boundary: third-party libs ship no usable element types; relax the
@@ -61,7 +52,7 @@ _MIN_DETECT_SHORT_SIDE = 200
 # This used to be ONE shared 0.7 for every text mark. Measured 2026-07-18 on the
 # `auto` path (the default -- no flag, driven by TC260 metadata), it turned out to
 # mean two completely different things per mark. Blind hand-label of the ADDITIONS
-# (accepted with provenance, rejected without) over 4417 unique TC260 carriers,
+# (accepted with provenance, rejected without) over a labelled TC260 evaluation set,
 # two-sided control (labeller sensitivity 100%/96%, specificity 100%/100%):
 #
 #   mark     band            precision   95% CI     n
@@ -182,9 +173,9 @@ class TextMarkDetection:
     coverage: float = 0.0  # fraction of the box occupied by glyph pixels
 
 
-# Alpha / silhouette templates, cached per asset name (the originals cached per
-# module global; this keys by asset so the three engines share the loader without
-# re-reading). Only SUCCESSFUL loads are cached, so a missing asset is retried.
+# Alpha / silhouette templates, cached per asset name. This shared cache lets every
+# text-mark engine reuse the loader without re-reading an asset. Only SUCCESSFUL loads
+# are cached, so a missing asset is retried.
 _alpha_cache: dict[str, NDArray[Any]] = {}
 _silhouette_cache: dict[str, NDArray[Any]] = {}
 
@@ -289,21 +280,18 @@ class TextMarkEngine:
         Two marks sharing a corner and a script (Doubao "豆包AI生成" and Jimeng
         "★ 即梦AI", both bottom-right, both near-white CJK) survive binarization into
         very similar blobs, so an absolute gate cannot separate them -- and under the
-        provenance relaxation it stopped trying: 33 of jimeng's 68 false additions
-        were Doubao marks (corpus-measured 2026-07-18).
+        provenance relaxation it stopped trying because many Jimeng false additions
+        were actually Doubao marks.
 
         Measured separability on hand-labelled examples, scoring BOTH templates
-        against the same glyph blob (n=40 jimeng / 75 doubao / 20 other-vendor labels
-        / 89 clean):
+        against the same glyph blob:
 
             feature                       separability   (0.5 = useless, 1.0 = perfect)
             absolute ncc_jimeng                   0.96
             ncc_jimeng MINUS ncc_doubao           0.99
 
-        At a 0.10 margin: real Jimeng wordmarks pass 100%, Doubao strips 8%, other
-        vendors' AI labels (千问/百度/星绘/抖音) 55%, no-mark corners 12%. Because the
-        real marks pass at 100%, this costs NO recall -- it is a pure precision gain,
-        unlike raising the threshold, which trades recall away.
+        A 0.10 margin separated Jimeng wordmarks from the rival and clean examples
+        without reducing recall, unlike raising the absolute threshold.
 
         Marks with no same-corner rival declare `rivals=()` and are unaffected.
         """
@@ -327,8 +315,7 @@ class TextMarkEngine:
         thin translucent overlay shatters into specks under the threshold, and no
         template can match a blob that is not there.
 
-        Measured 2026-07-18 on hand-verified corpus positives (40 doubao, 14 千问, 60
-        verified-clean), scoring each mark with its own template:
+        Calibration on hand-verified examples, scoring each mark with its own template:
 
             front-end   doubao   clean neg   AUC doubao/neg
             binary       0.723       ~0.12             --
@@ -484,19 +471,15 @@ class TextMarkEngine:
         were all calibrated on PORTRAIT captures, where width and short side coincide,
         so the basis was never exercised until landscape inputs were measured.
 
-        Corpus-measured 2026-07-18 (2572 unique TC260 carriers; the harness is
-        `scripts/visible_eval.py`). Before any fix, doubao detection by aspect ratio:
-        portrait 60%, square 41%, **landscape 0% (0 of 435)** -- the width-scaled box
-        is inflated by the aspect ratio on a wide image and the glyph never lands in
-        it. Re-running the previously-undetected set with a short-side basis recovered
-        **56% of landscape** images (12% square, 4% portrait).
+        Detector calibration showed that a width-scaled box is inflated by the aspect
+        ratio on a wide image and can miss the glyph entirely. A short-side basis
+        recovered the affected Doubao landscape cases.
 
-        But the same switch took JIMENG's labelled landscape positives from 13/13 to
-        0/13: its wordmark tracks the WIDTH. Both marks are ByteDance and share a
+        The same switch broke Jimeng landscape positives because its wordmark tracks
+        the WIDTH. Both marks are ByteDance and share a
         corner, and they still scale differently -- so this is a per-mark measurement,
-        not a house rule to generalize. Samsung keeps ``width`` because there is no
-        corpus evidence either way (1 addition corpus-wide) and an unmeasured change
-        is not an improvement.
+        not a house rule to generalize. Samsung keeps ``width`` because it has not been
+        calibrated for a different basis, and an unmeasured change is not an improvement.
 
         China's GB 45438-2025 clause 5.2(e) mandates glyph height >= 5% of "the
         shortest side" for CN marks, which is why a short-side basis is the natural
@@ -708,8 +691,7 @@ class TextMarkEngine:
         elif self.config.detect_frontend == "tophat" and self.detect(image).detected:
             # A mark found only by the CONTINUOUS front-end has no binary glyph blob to
             # bound, so the mask came back empty and removal was a silent no-op while
-            # `identify` still reported the mark (corpus-measured 2026-07-20: 57 of 60
-            # sampled still-detected Doubao marks were untouched, ~8% of its detections).
+            # `identify` still reported the mark while removal left it untouched.
             # Use the DETECTOR'S OWN best-match box: the correlation already located the
             # mark at a position and scale, and thresholding the response was a strictly
             # worse proxy for that. An earlier fix thresholded the max-normalized uint8

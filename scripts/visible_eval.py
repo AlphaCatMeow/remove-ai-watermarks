@@ -39,8 +39,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from remove_ai_watermarks import watermark_registry as wr
 from remove_ai_watermarks.image_io import imread
 
-GT = Path("data/spaces/_research_20260718_textmark_relaxation/groundtruth.jsonl")
-SNAP = Path("data/spaces/_research_20260718_textmark_relaxation/snapshots")
+GT = Path(".local-eval/textmark-relaxation/groundtruth.jsonl")
+SNAP = Path(".local-eval/textmark-relaxation/snapshots")
 MARKS = ("gemini", "doubao", "jimeng", "samsung", "jimeng_pill")
 
 

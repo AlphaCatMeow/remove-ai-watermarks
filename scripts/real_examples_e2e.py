@@ -1,9 +1,9 @@
-"""End-to-end confidence run: drive the ACTUAL CLI over REAL corpus examples.
+"""End-to-end confidence run over local evaluation examples.
 
 WHY THIS EXISTS AND WHAT IT IS NOT
   The 849-test suite and `smoke_matrix.py` prove the code paths behave on fixtures and
   synthetic inputs. This is the other half: run the real `remove-ai-watermarks` entry point,
-  as a user would, over real corpus images spanning every command and every provenance
+  as a user would, over local evaluation images spanning every command and provenance
   class, and CHECK THE OUTPUT -- not that it exited 0, but that it did the right thing (the
   mark is actually gone on re-detect, the metadata actually strips, the diffusion actually
   writes a changed image). A green exit is not evidence the work happened.
@@ -22,7 +22,7 @@ WHAT IT COVERS
   cv2/numpy and fast.
 
 DATA SAFETY
-  Corpus images are user uploads: read-only, local analysis, outputs to a gitignored temp
+  Treat input datasets as sensitive and read-only. Output stays in a gitignored temp
   dir. Records example uids and pass/fail, never image content.
 
     uv run python scripts/real_examples_e2e.py                 # fast surface (no diffusion)
@@ -44,9 +44,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 REPO = Path(__file__).resolve().parents[1]
-CORPUS = REPO / "data" / "spaces" / "originals"
-DATASETS = REPO / "data" / "spaces" / "_visible_datasets"
-SAMPLES = REPO / "data" / "samples"
+CORPUS = REPO / ".local-eval" / "originals"
+DATASETS = REPO / ".local-eval" / "visible-datasets"
+SAMPLES = REPO / "data" / "fixtures" / "provenance"
 _UV = shutil.which("uv") or "uv"  # full path avoids the partial-executable lint
 
 
@@ -64,7 +64,7 @@ def run(args: list[str], timeout: int = 300) -> tuple[int, str]:
 
 
 def find_visible_positive(mark: str) -> Path | None:
-    """A real corpus image the parity run bucketed as carrying this mark, that the current
+    """A local evaluation image bucketed as carrying this mark, which the current
     detector STILL fires on (the bucket was built by an older run; re-confirm live)."""
     from remove_ai_watermarks.image_io import imread
     from remove_ai_watermarks.watermark_registry import detect_marks
@@ -111,7 +111,7 @@ class Results:
                     for line in out.strip().splitlines()[-12:]:
                         print(f"        {line}")
         if not bad:
-            print("  every command produced the right result on real corpus examples")
+            print("  every command produced the right result on local evaluation examples")
         return 1 if bad else 0
 
 

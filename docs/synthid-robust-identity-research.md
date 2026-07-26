@@ -1,5 +1,10 @@
 # SynthID-robust face identity for an SDXL removal pipeline (research)
 
+> Research archive. This document evaluates approaches considered during the
+> study. It does not describe the current public interface. The current
+> pipelines and limits are documented in `docs/cli.md` and
+> `docs/known-limitations.md`.
+
 > **Status (2026-06-08): retired.** Every approach described below was empirically
 > tested and rejected -- see `docs/synthid-robust-identity-research-2026-06-08.md`
 > "Empirical follow-up" for the final conclusion. The library no longer ships any
@@ -12,7 +17,7 @@ canny-ControlNet watermark-removal pipeline (denoise 0.20-0.30) is BOTH (a)
 commercial-safe end-to-end and (b) does not re-introduce the SynthID pixel
 watermark the removal pass just destroyed?
 
-**Constraint.** raiw.cc is a paid service, so every component (adapter weights AND
+**Constraint.** A paid deployment requires every component (adapter weights AND
 the face embedder it conditions on AND any base model) must be Apache-2.0 / MIT /
 BSD or otherwise clearly commercial-permitted. Non-commercial is disqualifying.
 
@@ -61,7 +66,7 @@ extra). V2 uses a DUAL ID encoder (CLIP image features + ArcFace embedding),
 which delivers true identity-from-embedding face regeneration. The cost is that
 the ArcFace embedding comes from InsightFace's `antelopev2`/`buffalo_l` model
 packs, which are released under a non-commercial / research-only license. **So
-the shipped restore path is NON-COMMERCIAL.** raiw.cc and any other monetized
+the shipped restore path is NON-COMMERCIAL.** Any monetized
 deployment must NOT install the `photomaker` extra. The CLI flag and module
 docstring both call this out at every entry point.
 
@@ -213,9 +218,9 @@ from the test set + this doc).
   - canny ControlNet conditioning can fight the ID embedding (edges of the
     ORIGINAL face vs identity of the SAME person regenerated) -- expect to tune
     `controlnet_conditioning_scale` down a notch on photoreal faces;
-  - PhotoMaker was trained on a celebrity-skew distribution; real-user faces
+  - PhotoMaker was trained on a celebrity-skew distribution; representative faces
     (especially non-white, non-Western, elderly, children) may have lower
-    fidelity. Measure on the real upload distribution.
+    fidelity. Measure on a representative evaluation distribution.
 
 ## 6. Integration cost (rough)
 
@@ -253,7 +258,7 @@ from the test set + this doc).
    per-vendor oracles. Expected: SynthID cleared (the regeneration is the same)
    AND identity recovered (the embedding adds it back).
 4. **Honest exit criteria.** Ship only if BOTH oracle reads clean AND a small
-   user-perception test on real uploads says "looks like me". If identity is
+   user-perception test on representative inputs says "looks like me". If identity is
    still too soft on small faces -> add stacked-reference (multiple crops of the
    same upload at different scales) before reaching for a non-commercial
    embedder.

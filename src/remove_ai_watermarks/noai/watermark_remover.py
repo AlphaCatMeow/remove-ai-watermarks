@@ -85,8 +85,8 @@ def is_watermark_removal_available() -> bool:
 
 
 # Drop-in fp16-safe replacement for the SDXL VAE. The stock SDXL VAE overflows
-# to NaN in fp16 and decodes to an all-black image (issue #29: the raiw.cc black
-# result on a CUDA fp16 backend). This community VAE is numerically rescaled to
+# to NaN in fp16 and decodes to an all-black image (issue #29, reproduced on a
+# CUDA fp16 backend). This community VAE is numerically rescaled to
 # stay in fp16 range. SDXL-architecture only.
 _SDXL_FP16_VAE_ID = "madebyollin/sdxl-vae-fp16-fix"
 
@@ -692,9 +692,10 @@ class WatermarkRemover:
                 strips the metadata; the caller passes it down so display and execution
                 agree.
             tile: Process the image in overlapping tiles instead of one forward pass.
-                The lossless alternative to a ``--max-resolution`` downscale for large
-                inputs that OOM on MPS/GPU (issue #10). Only engages when the long side
-                exceeds ``tile_size``; smaller images run a single pass unchanged.
+                This keeps the input's native dimensions instead of applying a
+                ``--max-resolution`` downscale, but every tile is still regenerated.
+                Only engages when the long side exceeds ``tile_size``; smaller images
+                run a single pass unchanged.
             tile_size: Tile dimension in px (default 1024).
             tile_overlap: Overlap between adjacent tiles in px (default 128), feather-
                 blended so there is no visible seam.

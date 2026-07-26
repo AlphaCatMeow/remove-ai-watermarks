@@ -65,13 +65,11 @@ class TestConfig:
         assert LibLibEngine().config.provenance_ncc_factor == 1.0
 
     def test_gate_above_clean_arm_max(self):
-        # With the Arial silhouette the full-corpus false arm (latin UI text)
-        # tops out at 0.398 while the cohort sits at 0.43-0.59; gate 0.42.
+        # The Arial silhouette separates the wordmark from generic Latin UI text.
         assert LibLibEngine().config.detect_ncc_threshold >= 0.42
 
     def test_small_image_size_floor(self):
-        # The one full-corpus false fire with the final template was a 200x200
-        # icon on a 20px template; the engine refuses small images outright.
+        # Small generic icons can resemble the wordmark, so the engine rejects them.
         eng = LibLibEngine()
         assert not eng.detect(np.full((200, 200, 3), 100, np.uint8)).detected
         wm, _ = _compose(200, 200)

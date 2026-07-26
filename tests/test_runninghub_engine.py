@@ -112,7 +112,7 @@ class TestDetectAndMask:
 
     def test_anchor_window_rejects_off_corner_match(self):
         """The raw-gray front-end false-fires on text-like structure ANYWHERE in
-        the box (37/42009 outside-cohort frames in the 2026-07-22 sweep); the
+        the box during compatibility testing; the
         anchor window is what keeps it about THIS mark. A composed mark placed
         off the measured corner anchor must NOT be detected."""
         eng = RunningHubEngine()

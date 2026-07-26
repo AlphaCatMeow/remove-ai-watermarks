@@ -75,17 +75,13 @@ class TestConfig:
         assert BaiduEngine().config.provenance_ncc_factor == 1.0
 
     def test_gate_above_clean_arm_max(self):
-        # Clean arm scored p99 0.314 / max 0.352 on 278 hand-labelled frames;
-        # the 741-frame eval set surfaced cross-fires up to 0.426 (a 抖音
-        # AI创作 mark no rival can suppress), and the full-corpus sweep put the
-        # outside-cohort false arm at 0.47 max vs true carriers at 0.50-0.66,
-        # so the gate sits at 0.48.
+        # Compatibility testing separated true Baidu marks from unrelated
+        # bottom-right text, so the gate sits at 0.48.
         assert BaiduEngine().config.detect_ncc_threshold >= 0.48
 
     def test_qwen_is_a_rival(self):
-        # 百度 vs 千问 are near-identical after binarization: 12 of 14 full-corpus
-        # cross-fires at the 0.37 gate were Qwen marks (Qwen's template beats
-        # Baidu's there by 0.17-0.35, so the margin suppresses them).
+        # 百度 and 千问 are near-identical after binarization, so Qwen's template
+        # must act as a rival.
         assert "qwen_alpha.png" in BaiduEngine().config.rivals
 
     def test_registry_row(self):

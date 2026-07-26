@@ -11,11 +11,11 @@ metadata, never the coded image.
 A no-op control set (clean images with no AI metadata) verifies the stripper
 neither ADDS a signal nor corrupts pixels on files it should leave alone.
 
-Operates on gitignored data only (data/spaces/...); writes nothing tracked.
+Operates on gitignored local data only; writes nothing tracked.
 
     uv run python scripts/metadata_removal_audit.py \
-        --corpus data/spaces/originals --identify data/spaces/identify \
-        --out data/spaces/_metadata_removal_audit.csv --jobs 8
+        --corpus .local-eval/originals --identify .local-eval/identify \
+        --out .local-eval/metadata-removal-audit.csv --jobs 8
 """
 
 from __future__ import annotations
@@ -157,15 +157,21 @@ def _candidate_paths(corpus: Path, identify: Path | None, clean_sample: int) -> 
 
 @click.command()
 @click.option(
-    "--corpus", type=click.Path(exists=True, file_okay=False, path_type=Path), default=Path("data/spaces/originals")
+    "--corpus",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=Path(".local-eval/originals"),
 )
 @click.option(
     "--identify",
     type=click.Path(path_type=Path),
-    default=Path("data/spaces/identify"),
+    default=Path(".local-eval/identify"),
     help="identify-JSON dir to pick carriers (skip = scan all).",
 )
-@click.option("--out", type=click.Path(path_type=Path), default=Path("data/spaces/_metadata_removal_audit.csv"))
+@click.option(
+    "--out",
+    type=click.Path(path_type=Path),
+    default=Path(".local-eval/metadata-removal-audit.csv"),
+)
 @click.option(
     "--clean-sample", type=int, default=1500, help="No-op control: N clean images to prove the strip is a no-op."
 )

@@ -27,7 +27,7 @@ from remove_ai_watermarks.metadata import (
 )
 
 # Real, committed C2PA sample images used to ground the SynthID-source tests.
-SAMPLES_DIR = Path(__file__).resolve().parent.parent / "data" / "samples"
+SAMPLES_DIR = Path(__file__).resolve().parent.parent / "data" / "fixtures" / "provenance"
 
 # ── Key detection ───────────────────────────────────────────────────
 
@@ -156,7 +156,7 @@ class TestHasAiMetadata:
         path.write_bytes(b"\xff\xd8\xff\xe1" + xmp + b"\xff\xd9")
         assert has_ai_metadata(path)
 
-    @pytest.mark.skipif(not SAMPLES_DIR.exists(), reason="data/samples not present")
+    @pytest.mark.skipif(not SAMPLES_DIR.exists(), reason="data/fixtures/provenance not present")
     def test_jpeg_metadata_strip_is_pixel_lossless(self, tmp_path: Path):
         """A JPEG metadata strip must NOT re-encode the DCT scan: pixels stay
         bit-identical, only the AI provenance APP segments are removed. Verified on real
@@ -181,8 +181,7 @@ class TestHasAiMetadata:
 
     def test_strip_preserves_lossless_content_with_mismatched_extension(self, tmp_path: Path):
         """F1 regression: the save format is chosen by CONTENT, not the file extension.
-        A PNG served with a .jpg name (common on real uploads -- ~1% of the corpus is a
-        PNG/WebP under a .jpg extension) must be stripped losslessly as PNG, NOT
+        PNG content served with a .jpg name must be stripped losslessly as PNG, NOT
         re-encoded into a real JPEG. The extension-driven path silently degraded it,
         breaking the 'work with originals' invariant."""
         import numpy as np
@@ -261,8 +260,7 @@ class TestHasAiMetadata:
         """Regression: a truncated / corrupt image must NOT crash remove_ai_metadata (a
         direct library caller like a web worker would 500 on a partial upload). PIL raises
         OSError decoding a truncated PNG; the strip must fail SAFE -- copy the input through
-        unchanged and return, mirroring strip_c2pa_boxes. Real prod corpus: ~0.2% of
-        uploads are truncated."""
+        unchanged and return, mirroring strip_c2pa_boxes."""
         import cv2
         import numpy as np
 
@@ -337,7 +335,7 @@ class TestSamsungGenai:
     def test_remove_strips_post_eoi_trailer(self, tmp_path: Path):
         """Regression: Galaxy AI appends ``PhotoEditor_Re_Edit_Data`` as a trailer AFTER
         the JPEG EOI, so the verbatim scan copy in the lossless strip carried it through
-        (survived 0/8 on the corpus). The strip now truncates a Samsung AI trailer at EOI;
+        in compatibility testing. The strip now truncates a Samsung AI trailer at EOI;
         pixels stay bit-identical and a non-Samsung trailer is preserved."""
         import cv2
         import numpy as np
@@ -435,7 +433,7 @@ class TestGetAiMetadata:
         assert get_ai_metadata(path) == {}
 
 
-@pytest.mark.skipif(not SAMPLES_DIR.exists(), reason="data/samples not present")
+@pytest.mark.skipif(not SAMPLES_DIR.exists(), reason="data/fixtures/provenance not present")
 class TestGetAiMetadataRealSample:
     """get_ai_metadata surfaces the consolidated C2PA fields on real images."""
 
@@ -480,7 +478,7 @@ def test_bare_algorithmic_media_not_flagged_ai(tmp_path: Path):
 # ── SynthID-source detection (metadata proxy) ────────────────────────
 
 
-@pytest.mark.skipif(not SAMPLES_DIR.exists(), reason="data/samples not present")
+@pytest.mark.skipif(not SAMPLES_DIR.exists(), reason="data/fixtures/provenance not present")
 class TestSynthIDSource:
     """SynthID detection via the C2PA companion manifest.
 
@@ -728,7 +726,7 @@ class TestExifGenerator:
         assert exif_generator(path) == "Midjourney"
 
     def test_novelai_png_text_chunk_detected(self, tmp_path: Path):
-        # NovelAI (mined corpus) stamps its generator in PNG tEXt Software/Source/
+        # NovelAI stamps its generator in PNG tEXt Software/Source/
         # Title chunks, not EXIF -- the PNG-text path must catch it.
         from PIL.PngImagePlugin import PngInfo
 
@@ -741,7 +739,7 @@ class TestExifGenerator:
         assert exif_generator(path) == "NovelAI"
 
     def test_reve_software_detected(self, tmp_path: Path):
-        # Reve Image (mined corpus) writes EXIF Software="reve.com".
+        # Reve Image writes EXIF Software="reve.com".
         path = _img_with_software(tmp_path, "jpg", "reve.com")
         assert exif_generator(path) == "reve.com"
 
@@ -751,7 +749,7 @@ class TestExifGenerator:
         assert exif_generator(path) is None
 
     def test_aphrodite_make_detected(self, tmp_path: Path):
-        # Aphrodite AI (mined corpus) writes EXIF Make="Aphrodite AI".
+        # Aphrodite AI writes EXIF Make="Aphrodite AI".
         exif = piexif.dump({"0th": {piexif.ImageIFD.Make: b"Aphrodite AI"}, "Exif": {}, "GPS": {}, "1st": {}})
         path = tmp_path / "aphrodite.jpg"
         Image.new("RGB", (64, 64)).save(path, exif=exif)
@@ -779,7 +777,7 @@ class TestExifGenerator:
 
     def test_apple_clean_up_removal_parity(self, tmp_path: Path):
         # The "Apple Photos Clean Up" credit is an AI-edit VALUE under a
-        # non-AI key, so removal must drop it by value too (corpus 2026-07-23).
+        # non-AI key, so removal must drop it by value too.
         from PIL.PngImagePlugin import PngInfo
 
         from remove_ai_watermarks.metadata import remove_ai_metadata
@@ -851,7 +849,7 @@ class TestXaiSignature:
         assert xai_signature(_grok_jpeg(tmp_path)) is True
 
     def test_real_grok_sample_detected(self):
-        # Real committed Grok download (data/samples/grok-1.jpg); the EXIF
+        # Real committed Grok download (data/fixtures/provenance/grok-1.jpg); the EXIF
         # Signature + UUID-Artist pair is the only AI signal it carries.
         assert xai_signature(SAMPLES_DIR / "grok-1.jpg") is True
 
@@ -1135,7 +1133,7 @@ class TestAIGCLabel:
         as a bare ``AIGC{...}`` blob inside a JPEG APP segment (no ``"AIGC":``
         key wrapper, no PNG chunk, no namespaced XMP) -- seen near the JFIF
         header on real 2026-06 downloads. ``marker`` selects the APP segment
-        (default APP9; the real corpus also uses APP11)."""
+        (default APP9; APP11 is covered by a separate regression)."""
         p = tmp_path / "aigc_bare.jpg"
         Image.new("RGB", (32, 32)).save(p)
         raw = p.read_bytes()
@@ -1168,7 +1166,7 @@ class TestAIGCLabel:
         assert not has_ai_metadata(out)
 
     def test_remove_strips_bare_aigc_in_app11(self, tmp_path: Path):
-        """Regression (real corpus, 19/27 survivors): the bare ``AIGC{...}`` blob lives
+        """Regression: the bare ``AIGC{...}`` blob lives
         in APP11 (0xEB) on many China gens. That marker's branch in _jpeg_app_carries_ai
         only checked for a C2PA/JUMBF manifest and RETURNED, so the AIGC blob slipped past
         the generic check -> survived the strip. The specific checks must fall through to
@@ -1183,7 +1181,7 @@ class TestAIGCLabel:
         assert not has_ai_metadata(out)
 
     def test_remove_strips_aigc_in_png_text_chunk(self, tmp_path: Path):
-        """Regression (real corpus, 2 survivors): the TC260 ``{"AIGC":{...}}`` block in a
+        """Regression: the TC260 ``{"AIGC":{...}}`` block in a
         STANDARD PNG text chunk (Description) -- _is_ai_key keeps that key, so removal
         must also drop it on the VALUE carrying an AIGC block."""
         from PIL.PngImagePlugin import PngInfo

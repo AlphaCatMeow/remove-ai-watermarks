@@ -1,39 +1,85 @@
 # Release and distribution
 
-> Relocated verbatim from `CLAUDE.md` on 2026-06-11 to keep the always-loaded
-> context small. Long single-line entries were reformatted into paragraphs;
-> no content was changed or summarized.
+This page describes the release behavior defined in this repository. External
+registry state can change independently, so verify it during a release.
 
-Release flow and every distribution channel (PyPI, Homebrew tap, conda-forge,
-ComfyUI Registry, HF Space), plus sdist/build-backend history. The CI summary
-stays in `CLAUDE.md`; read this before cutting a release.
+## Release sources of truth
 
-`publish.yml` stays release-only and now verifies the release tag matches the `pyproject.toml` version (fails the build on a mismatch) before building, then uploads via `uv publish` (PyPI trusted publishing over OIDC, no token — replaced the `pypa/gh-action-pypi-publish` action so the upload no longer depends on that action's bundled twine accepting the Metadata-Version; the `id-token: write` permission + `pypi` environment + workflow filename are unchanged, so PyPI's trusted-publisher entry still matches).
+The package version appears in:
 
-**Release flow:** bump the version in `pyproject.toml` + `src/remove_ai_watermarks/__init__.py` + `uv.lock` (the project's own `[[package]]` entry — find it with `grep -n 'name = "remove-ai-watermarks"' uv.lock`, the `version =` line right below it, ~line 2246), commit `chore(release): vX.Y.Z`, `git tag -a vX.Y.Z -m vX.Y.Z` (annotated — `git tag` without `-m` errors here), push `main` + the tag, then `gh release create vX.Y.Z` — **PyPI publish triggers on the GitHub Release `published` event, NOT on the tag push**, so the tag alone does not publish.
+- `pyproject.toml`;
+- `src/remove_ai_watermarks/__init__.py`;
+- the root package entry generated in `uv.lock`.
 
-**After the PyPI sdist is live, bump the Homebrew formula** in the separate public tap repo `wiltodelta/homebrew-tap` (`Formula/remove-ai-watermarks.rb`): update `url` to the new sdist URL (from `https://pypi.org/pypi/remove-ai-watermarks/<version>/json`, the `sdist` entry's `url`) and `sha256` to its hash, commit + push there — otherwise `brew install wiltodelta/tap/remove-ai-watermarks` keeps installing the old version. The formula is a core-only venv that pip-installs the sdist (no vendored resources, so pip pulls the binary numpy/opencv wheels per platform at install time); only those two lines change per release.
+Update the first two, then refresh the lock file with uv. Do not edit a
+line-number-specific location in `uv.lock`; its package order changes.
 
-**This is now AUTOMATED:** the main repo's `.github/workflows/distribute.yml` fires on the GitHub Release `published` event, waits for the sdist to appear on PyPI (poll loop, the Release event races publish.yml's upload), rewrites the formula's `url`+`sha256`, and pushes to the tap using the `HOMEBREW_TAP_TOKEN` repo secret (a fine-grained PAT with Contents:write on `homebrew-tap`). The SAME workflow also factory-rebuilds the HF Space (`HfApi.restart_space(..., factory_reboot=True)`, `HF_TOKEN` secret) so the Space reinstalls the new sdist (it pins `remove-ai-watermarks>=...` and only re-resolves on a rebuild). The manual Homebrew steps above are the fallback / what the workflow automates — a normal release needs no Homebrew or HF action.
+## Publish flow
 
-**Where the HF Space's own source lives (its demo code, NOT this library):** the private repo **`wiltodelta/raiw-hf-space`** (locally `~/Documents/GitHub/raiw-hf-space`) — `app.py` (CPU-core Gradio demo), `requirements.txt`, `README.md` (the Space card), `assets/`, `examples/`. **Deploying it is a plain `git push` to that repo's `main`:** its `.github/workflows/sync-to-hf.yml` mirrors the files onto the Space via the Hub API (`HfApi.upload_folder`, secret `HF_TOKEN` = a **write**-role token), which adds a commit on top of the Space's own history — deliberately NOT a `git push --force` to the Space, which would clobber it. Do NOT edit the Space through the huggingface.co web UI any more: that was the pre-2026-07-16 workflow (it is why every Space commit before then is authored `@users.noreply.huggingface.co` and why no local write token ever existed), and a web edit now silently diverges from the GitHub source of truth. Note the demo tracks the library's **CPU-core** surface only (`identify` / `visible` / `metadata`); the invisible/SynthID path needs a GPU and stays out. Two distinct automations touch the Space and must not be confused: `sync-to-hf.yml` (in `raiw-hf-space`) ships **demo code changes**; `distribute.yml` (in this repo) factory-rebuilds the Space on a **library release** so its `remove-ai-watermarks>=...` pin re-resolves to the new version.
+PyPI publishing is triggered by a published GitHub Release, not by a tag push
+alone.
 
-**If the distribute.yml Homebrew job fails with "Bad credentials" (or the tap push 403s),** the `HOMEBREW_TAP_TOKEN` secret has expired or been revoked — fine-grained PATs expire on a fixed date, so this recurs. Fix: rotate the PAT (a fine-grained token with Contents:write on `wiltodelta/homebrew-tap`), update the `HOMEBREW_TAP_TOKEN` repo secret, then re-run the failed job (`gh run rerun <run-id> --failed`). While the token is being rotated, the manual formula bump above unblocks the release. The same rotate-secret-and-rerun applies to any distribute.yml credential failure (`HF_TOKEN` for the Space rebuild).
+The expected sequence:
 
-**Other distribution channels:** (1) **conda-forge** — recipe source of truth committed at `packaging/conda/recipe.yaml` (v1 `recipe.yaml`, noarch core-only: pillow/piexif/numpy/py-opencv/click/python-dotenv); the initial submission is `conda-forge/staged-recipes` PR #33674 (went green only after **`pip_check: false`** in the python test — rattler-build's `pip check` defaults to ON and fails on the ancient conda-forge `piexif py_2` build's stale metadata with "piexif 1.1.3 is not supported on this platform", though the package installs/imports/works; keep it disabled). Once that merges and the `remove-ai-watermarks-feedstock` exists, the `regro-cf-autotick-bot` auto-opens a version-bump PR on the feedstock when each new PyPI sdist is detected — just review + merge it (hand-edit only if run-deps changed; keep `packaging/conda/recipe.yaml` in sync as the reference copy). (2) **ComfyUI Registry** — the node package is a SEPARATE repo `wiltodelta/ComfyUI-remove-ai-watermarks` with its OWN `pyproject.toml` `version` (independent of the library version). Publish a new node version by bumping that `version` in the node repo's `pyproject.toml` and pushing to `main` — the node repo's `.github/workflows/publish.yml` (`Comfy-Org/publish-node-action@main`, triggered on a push that touches `pyproject.toml`, secret `COMFY_REGISTRY_TOKEN`) **auto-publishes** it; `comfy node publish --token <registry-PAT>` is the manual/local fallback. It is NOT auto-published on a library release (the node has its own version), so only bump it when the node code or its `remove-ai-watermarks>=` dependency floor changes.
+1. update the version sources and lock file;
+2. run the complete project gate;
+3. commit the release change;
+4. create an annotated `vX.Y.Z` tag;
+5. push the commit and tag;
+6. publish the GitHub Release.
 
-**Sdist must exclude `data/`** (`[tool.hatch.build.targets.sdist] exclude = ["/data"]`): hatchling's default sdist bundles all VCS-tracked files, so the committed `data/` test corpora (the multi-hundred-MB synthid_corpus images + the visible-mark captures) pushed the **0.8.0** sdist past PyPI's per-project file-size limit (400 "File too large") — the wheel uploaded but the sdist was rejected, so 0.8.0 shipped wheel-only and 0.8.1 carried the fix. The wheel only ships `src/` (via `[tool.hatch.build.targets.wheel] packages`), so it was never affected.
+`.github/workflows/publish.yml` then:
 
-**A failed PyPI upload of one artifact still leaves the other live and you cannot re-upload the same version** — fix the build and cut the next patch.
+1. checks that the release tag matches `pyproject.toml`;
+2. builds the package with uv;
+3. publishes with `uv publish` through PyPI trusted publishing.
 
-**Build backend is unpinned `hatchling`** (`[build-system] requires`) since 2026-06-09. History: it was pinned `<1.31` because hatchling 1.30.0 made Metadata-Version 2.5 (PEP 794) the default and the twine bundled in `pypa/gh-action-pypi-publish@release/v1` rejected it (`"'2.5' is not a valid Metadata-Version"`), which **failed the v0.8.3 PyPI upload on 2026-06-01**; hatchling 1.30.1 reverted the default to 2.4. After the workflow moved to `uv publish` (whose uploader accepts 2.5) the pin was belt-and-suspenders only, and once v0.9.0 + v0.10.0 both published wheel+sdist through that path (verified on PyPI) it was dropped. If a future hatchling flips the default to 2.5 again and some consumer chokes, re-pin with a dated comment.
+The workflow uses GitHub OIDC through the `pypi` environment. It does not read a
+PyPI API token from the repository.
 
-## Dependency CVE-resolution history (`uv-secure`)
+## Post-release distribution
 
-The standing `uv-secure` gate in `maintain.sh` is clean; this is the changelog of how each alert was resolved, so a future alert is not re-triaged from scratch.
+`.github/workflows/distribute.yml` runs on the same published-release event. It
+waits for the matching source distribution to appear on PyPI, then:
 
-- **idna** bumped 3.11 -> 3.16, fixing GHSA-65pc-fj4g-8rjx.
-- **aiohttp** bumped 3.13.5 -> 3.14.0 via `uv lock --upgrade-package aiohttp`, fixing GHSA-hg6j-4rv6-33pg + GHSA-jg22-mg44-37j8.
-- **basicsr** Dependabot alert GHSA-86w8-vhw6-q9qq is resolved by removal: the experimental `restore` extra was retired and basicsr is no longer anywhere in the dependency tree.
-- **torch** Dependabot alert **GHSA-rrmf-rvhw-rf47** (`torch.jit.script` memory corruption, alert range `<= 2.12.1`) was dismissed `not_used` on 2026-06-10 (torch is a transitive dep of the optional `gpu` extra only and the codebase never calls `torch.jit`) and **resolved by upgrade on 2026-07-21**: the lock carries torch **2.13.0**, above the patched floor, so `uv-secure` is clean. If the GitHub alert has not auto-closed on the lock bump, close it manually as fixed.
-- **setuptools** bumped 81.0.0 -> 83.0.0 (2026-07-21), fixing PYSEC-2026-3447.
+- updates the Homebrew tap formula URL and SHA-256;
+- triggers a factory rebuild of the Hugging Face Space.
+
+The workflow can also be started manually with an optional version input.
+Conda-forge updates are outside this workflow.
+
+If a distribution job fails because a repository or Hugging Face credential is
+invalid, rotate the corresponding GitHub secret and rerun the failed job. A
+manual Homebrew formula update is the fallback when its automation is blocked.
+
+## Source distribution boundary
+
+The wheel includes the package under `src/`.
+
+The source distribution explicitly excludes `/data` through
+`[tool.hatch.build.targets.sdist]` in `pyproject.toml`. Keep that exclusion:
+calibration captures and test corpora do not belong in the published package
+archive.
+
+## Build backend
+
+The package uses hatchling through the unpinned `hatchling` build requirement in
+`pyproject.toml`. Uploading uses uv rather than the older twine-based action.
+
+## Other channels
+
+The repository includes a conda recipe under `packaging/conda/recipe.yaml`.
+Keep its runtime dependencies aligned with `pyproject.toml`.
+
+The ComfyUI nodes are maintained and versioned separately from this package.
+A library release does not by itself publish a new ComfyUI node version.
+
+## Release verification
+
+After publication, verify:
+
+- both wheel and source distribution exist on PyPI;
+- the package version matches the tag;
+- the Homebrew formula points to the new source distribution;
+- the distribution workflow completed successfully;
+- a clean install can run `remove-ai-watermarks --version`.

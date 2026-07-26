@@ -1,8 +1,8 @@
-"""Tier A1: diff today's `identify` against the verdicts recorded in the corpus sidecars.
+"""Tier A1: diff today's `identify` against previously recorded verdict sidecars.
 
-`data/spaces/identify/<day>/<uid>.json` holds the verdict a past run produced for
-`data/spaces/originals/<day>/<uid>_src.<ext>`. Re-running identify and diffing turns the
-corpus into a ~39k-image behavioral regression suite that needs no new labelling.
+An identify-results directory holds the verdict a past run produced for each image in a
+local source directory. Re-running identify and diffing provides a behavioral regression
+suite without requiring new labels.
 
 WHAT A DIFF MEANS -- READ THIS BEFORE PANICKING
   The sidecars were written by OLDER versions, so an intended improvement shows up as a
@@ -27,8 +27,8 @@ WHY FAMILIES, NOT RAW STRINGS
   so the comparison tracks BEHAVIOR, not phrasing.
 
 DATA SAFETY
-  Corpus images are user uploads: read-only, local analysis. Output goes to a gitignored
-  path under data/spaces/ and records uids, never image content.
+  Treat input datasets as sensitive and read-only. Output goes under the gitignored
+  .local-eval/ directory and records identifiers, never image content.
 
     uv run python scripts/sidecar_regression.py --sample 500     # representative trial
     uv run python scripts/sidecar_regression.py                  # full corpus, resumable
@@ -53,9 +53,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 REPO = Path(__file__).resolve().parents[1]
-IDENTIFY_DIR = REPO / "data" / "spaces" / "identify"
-ORIGINALS = REPO / "data" / "spaces" / "originals"
-OUT = REPO / "data" / "spaces" / "_sidecar_regression.jsonl"
+IDENTIFY_DIR = REPO / ".local-eval" / "identify"
+ORIGINALS = REPO / ".local-eval" / "originals"
+OUT = REPO / ".local-eval" / "sidecar-regression.jsonl"
 
 # Map a watermark description to a stable behavior family. Order matters: the first
 # matching pattern wins, so put the specific tokens above the generic ones.

@@ -150,9 +150,9 @@ class GeminiEngine:
     # or flat content (text, banners, hatching) can score >0.5 without that lift.
     # Demote a detection that is BOTH low-confidence AND low core-ring brightness
     # margin -- the joint signature of a content false positive (verified on the
-    # spaces corpus: of 16 demoted, 13 carried no AI metadata and the 3 AI-meta ones
-    # were visually FPs / a near-invisible white-on-white sparkle whose AI verdict is
-    # held by metadata anyway). Real sparkles escape via EITHER high confidence
+    # detector calibration: demoted examples were visual false positives or a
+    # near-invisible white-on-white sparkle whose AI verdict is held by metadata
+    # anyway). Real sparkles escape via EITHER high confidence
     # (white-bg sparkles score >=0.79 despite a low margin) OR high margin (dark/mid
     # backgrounds, incl. the #36 faint-corner case, lift well clear), so both must
     # fail to demote.
@@ -184,8 +184,8 @@ class GeminiEngine:
     # confidence (_SPARKLE_KEEP_CONF -- the registry's 0.5 sparkle gate plus a small
     # margin so the ~0.51 bright-background FPs the grad gate was added for stay demoted)
     # AND has a bright (margin) near-neutral core (_core_saturation <= _SPARKLE_WHITE_SAT).
-    # Corpus-measured on metadata-stripped faint sparkles: recovers ~14/20 the low-grad
-    # demotion would drop, at ~0.8% clean false-fire vs the ~0.55% baseline.
+    # Calibrated on metadata-stripped faint sparkles to recover low-gradient marks
+    # without materially increasing clean false fires.
     _SPARKLE_KEEP_CONF = 0.52
     _SPARKLE_WHITE_SAT = 0.20
 

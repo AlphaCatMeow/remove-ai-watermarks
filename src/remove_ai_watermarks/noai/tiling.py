@@ -3,9 +3,9 @@
 The img2img / ControlNet pipeline denoises the WHOLE image in one forward pass,
 so it OOMs on MPS/GPU above ~2K (issue #10). Tiling splits the image into
 overlapping tiles -- each kept near SDXL's ~1024 training size -- regenerates
-each tile independently, and feather-blends the overlaps. The result is processed
-at NATIVE resolution with no seam: the lossless alternative to the
-``--max-resolution`` downscale (which trades quality for a smaller forward pass).
+each tile independently, and feather-blends the overlaps. The result retains the
+input's native dimensions without an explicit ``--max-resolution`` downscale, but
+it is not pixel-lossless because every tile is regenerated.
 
 The geometry (``plan_tiles``) and the blend weighting (``feather_weights``) are
 pure functions, unit-tested without the diffusion model. ``run_tiled`` is the

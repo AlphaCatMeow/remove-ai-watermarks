@@ -8,9 +8,8 @@ content), used ONLY to (a) detect the pill by edge-NCC in the top-left corner an
 inpaint backend (MI-GAN/cv2), so the silhouette need not be pixel-accurate, and the
 synthetic render keeps corpus/user content out of the tracked repo (data-safety).
 
-Detection was calibrated on the retained local corpus (61 real positives + jimeng
-negatives): edge-NCC threshold ~0.22 in the top-left ROI. Re-run to regenerate the
-asset:  uv run python scripts/render_pill_silhouette.py
+The calibrated edge-NCC threshold is 0.22 in the top-left ROI. Re-run to regenerate
+the asset:  uv run python scripts/render_pill_silhouette.py
 
 Requires a CJK font (macOS STHeiti by default); the asset itself is committed, so this
 script only runs when regenerating it (never in CI).

@@ -41,8 +41,8 @@ THE MEASUREMENT
   selects -- the script writes a contact sheet for exactly that.
 
 DATA SAFETY
-  Corpus images are user uploads: read-only, local analysis, gitignored output. The
-  template is font-rendered synthetic, never cut from a user upload.
+  Treat input datasets as sensitive and read-only, and keep output gitignored. The
+  template is font-rendered synthetic, never cut from an input image.
 
     uv run python scripts/cjk_tail_probe.py --n 6000
 """
@@ -66,12 +66,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent))
 
 REPO = Path(__file__).resolve().parents[1]
-CORPUS = REPO / "data" / "spaces" / "originals"
-OUT = REPO / "data" / "spaces" / "_cjk_tail_probe.jsonl"
+CORPUS = REPO / ".local-eval" / "originals"
+OUT = REPO / ".local-eval" / "cjk-tail-probe.jsonl"
 # Cached under the gitignored data dir, not in scripts/: this is a probe artifact, not a
 # product asset. If the tail mark is ever registered, `render_vendor_silhouettes.py` is
 # what writes the committed silhouette into src/.../assets/.
-TAIL_PNG = REPO / "data" / "spaces" / "_cjk_tail_silhouette.png"
+TAIL_PNG = REPO / ".local-eval" / "cjk-tail-silhouette.png"
 
 # The tail is a fraction of a full vendor mark's width (`豆包AI生成` is ~5 CJK widths,
 # `AI生成` ~3), and the prefix length differs per vendor, so the size is genuinely
@@ -262,7 +262,7 @@ def contact_sheet(rows: list[dict[str, Any]], thresh: float, limit: int = 30) ->
         if crop.size:
             tiles.append(cv2.resize(crop, (320, 96), interpolation=cv2.INTER_AREA))
     if tiles:
-        dest = REPO / "data" / "spaces" / "_cjk_tail_sheet.png"
+        dest = REPO / ".local-eval" / "cjk-tail-sheet.png"
         cv2.imwrite(str(dest), np.vstack(tiles))
         print(f"\ncontact sheet ({len(tiles)} crops, score >= {thresh:.3f}) -> {dest}")
         print("scores: " + ", ".join(f"{r['tail_score']:.2f}" for r in picks[: len(tiles)]))

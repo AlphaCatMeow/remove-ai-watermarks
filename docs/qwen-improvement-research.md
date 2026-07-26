@@ -1,5 +1,9 @@
 # Qwen-Image improvement research (2026-06-20)
 
+> Research archive. This page records experiments and decisions from the date
+> above. It may mention prototypes or defaults that were later changed. Use the
+> user guides and current source code for the supported interface.
+
 Cited research behind the decision **"ship the `qwen` pipeline as-is, or improve it
 first?"** Produced by the multi-source deep-research harness (5 search angles, 22
 sources fetched, 85 claims extracted, 25 verified by a 3-vote adversarial check, 20

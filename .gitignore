@@ -55,4 +55,4 @@ gfpgan/
 scripts/_qwen_exp_out/
 
 # Local-only working data for analysis (not a committed corpus; never tracked)
-data/spaces/
+.local-eval/

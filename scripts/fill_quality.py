@@ -24,8 +24,8 @@ WHAT IT DOES NOT MEASURE
   fill numbers -- this isolates the FILL. Detection accuracy is Tier C's job.
 
 DATA SAFETY
-  Corpus images are user uploads: read-only, local analysis, output under a gitignored
-  data/spaces/ path. No image content is written into the report.
+  Treat input datasets as sensitive and read-only. Keep output under the gitignored
+  .local-eval/ path. No image content is written into the report.
 
     uv run python scripts/fill_quality.py --n 60
 """
@@ -50,8 +50,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from invisible_quality_audit import _ssim  # reuse, do not reimplement a third SSIM
 
 REPO = Path(__file__).resolve().parents[1]
-CORPUS = REPO / "data" / "spaces" / "originals"
-OUT = REPO / "data" / "spaces" / "_fill_quality.jsonl"
+CORPUS = REPO / ".local-eval" / "originals"
+OUT = REPO / ".local-eval" / "fill-quality.jsonl"
 
 # Text marks: a bundled alpha PNG plus the engine's own corner geometry.
 STAMPABLE = ("doubao", "jimeng", "samsung")
@@ -216,7 +216,7 @@ def clean_sources(n: int, seed: int = 11) -> list[Path]:
                 continue
             if any(d.detected for d in detect_marks(img)):
                 continue
-        except Exception:  # noqa: S112 -- a bad corpus file just is not a candidate
+        except Exception:  # noqa: S112 -- an unreadable local file is not a candidate
             continue
         out.append(path)
     return out

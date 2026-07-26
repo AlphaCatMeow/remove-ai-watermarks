@@ -49,8 +49,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-SAMPLES = REPO / "data" / "samples"
-CORPUS = REPO / "data" / "spaces" / "originals"
+SAMPLES = REPO / "data" / "fixtures" / "provenance"
+CORPUS = REPO / ".local-eval" / "originals"
 EXIT_NO_VISIBLE_MARK = 2
 
 
@@ -101,7 +101,7 @@ class Runner:
 
 
 def corpus_pick(n: int, suffixes: tuple[str, ...]) -> list[Path]:
-    """Real uploads, chosen deterministically so a failure is reproducible."""
+    """Local evaluation files, chosen deterministically so a failure is reproducible."""
     if not CORPUS.exists():
         return []
     pool = [p for p in CORPUS.glob("*/*") if p.suffix.lower() in suffixes]
@@ -117,7 +117,7 @@ def main() -> None:
     )
     a = ap.parse_args()
 
-    tmp = Path(tempfile.mkdtemp(prefix="raiw-smoke-"))
+    tmp = Path(tempfile.mkdtemp(prefix="remove-ai-watermarks-smoke-"))
     r = Runner(tmp)
     doubao = SAMPLES / "doubao-1.png"
     chatgpt = SAMPLES / "chatgpt-1.png"
@@ -312,7 +312,7 @@ def main() -> None:
             picks += [(label, p) for p in corpus_pick(2, (suf,))]
         picks += [("png", p) for p in corpus_pick(3, (".png",))]
         if not picks:
-            r.skip("real-format rows", "corpus not present (data/spaces/originals)")
+            r.skip("real-format rows", "local evaluation dataset not present")
         for label, p in picks:
             r.run(f"identify real {label}", ["identify", str(p), "--json"])
             r.run(

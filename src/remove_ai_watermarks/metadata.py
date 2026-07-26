@@ -153,8 +153,8 @@ _TC260_FIELDS: frozenset[str] = frozenset(
         "PropagateID",
         "ReservedCode1",
         "ReservedCode2",
-        # Service-provider schema (Tencent Cloud's AIGC variant, mined from the
-        # retained corpus 2026-07): the same ``{"AIGC":{...}}`` wrapper but keyed
+        # Service-provider schema (Tencent Cloud's AIGC variant): the same
+        # ``{"AIGC":{...}}`` wrapper but keyed
         # ``ServiceProvider`` / ``ServiceUser`` (+ generic ``Time`` / ``ContentId``,
         # not gated on), embedded in EXIF ``ImageDescription``.
         "ServiceProvider",
@@ -1062,8 +1062,8 @@ _EXT_TO_PIL_FORMAT = {".jpg": "JPEG", ".jpeg": "JPEG", ".webp": "WEBP", ".png": 
 def _sniff_image_format(head: bytes) -> str | None:
     """Actual raster format from a file's leading magic bytes (>= 12 bytes), as a PIL
     format name ("JPEG"/"PNG"/"WEBP"), or None when unrecognized. The file EXTENSION is
-    unreliable: ~2% of real uploads carry a mismatched one (a PNG served as ``.jpg`` is
-    common). Choosing the save format by extension re-encodes a lossless PNG/WebP into a
+    unreliable because an input may carry a mismatched one (for example, PNG content
+    served as ``.jpg``). Choosing the save format by extension re-encodes a lossless PNG/WebP into a
     real JPEG, silently degrading the pixels -- so the strip routes on content instead.
     ISOBMFF/GIF are handled before this point or fall through to PNG; only the
     lossy-vs-lossless distinction that matters here is resolved."""
@@ -1087,9 +1087,9 @@ def strip_and_verify(
     :func:`remove_ai_metadata` is deliberately fail-safe: a file PIL cannot decode is
     copied through UNCHANGED rather than crashing a caller, and the path it returns is
     indistinguishable from a real strip. Any caller that reports an outcome to a user
-    therefore cannot tell a no-op from a success -- corpus-observed on real Samsung
-    Galaxy S22 C2PA PNGs, where `metadata --remove` printed "stripped" and exited 0 while
-    the output still read as AI (2026-07-19 parity audit).
+    therefore cannot tell a no-op from a success. A Samsung C2PA compatibility case
+    exposed this when `metadata --remove` reported success while the output still read
+    as AI.
 
     Returns ``(output_path, surviving_markers)``; an empty mapping means a real strip.
     """
@@ -1164,8 +1164,8 @@ def remove_ai_metadata(
     if source_path.suffix.lower() in _FFMPEG_STRIP_EXTS:
         return _strip_with_ffmpeg(source_path, output_path)
 
-    # Route on the ACTUAL content format, not the extension (which lies on ~2% of real
-    # uploads -- a PNG served as .jpg, etc.). Trusting the extension would push a
+    # Route on the actual content format, not the extension. PNG content may be served
+    # as .jpg, and trusting the extension would push a
     # lossless PNG/WebP through the lossy JPEG re-encode below just because its name
     # ends .jpg, breaking the "work with originals" invariant.
     true_fmt = _sniff_image_format(head)  # reuse the 12 bytes already read above

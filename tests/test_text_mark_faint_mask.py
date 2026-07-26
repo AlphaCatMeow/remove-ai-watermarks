@@ -1,13 +1,11 @@
 """A mark the `tophat` front-end DETECTS must also be MASKABLE.
 
-Corpus-found 2026-07-20: Doubao's detection moved to the continuous `tophat` front-end
-(which does not binarize, and that is where its recall 89% -> 92% came from), but the
+Doubao's detection moved to the continuous `tophat` front-end, which does not
+binarize, but the
 removal mask still came from the BINARIZED glyph blob. A mark faint enough to be found
 only by the continuous response therefore produced an empty binary blob, `localize`
 returned mask=None, and `remove()` was a silent no-op: `identify` reported
-`visible_doubao` while `visible` said "no visible mark" on the same file. Measured on the
-full corpus parity sweep: 57 of 60 sampled still-detected Doubao marks were untouched
-no-ops, ~8% of all Doubao detections.
+`visible_doubao` while `visible` said "no visible mark" on the same file.
 """
 
 from __future__ import annotations
@@ -99,11 +97,11 @@ class TestFaintMarkIsMaskable:
 class TestFaintMaskStaysTight:
     """The faint fallback must cover the mark WITHOUT filling the whole corner.
 
-    Corpus-found 2026-07-20: the first version of the fallback thresholded the continuous
+    The first version of the fallback thresholded the continuous
     response at 0.5, but `tophat_response` returns uint8 0..255 -- so it selected every
-    non-zero pixel, not "half the peak" as its comment claimed. On 12 of 12 real frames
-    taking this path the resulting box covered 100% of the corner ROI, so removal inpainted
-    the entire corner instead of the glyph. Parity could not see it: parity asks whether
+    non-zero pixel, not "half the peak" as its comment claimed. On compatibility frames
+    taking this path the resulting box covered the corner ROI, so removal inpainted the
+    entire corner instead of the glyph. Parity could not see it: parity asks whether
     the detector is clean afterwards, and a mask that fills everything passes trivially.
     The cost, not the outcome, was the defect.
     """

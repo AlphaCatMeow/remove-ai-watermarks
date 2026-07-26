@@ -19,7 +19,7 @@ THE CORROBORATION PROXY AND ITS BIAS
   wordmark -- so measured precision is a LOWER BOUND, not a point estimate. Do not quote
   it as if it were exact.
 
-Corpus images are user uploads: read-only, local analysis, gitignored output.
+Treat input datasets as sensitive and read-only, and keep output gitignored.
 
     uv run python scripts/pill_gate_audit.py --jobs 7
 """
@@ -40,8 +40,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 REPO = Path(__file__).resolve().parents[1]
-POSITIVES = REPO / "data" / "spaces" / "_visible_positives.jsonl"
-OUT = REPO / "data" / "spaces" / "_pill_gate_audit.jsonl"
+POSITIVES = REPO / ".local-eval" / "visible-positives.jsonl"
+OUT = REPO / ".local-eval" / "pill-gate-audit.jsonl"
 
 
 def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:

@@ -1,212 +1,213 @@
-# Known limitations: full detail
+# Known limitations
 
-> Relocated verbatim from `CLAUDE.md` on 2026-06-11 to keep the always-loaded
-> context small. Long single-line entries were reformatted into paragraphs;
-> no content was changed or summarized.
+This page describes current product limits. Historical measurements and
+superseded experiments live in the research archive listed in
+[the documentation index](index.md).
 
-Full detail behind the compact Known-limitations list in `CLAUDE.md`:
-measurements, incident history, oracle runs, and the reasoning behind each
-decision. Read the relevant section here before changing the diffusion
-pipelines, strength defaults, or metadata coverage.
+## Visible removal
 
-## Visible-mark fill quality is background- and backend-dependent
+### Fill quality depends on the background
 
-Visible-mark removal is localize -> fill (the reverse-alpha pixel recovery was
-dropped; see `docs/module-internals.md`). The fill only touches the mark's
-footprint, so there is never collateral damage outside it, and whether the mark
-is *removed* is fill-independent -- cv2, MI-GAN and LaMa all strip the mark's
-shape. What varies is the *quality of the recovered region*, and it depends on
-the background:
+Visible removal changes only the selected mask, but the hidden pixels still
+have to be reconstructed.
 
-- **Flat backgrounds:** every backend is clean; cv2 is often the crispest.
-- **Textured / regular-structured backgrounds** (fabric, foliage, a lattice or
-  grid): an inpaint can only guess the hidden pixels. `cv2` (the classical
-  no-deps floor) visibly smears; `migan` (light, learned) can leave a ghost or
-  hallucinate structure; `lama` (heavy, learned) is the most reliable and
-  recovers structure best.
+- OpenCV is fast and dependency free. It works well on flat backgrounds but
+  can smear texture or repeated structure.
+- MI-GAN is a lighter learned backend. It can improve natural texture but may
+  ghost or invent structure.
+- LaMa is the heaviest learned backend and is generally the strongest option
+  for difficult backgrounds.
 
-The old reverse-alpha recovered the *true* pixels under a well-captured, static
-mark, so on structured backgrounds it was sometimes cleaner than any inpaint.
-The trade for localize -> fill is robustness (it also handles moved / re-rendered
-marks and needs no per-mark alpha capture) and a simpler, swappable pipeline.
-`auto` resolves best-first (`LaMa > MI-GAN > cv2`) and warns once when it falls
-back to cv2 because no learned backend is installed; a memory-tight deployment
-that cannot afford LaMa's ~4.7 GB peak pins `--backend migan` explicitly.
+`--backend auto` selects LaMa when available, then MI-GAN, then OpenCV.
 
-## Invisible-pipeline resolution handling (native / 1024 floor / `--max-resolution`; MPS memory tiers)
+No backend can recover detail that is completely hidden by an opaque mark. A
+successful detection therefore does not guarantee a visually perfect fill.
 
-`invisible` pipeline processes at **native resolution for inputs whose long side is >= 1024px**, and **auto-upscales smaller inputs UP to a 1024px floor** (`min_resolution=1024`, the default; `--min-resolution 0` disables) before diffusion -- SDXL img2img distorts badly on a tiny latent (a 381x512 portrait wrecks at native, the #36 follow-up), and the output is restored to the original input size so the floor is a transparent quality boost (it adds time/memory on small inputs). The floor upscale uses Lanczos by default; **`--upscaler esrgan`** (opt-in, the `esrgan` extra) runs Real-ESRGAN first for better detail before the Lanczos resize to the exact target (`upscaler.py` / `InvisibleEngine._esrgan_upscale`, falls back to Lanczos if the extra is absent). `max_resolution=0` (default) means no downscale cap, matching the hosted raiw.cc backend (fal fast-sdxl, no pre-downscale). The old forced downscale-to-1024 -> upscale-back round-trip for LARGE images was the main quality loss (issue #10) and is gone; at strength ~0.05 SDXL img2img does not need a downscale.
+### Automatic detection covers registered variants only
 
-**CUDA model CPU offload (`--cpu-offload`):** Diffusers normally places the complete SDXL, ControlNet, or base Qwen pipeline on the selected CUDA device. The opt-in offload mode instead uses Diffusers model-level CPU offload, keeping one model component on the GPU at a time and moving it back to CPU before the next component runs. This reduces peak VRAM use but adds transfer overhead. The custom `qwen-zimage` runtime already manages its global model placement; the same flag forces its face stack to stay on the offload path instead of becoming resident on a high-memory GPU. CPU and MPS behavior is unchanged.
+The registry contains vendor and locale specific templates. A redesigned mark,
+an unsupported locale, a different position, or a crop may be missed.
 
-**Final `--unsharp` post-filter (`humanizer.unsharp_mask`, opt-in, default 0):** applied LAST (after the face-restore pass, else it would be smoothed over) to counter the soft/over-smoothed look diffusion + restoration leave (an AI tell); ~0.5-0.8 safe, higher risks halos. Pairs with `--humanize` (grain adds sensor-noise texture, unsharp adds crispness). `--max-resolution N` re-introduces an opt-in long-side cap purely to bound GPU/MPS memory on very large inputs (it reintroduces the lossy round-trip). For huge images that OOM at native, **`--tile` is the lossless alternative** -- see the tiled-diffusion subsection below.
+Known examples:
 
-### Tiled diffusion for large inputs (`--tile`, issue #10)
+- Samsung detection is calibrated for the Italian
+  `Contenuti generati dall'AI` text variant.
+- The Jimeng top-left pill has a weak visual detector and is intentionally
+  subject to additional product and background checks.
+- Kling support covers the calibrated variants rather than every Kling label.
 
-`--tile` (OFF by default; `--tile-size` default 1024, `--tile-overlap` default 128) processes the diffusion pass in overlapping sliding-window tiles instead of one forward pass, so a large image is regenerated at **native resolution** without the OOM and without the lossy `--max-resolution` downscale round-trip. It engages only when the long side exceeds `--tile-size`; a sub-tile image runs a single pass unchanged. The SDXL, ControlNet, and base Qwen paths refactor the single-image `_generate` into a per-tile `_generate_one` (the ControlNet canny edge map is rebuilt per tile, so structure preservation works tile-local) and route it through `noai.tiling.run_tiled` when tiling is active. `qwen-zimage` instead tiles only its global Qwen pass, feather-blends that result, and then runs YuNet, SAM, and Z-Image once against the full original/result pair. The geometry and blend math are pure helpers, unit-tested without the model (`tests/test_tiling.py`):
+Use `erase --region` when you can see and select an unsupported or missed mark.
 
-- `plan_tiles(w, h, tile_size, overlap)` lays out a row-major grid where every tile is exactly `tile_size` (the last tile on each axis is pulled back flush to the far edge, simply overlapping its predecessor more). Uniform tile size keeps each diffusion pass at SDXL's preferred dimension.
-- `feather_weights(w, h, overlap)` is a separable linear taper, ~1 in the interior and ramping toward each edge, kept **strictly positive** so the normalized accumulate-and-divide blend (`accum / weight_sum`) is a partition of unity: a region covered by one feathered edge (an image corner) still divides cleanly. Identical (unchanged) tiles therefore reconstruct the input exactly -- the seam-free guarantee, asserted in `test_identity_generate_reconstructs_image`.
+### Strict and automatic sensitivity trade recall for precision
 
-CAVEAT: each tile is an **independent** low-strength regeneration. At the current SDXL/ControlNet defaults (0.10-0.15) the per-tile drift is small and the feather blend hides the seams, but tiling is a memory workaround, not a quality upgrade over a single native pass -- a 32 GB MPS box that clears the native UNet peak should prefer no tiling. The MPS->CPU fallback still applies per tile; if the first tile falls back to CPU, the device stays CPU for the rest of the image.
+`--sensitivity strict` uses the visual gate alone. The default `auto` mode may
+relax a mark only when metadata or a confidently detected sibling mark
+corroborates the same product.
 
-For `qwen-zimage`, the global denoise is still computed from the full-frame megapixel count and the same resolved seed is reused for every tile. The profile defaults to seed 0, matching the release-candidate oracle run; an explicit seed overrides it. Running the face stage only after blending avoids duplicate regeneration and boundary-local face misses. A real H100 smoke on 2026-07-25 exercised the shipped branch on a 4096x3072 input (20 tiles at 1024 with 128 px overlap, seed 0, strength 0.154): it completed in 653.367 seconds after 43.741 seconds of setup, preserved the exact dimensions, and peaked at 22.732 GiB allocated / 23.861 GiB reserved CUDA memory. Visual inspection found no tile seams. The worst tile-boundary gradient-change line was at the 98.563 percentile of all image lines (2.522 standard deviations), below the preselected 99th-percentile outlier threshold; overview fidelity was MAE 3.332%, PSNR 26.564 dB, and global SSIM 0.988627. This no-face input validates the global tiled execution and blend, not the post-blend face path. The July 25 seed-0 oracle result still certifies exact non-tiled candidate bytes only; tiled SynthID efficacy requires a separate provider-oracle check.
+There is no blanket "this image is AI" relaxation. That information does not
+identify the vendor, mark, or location and caused unacceptable false
+detections in the removed experimental mode.
 
-**Concrete MPS data points (the OOM is memory-tier-dependent, NOT a hard MPS limit):** on a ~24 GB unified-memory machine (verified 2026-05-25, 1254x1254 gpt-image SDXL, fp32) native res OOMs at the *UNet* step (peak ~17 GiB), not only the VAE decode, and the auto-fallback in `img2img_runner` reloads on CPU and finishes (slow, ~13 min) -- the output is still weight-identical and defeats SynthID, so "looks hung/crashed" on Mac is usually this CPU fallback, not a pipeline error. On a **32 GB** unified-memory machine the same default SDXL pass runs entirely on MPS with **no CPU fallback** (verified 2026-05-31, 1122x1402 gpt-image, `all`/default, ~155 s end-to-end), so 32 GB clears the native-res UNet peak that 24 GB could not. Adding `enable_vae_tiling()` alone does NOT prevent the 24 GB OOM (the peak is the UNet, not the VAE). The fast Mac workarounds for memory-constrained machines are fp16 on MPS (roughly halves memory) or `--max-resolution` to cap the long side; neither is wired as the default. The `controlnet` pipeline adds the canny ControlNet weights on top of SDXL, so its peak is a bit higher than the plain `default` pass; the same MPS->CPU fallback covers an OOM. The native-vs-cap-vs-floor decision lives in the pure helper `invisible_engine._target_size(w, h, max_resolution, min_resolution)` (returns `None` for native, a target tuple for a downscale cap OR an upscale floor; cap takes precedence, the floor is skipped on a min>max misconfig) so it is unit-tested (`tests/test_invisible_engine.py::TestTargetSize`, the #10/#15/#36 regression guard) without loading the model -- keep that logic in the helper, don't re-inline it.
+## Invisible removal
 
-## fp16 VAE black-output fix (issue #29) + degenerate-output fp32 backstop (issue #41)
+### Regeneration is lossy
 
-**fp16 VAE black-output fix (issue #29, 2026-05-30):** on a **CUDA/XPU fp16** backend the stock SDXL VAE overflows to NaN and the *plain* img2img path decodes to an **all-black** image (reproduced on the raiw.cc result: a 1086x1448 input -> a uniformly black 4.6 KB PNG, mean 0). `watermark_remover._load_pipeline` / `_load_controlnet_pipeline` swap in the fp16-fixed SDXL VAE (`madebyollin/sdxl-vae-fp16-fix` = `_SDXL_FP16_VAE_ID`) when `_needs_fp16_vae_fix(model_id, DEFAULT_MODEL_ID, is_fp16)` is true -- only the default SDXL checkpoint on fp16.
+Invisible removal does not decode and delete a payload. It regenerates the
+image through a diffusion pipeline. Faces, text, colors, and fine detail can
+change even when the watermark is successfully disrupted.
 
-**cpu/mps run fp32** (the stock VAE is fine there, which is why the bug never reproduces on Mac). A custom non-SDXL `model_id` keeps its own VAE (the fp16-fix VAE is SDXL-architecture-specific). The decision is a pure helper, unit-tested without a download (`tests/test_platform.py::TestFp16VaeFix`); the actual black->clean recovery needs a CUDA GPU.
+ControlNet is the default compatibility profile. It conditions on edges to
+preserve structure, but edges do not preserve identity or exact texture.
 
-**Confirmed on real CUDA hardware 2026-06-03:** running `all` on a 1086x1448 OpenAI gpt-image (the #29 repro size) at fp16 produced a normal (non-black) output, so the fp16-fix VAE swap resolves the all-black decode. (It was not reproducible on this MPS machine, which runs fp32, so the verification had to happen on an NVIDIA box.)
+The CUDA only `qwen-zimage` profile adds a separate face stage and is the
+highest fidelity option in the current implementation. It is larger, slower,
+and still may alter small text or difficult faces.
 
-**Follow-up safety net (issue #41, 2026-06-04):** the swap is gated to `model_id == DEFAULT_MODEL_ID`, so a custom model, a stale pre-fix install, or a fal/custom loader can still hit the black decode -- a new reporter did (gpt-image 1448x1086, the #29 size, with the exact `image_processor.py:142 invalid value encountered in cast` warning the NaN->0 cast emits). `remove_watermark` now adds a model-agnostic backstop: after generation, if the run was fp16 AND the output is degenerate (`_is_degenerate_image`: mean and std both below `_DEGENERATE_THRESHOLD` 1.0 -- a uniform all-black/NaN frame; the variance guard spares a legitimately dark-but-textured photo), it rebuilds the pipeline in fp32 on the SAME device and re-runs once. fp32 is the verified-clean path, so the user never gets a black image regardless of model_id/version. Mirrors the existing MPS->CPU fallback's self-mutation pattern (reset `torch_dtype` + clear `_pipeline`/`_controlnet_pipeline`); `batch` inherits it through `remove_watermark`, and once one image trips it the rest of the batch stays on the safe fp32. The detector is a pure helper, unit-tested without a model (`tests/test_platform.py::TestDegenerateOutputGuard`); the full fp16->detect->fp32-retry chain was verified e2e on this MPS machine by forcing fp16 with the swap disabled (first pass black, guard fired, retry produced a normal image). CAVEAT: the fp32 retry uses ~2x memory, so on a VRAM-constrained GPU it can OOM (a visible error, still better than a silent black frame; the MPS->CPU fallback covers that path). The reporter's "CPU also black" symptom is NOT reproducible here -- fp32 (cpu/mps) decodes clean -- so it points at an old version or a non-fp32 run, pending their version + command.
+### Removal cannot be verified locally for proprietary SynthID
 
-## rich was dropped (plain-text CLI and scripts)
+The project has no public local SynthID pixel decoder. It can infer likely
+presence from supported provenance metadata, but a missing metadata proxy is
+not a negative pixel verdict.
 
-**rich was dropped (CLI + scripts print plain text via `click.echo`).**
+For important outputs:
 
-`cli.py` renders through small `_Console`/`_Table`/`_Progress` shims; the analysis scripts (`scripts/synthid_corpus.py`, `synthid_pixel_probe.py`, `text_detection_benchmark.py`, `corpus_gap_scan.py`) import `Console`/`Table` from the shared `scripts/_plain_console.py` shim (markup like `[bold]`/`[/]` is stripped, tables render aligned). Consequences: (1) `rich` is NOT a dependency, so anything that imports it breaks a clean `uv sync --frozen` (CI installs core+dev only) — this exact gap red-failed CI after the refactor when those 4 scripts still imported rich; if you add a script, use the `_plain_console` shim, not rich. (2) The old `[gpu]`-bracket-eaten bug (#19) is gone — plain `click.echo` prints `pip install 'remove-ai-watermarks[gpu]'` verbatim, no escaping needed (regression-guarded by `tests/test_cli.py::TestGpuHintMarkup`). (3) No Unicode glyphs / colors / progress bars in CLI output by design.
+1. preserve the original;
+2. process a copy;
+3. verify with the matching provider tool when available;
+4. do not assume one provider's verifier covers another provider's payload.
 
-## AVIF/HEIF/JPEG-XL metadata, ISOBMFF/ffmpeg removal, audio watermark detection
+Provider systems can change, so a result verified on one file, seed, or version
+is not a permanent certification.
 
-Metadata detection for AVIF/HEIF/JPEG-XL relies on a binary scan for `C2PA_UUID` + `IPTC_AI_MARKERS`, plus EXIF `Software` / XMP `CreatorTool` generator tags via `metadata.exif_generator` (validated with synthesized AVIF/JPEG fixtures + an XMP raw-scan fixture). C2PA removal in those containers is implemented via `noai/isobmff.py` (top-level ``uuid`` / ``jumb`` box stripper, no re-encoding), which now also drops a top-level XMP ``uuid`` box that carries an AI label (matched by AI-marker content, not by the XMP UUID, so byte-order-robust) and covers MP4/MOV/M4V/M4A by content sniff.
+### Strength is content and seed dependent
 
-**Non-ISOBMFF audio/video removal is via ffmpeg** (`_FFMPEG_STRIP_EXTS` -> `_strip_with_ffmpeg`): WebM/Matroska (EBML), MP3 (ID3), WAV/FLAC/OGG (RIFF/Vorbis) are stripped losslessly with `ffmpeg -map_metadata -1 -map_chapters -1 -c copy` (codec data untouched). Requires ffmpeg on PATH; raises `RuntimeError` if absent or if ffmpeg can't parse the file. Verified end-to-end (a real ffmpeg-made WAV/MP3 with a `title=Suno AI` tag -> tag gone, audio bytes preserved).
+For SDXL and ControlNet, the CLI resolves an unset strength from the detected
+vendor:
 
-**Meta-box XMP now handled (`isobmff.blank_ai_xmp_packets`, v0.6.9):** an AI-label XMP packet stored as a meta-box `mime` item (AVIF/HEIF) is blanked in place (overwritten with spaces of the same length, so `iloc` offsets and the coded image stay valid).
+- OpenAI: `0.10`;
+- Google: `0.15`;
+- unknown: `0.15`.
 
-**`Exif` item inside the `meta` box (AVIF/HEIF), now handled in place (2026-06-19):** an AI-generator token in an EXIF item (its TIFF bytes live in `mdat`/`idat`) is blanked by `isobmff.blank_ai_exif_tokens` — it finds EXIF TIFF blocks by their II/MM byte-order header, validates each with **piexif** (a coincidental II/MM run in pixel data won't parse as a TIFF IFD, so it is ignored), and overwrites any `Software`/`Make`/`Artist`/`ImageDescription` value carrying an `AI_GENERATOR_TOKENS` token with spaces of the **same length**. Same-length means every box size and `iloc` offset stays valid and the coded image is untouched — so it avoids the full `iinf`/`iloc` surgery (offset rewrite) that exiftool would need (exiftool is a non-installed binary dep, deliberately not used). It scrubs only the AI value; camera/editor EXIF is preserved. Wired into `remove_ai_metadata`'s ISOBMFF path after `blank_ai_xmp_packets`. Because the ISOBMFF branch never runs the JPEG `_scrub_ai_exif`, this is the ONLY EXIF scrubber on that path and must stay in PARITY with it: it now also blanks the China TC260 `{"AIGC":{...}}` block in `ImageDescription`/`UserComment` (via `_is_aigc_exif_value` — Doubao producer + Tencent service-provider schemas) and the xAI/Grok `Signature:` + UUID-`Artist` pair, not just `AI_GENERATOR_TOKENS` in `Software`/`Make`/`Artist`/`ImageDescription` (regression `test_noai.py::TestISOBMFF::{test_blank_aigc_block_in_exif, test_blank_xai_signature_pair_in_exif}`). **Still NOT built:** Resemble PerTh audio detection (no presence/confidence flag exists).
+An explicit `--strength` overrides these defaults. The defaults are operating
+points, not universal guarantees. Near a removal threshold, different content
+or a different random seed may change the verifier result.
 
-**Audio watermark DETECTION (Resemble PerTh) was evaluated and NOT built (2026-05-26):** `resemble-perth`'s `PerthImplicitWatermarker.get_watermark()` returns a raw bit-array with **no presence/confidence flag** (clean audio decodes to arbitrary bits too), so reliably distinguishing watermarked-from-clean needs either Resemble's fixed payload or a confidence API -- neither is public, and there's no real Resemble sample to calibrate against. Same wall-class as the SynthID pixel detector: the decode exists, reliable presence-detection does not. (perth's top-level `PerthImplicitWatermarker` is also gated to None unless `librosa` is importable.)
+The base Qwen and `qwen-zimage` profiles have profile specific strength
+behavior. Consult `remove-ai-watermarks invisible --help` and the source of
+[`watermark_profiles.py`](../src/remove_ai_watermarks/noai/watermark_profiles.py)
+for the current resolver.
 
-## SynthID detection is metadata-only (no local pixel detector)
+### Pipelines have different quality tradeoffs
 
-**SynthID detection is metadata-only.**
+| Pipeline | Main limit |
+| --- | --- |
+| `controlnet` | Edge conditioning can preserve a watermark carrying region too closely, and faces may drift. |
+| `sdxl` | Flat graphics and precise structure may receive too little or unhelpful change. |
+| `qwen` | Large CUDA oriented model; face smoothing can still be significant. |
+| `qwen-zimage` | CUDA only, large model stack, and limited broad certification across seeds and content. |
 
-There is no reliable *local* detector of the SynthID *pixel* watermark — Google's decoder is proprietary, no public spec or API (only a waitlisted portal). Authoritative confirmation: Google DeepMind's own paper "SynthID-Image: Image watermarking at internet scale" (Gowal et al., arXiv:2510.09263) states the verification service is restricted to "trusted testers" and does not release detector weights or a reproducible algorithm — so a local pixel detector is infeasible by design, not just unbuilt. https://arxiv.org/abs/2510.09263 We detect SynthID by its C2PA companion (`synthid_source` / `SYNTHID_C2PA_ISSUERS`), which is reliable while the manifest is intact but says nothing once C2PA is stripped.
+The legacy `default` profile name maps to `sdxl`. The `--auto` flag is
+deprecated, emits a warning, and changes nothing.
 
-**Surface-dependent blind spot (verified 2026-05-24):** the same Google model emits different metadata per surface -- the Gemini *app* wraps outputs in Google C2PA, but the *API/playground* (AI Studio, Nano Banana / gemini-2.5-flash-image) emits the SynthID *pixel* watermark (confirmed via the Gemini-app oracle) + the visible sparkle but **no C2PA/IPTC at all**, so `synthid_source` returns None despite SynthID being present. Only the pixel oracle or the visible-sparkle detector catches those. (Meta AI is another surface mismatch: it writes the IPTC `digitalSourceType=trainedAlgorithmicMedia` marker, not C2PA and not SynthID.) Google→SynthID is long-standing; OpenAI→SynthID is confirmed by OpenAI's Help Center (ChatGPT/Codex/API "include both C2PA metadata and SynthID watermarks", updated 2026-05-21) but time-gated (pre-rollout OpenAI images carry C2PA without SynthID), so the OpenAI verdict is hedged "likely". Oracles: Gemini app "Verify with SynthID" (Google), openai.com/verify (OpenAI).
+## Resolution and memory
 
-**Each vendor's oracle detects only its OWN content (verified on the page 2026-05-31):** `openai.com/research/verify` states verbatim "OpenAI generation signals will only be detected if the image was generated with our tools" and "Content could also still be AI-generated by another company's model, which the tool currently does not detect" -- SynthID is shared tech but the verifier is keyed to its own vendor's payload, so a Google-SynthID image reads clean on OpenAI's verifier and vice-versa.
+### Small images are enlarged before SDXL based diffusion
 
-**This explains the recurring "oracle says clean but `identify` still flags SynthID" report (#14):** the oracle reads the *pixel* watermark (gone after our SDXL pass), while `identify` reads the *C2PA-metadata proxy* (still present if the manifest survived). Different signals, not a contradiction -- strip the metadata too (`metadata --remove` / `all`) and the proxy goes quiet, but a quiet proxy is not proof the pixel watermark is gone.
+The SDXL, ControlNet, and base Qwen paths use a default minimum long side of
+`1024`. Smaller inputs are enlarged before diffusion and restored to their
+original dimensions afterward. Set `--min-resolution 0` to disable the floor.
 
-**Consequence for the P0#5 no-signal skip (`has_invisible_target`, 2026-06-22):** `invisible`/`all`/`batch` skip the diffusion scrub by default when no invisible AI signal is *locally* detectable, to avoid degrading a clean image (`--force` overrides). Because SynthID detection is metadata-only, a real AI image whose C2PA was **already stripped** (e.g. a re-encoded download, or the API/playground surfaces above that never emit C2PA) reads as no-signal and is therefore **skipped** — leaving its pixel SynthID in place. This is the deliberate trade: the skip's message never claims the image is clean, and the user re-runs with `--force` when they know it is AI. The blind spot is the same metadata-only ceiling, not a new bug; the visible-sparkle path (`check_visible`) still catches the no-C2PA Gemini-playground case for the *visible* mark, but not the invisible one.
+`qwen-zimage` does not apply this SDXL minimum resolution floor.
 
-**SynthID is durable to JPEG re-encode by design, so a GitHub-recompressed issue attachment is still a valid SynthID test subject** (verified 2026-06-01 on issue #14's pic3: the GitHub-served JPEG survived re-encoding and openai.com/verify still detected SynthID). Do NOT dismiss issue-attachment JPEGs as "not faithful originals" when reproducing a SynthID-survival report: the recompression strips the **C2PA metadata** (so `identify` reads Unknown on the attachment) but NOT the **pixel watermark** that openai.com/verify reads. A true byte-original only matters for the metadata/C2PA path, not for the pixel-SynthID-removal test. (Contrast the open imwatermark above, which IS fragile to JPEG.) The spectral phase-coherence approach from `github.com/aloshdenny/reverse-SynthID` was evaluated (May 2026) and **does not work for real-content detection**: on its own shipped codebook + validation set, watermarked and cleaned images were indistinguishable (conf within noise, cleaned often higher); it only fires on pure-black 1024x1024 reference images at exact resolution (the controlled case it was calibrated on). The README's "90% / conf=0.91" reproduces only in that lab condition. Do not build a production detector on it; if revisited, it is experimental/diagnostic only and needs a per-resolution, per-model reference corpus. A from-scratch gpt-image pilot (2026-05-24) confirmed this independently: 5 independent solid-black gpt-image outputs share a near-identical fixed signature (pairwise residual correlation **0.92**, avg-template retains 97% energy), so the watermark/carrier IS strongly present and consistent on flat content — but the carrier frequencies extracted from it do NOT discriminate real content (carrier-to-random ratio: cleaned 1.86 > watermarked 1.53; a non-gpt-image image scored highest at 3.67). The signature drowns in content texture. Net: a perfectly consistent solid-color signature still yields no real-content pixel detector with magnitude/carrier methods. A corpus discrimination test (2026-05-24, `scripts/synthid_pixel_probe.py`, raw zero-mean residual NCC) independently re-confirms this: at matched resolution, SynthID positives do NOT cluster apart from negatives (within-Gemini 0.07; at 1024 px pos-vs-neg >= pos-vs-pos). The only high correlations were near-duplicate *content* (5 ChatGPT renders of one prompt at ~0.92, while a distinct ChatGPT image scored ~0 against them) — content, not a carrier. The probe is solid-fills-only and EXPERIMENTAL/DIAGNOSTIC; do not use it on real content.
+### Large images stay at native resolution unless capped
 
-**Correction (deeper re-examination 2026-05-25):** the carrier IS real on solid fills — the earlier "no carrier" was a *method* artifact of using spatial / FFT-magnitude NCC, which can't see it. The carrier is a fixed *phase* at specific low frequencies, so the right metric is **per-bin phase coherence**. On 8 white `gemini-2.5-flash-image` fills (generated via the reverse-SynthID trick: identity-edit prompt "Recreate this image exactly as it is" on a synthetic pure-white PNG — this bypasses the recitation block that rejects text prompts for pure colors), phase coherence at the white carriers `(0,±7..±12,±20..±23)` = **0.86** vs **0.31** random; single-image leave-one-out phase-match **+0.83** vs real photos **-0.24**. (Black `2.5-flash` fills clip to std≈0 — SynthID can't push values below 0, so no carrier in black; the repo's dark carriers come from nano-banana-pro.)
+`--max-resolution 0` means no explicit downscale cap. A positive value caps the
+long side before diffusion and restores the result afterward. This reduces
+memory use but introduces a downscale and upscale round trip.
 
-**But it does not generalize:** (a) carriers are model-version + resolution + color specific — the repo's v4 codebook (built for `gemini-3.1-flash-image-preview` + `nano-banana-pro-preview`) scores ~0.527 on my 2.5-flash white fills, indistinguishable from negatives (~0.50), i.e. carriers shift across model versions and need a per-model codebook; (b) on real content (30 `2.5-flash` images) the carrier collapses — set phase coherence at carriers 0.37 ≈ random 0.42, and the repo's v4 detector gives content 0.518 ≈ negatives 0.504 (no separation; a faint +0.24 single-image lean is likely a brightness confound). Net: the spectral/phase approach is a real *controlled-fill* characterizer, NOT an arbitrary-real-content detector, and is brittle to model version. Metadata proxy + visible sparkle + online oracles remain the ceiling for real content.
+`--tile` preserves the input dimensions while running the diffusion stage in
+overlapping tiles. It avoids the explicit downscale, but it is not pixel
+lossless: each tile is independently regenerated. With `qwen-zimage`, only the
+global Qwen stage is tiled; the face stage runs after tile blending.
 
-## External AI-vs-real classifier models are out of scope
+### CPU offload is CUDA only
 
-**External AI-vs-real classifier models are out of scope (decided 2026-05-24).**
+`--cpu-offload` moves Diffusers model components between CPU and CUDA instead of
+keeping the complete standard pipeline in GPU memory. For `qwen-zimage`, it
+forces the face stack to use its offload path.
 
-Generic HuggingFace detectors (`Organika/sdxl-detector` Swin Transformer, `umm-maybe/AI-image-detector`, and fine-tunes) exist and report ~0.98 on their *own* SDXL-vs-real validation sets, but they are per-generator and the model cards themselves note degraded accuracy off-distribution; they are untested on gpt-image / Gemini Nano Banana (the metadata-stripped surfaces we care about), and our own light SDXL pass would likely defeat them the same way it defeats SynthID. Detection here stays local + signal-based (metadata + visible sparkle); do not add a bundled classifier dependency.
+The option reduces CUDA memory pressure at the cost of speed. It has no effect
+on CPU or MPS and fails loudly when a CUDA Diffusers pipeline does not expose
+the required offload method.
 
-## Default strength is vendor-adaptive, one ladder for both pipelines
+### MPS may fall back to CPU
 
-**DEFAULT STRENGTH IS VENDOR-ADAPTIVE, ONE LADDER FOR BOTH PIPELINES (LOWERED 2026-06-14; raised + unified 2026-06-09; vendor-adaptive since 2026-06-01, SUPERSEDES every fixed-default claim in this bullet and the next).**
+The SDXL paths include an MPS out-of-memory fallback that reloads on CPU. A run
+that appears much slower after an MPS failure may be continuing on CPU.
 
-`resolve_strength(strength, vendor)` + `vendor_for_strength(path)` (`watermark_profiles.py`) read the C2PA issuer (`metadata.synthid_source`) on the ORIGINAL input and pick `OPENAI_STRENGTH` **0.10** / `GEMINI_STRENGTH` **0.15** / `UNKNOWN_STRENGTH` **0.15** when `--strength` is unset; explicit `--strength` always wins.
+Memory needs depend on the pipeline, input size, dtype, and machine. Use tiling,
+a resolution cap, or a lighter pipeline when necessary.
 
-**The SAME ladder applies to BOTH pipelines** (`sdxl` and `controlnet`). **2026-06-14: lowered from the 2026-06-04 cert floors (OpenAI 0.20 / Google 0.30) back toward the original 2026-06-01 study (OpenAI ~0.05-0.10 / Google 0.15).** A re-test on the deployed Modal controlnet worker cleared SynthID on the oracle at OpenAI 0.10 (2 photoreal, 1402/1448 px) and Google 0.15 (2 NATIVE 2816x1536 images -- retiring the "native ~2816 likely needs >=0.30" guess), while a pixel sweep showed 0.20/0.30 over-regenerated for no efficacy gain (Google MAE -20% at 0.15). See `watermark_profiles.py` "Data basis". **CAVEATS that stand:** (1) removal near this floor is SEED-NON-DETERMINISTIC (the 2026-06-09 finding below) -- a SERVICE on this ladder must pin a fixed, oracle-verified seed, not rely on a random one; (2) the re-test is n=2 per vendor on photoreal/landscape, NOT flat graphics (the `sdxl` weak spot), so raise `--strength` if an oracle reads SynthID on a flat output.
+## Metadata and formats
 
-**Why one ladder (NOT a per-pipeline split):** the cert was run on controlnet and does NOT transfer to `sdxl` by symmetry (opposite hard cases -- controlnet leaves SynthID on photoreal, `sdxl` on flat graphics), BUT on its OWN hard case (flat fills) `sdxl` is the WEAKER remover (plain img2img barely perturbs a flat region at low strength), so it needs AT LEAST controlnet's strength -- hence the certified floor is the right floor for `sdxl` too. It is a MARGIN argument for `sdxl`, not a fresh certification (no local SynthID detector to self-verify); raise `--strength` if an oracle still reads a flat `sdxl` output. The higher strength costs little quality because `controlnet` is now the default pipeline AND the only `--auto` pick, so `sdxl` is reached only via an explicit `--pipeline sdxl` (a deliberate opt-down for inputs without faces/text), where over-regeneration has nothing to damage. (A short-lived per-pipeline split ladder -- `sdxl` 0.15/0.20 vs controlnet 0.20/0.30 -- existed on 2026-06-09 before being unified the same day; the `resolve_strength` `pipeline` param and the `CONTROLNET_*_STRENGTH` constants were removed.) The CLI detects the vendor from the pristine source (before the visible pass / metadata-strip removes C2PA from the temp file) and passes it to display calls so display and execution agree; `cmd_invisible`/`cmd_all`/`batch` thread `vendor`.
+### Missing metadata does not mean clean
 
-**This replaces the single 0.30 default AND the prior "do NOT build a vendor-adaptive default" policy** -- both came from the now-debunked region-rescrub-contaminated study (the per-region re-scrub that contaminated those numbers was removed in the controlnet refactor). Basis: the oracle-verified June 2026 controlled study (clean v0.8.6, protect OFF): OpenAI clears at 0.05 across 1024-1600 (n=4, resolution-independent); Google needs 0.15 on the capped-1536 path (n=4). `docs/synthid.md` §2.2 (data) + §5.2 (the adaptive default) are authoritative.
+Screenshots, social platforms, and re-encoding can remove metadata while a
+pixel watermark remains. `identify` therefore reports unknown rather than
+clean when no supported signal is found.
 
-**CAVEAT (oracle pass 2026-06-04): the OpenAI 0.10 default is content-dependent, NOT universal -- a flat-graphic OpenAI logo/poster still read SynthID-detected after `default` at 0.10, and photoreal images after controlnet at 0.10/0.15 (low-change regions under-perturbed). Removal at 0.10/0.15 is content×pipeline dependent (see the controlnet Known-limitations bullet); the lever is a higher strength, oracle-revalidated per content type. Do NOT assume the vendor-adaptive default clears every image.**
+### JPEG XL is metadata only
 
-CAVEAT: Google's 0.15 was validated only on `--max-resolution 1536`; native large Gemini (2816) was not locally measurable (OOM on M-series) and is pending GPU validation on raiw.cc -- if it survives 0.15 native, raise `--strength`.
+The metadata path recognizes JPEG XL containers, but the visible and diffusion
+image paths do not list `.jxl` as a supported pixel format because the package
+does not include a JPEG XL pixel decoder.
 
-**Everything below in this bullet about a fixed 0.10/0.30 default is HISTORICAL; trust the vendor-adaptive constants + docs/synthid.md.**
+### HEIC, HEIF, and AVIF use a Pillow fallback
 
-## SynthID removal: strength + oracle scope
+OpenCV does not decode these formats in the project. `image_io.imread` falls
+back to Pillow with `pillow-heif`. A corrupt or truncated file may still fail to
+decode.
 
-**SynthID removal: strength + oracle scope.**
+### Some metadata removal requires ffmpeg
 
-Default strength is vendor-adaptive (see the bullet above); `docs/synthid.md` §2.2 is authoritative for the numbers.
+WebM, Matroska, MP3, WAV, FLAC, OGG, Opus, and AAC container metadata is stripped
+through ffmpeg with stream copying. The operation fails if ffmpeg is absent or
+cannot parse the input.
 
-**Oracle scope (load-bearing):** the Gemini app "Verify with SynthID" is the ONLY valid SynthID oracle (detects Google's mark on any image); `openai.com/verify` is scoped to OpenAI provenance (its own C2PA), NOT a SynthID oracle -- a negative there is meaningless for SynthID. There is no local SynthID detector, so the tool cannot self-check; if the oracle still reads SynthID, raise `--strength` to the lowest value that verifies clean. The profiles are `sdxl` (plain SDXL img2img; `default` is a back-compat alias), `controlnet` (SDXL + canny ControlNet), `qwen` (Qwen-Image img2img), and the experimental `qwen-zimage` two-stage stack.
+### Metadata transformation is fail safe
 
-**Forensic-stealth caveat** (arXiv:2605.09203): defeating the SynthID verifier is NOT forensic invisibility -- independent detectors flag *removal-processed* images vs genuinely-clean ones at >98% TPR@1%FPR, so do not over-claim "indistinguishable from a real photo".
+`remove_ai_metadata` may copy an undecodable file through unchanged instead of
+raising. User facing callers must use `strip_and_verify` and inspect its
+surviving marker mapping before reporting success. The CLI does this.
 
-## `controlnet` pipeline: content x pipeline removal, certified floors, no face-restore
+### Sixteen bit PNG output is not preserved
 
-**`controlnet` pipeline (text/face STRUCTURE preservation, THE DEFAULT since 2026-06-09; `--pipeline default` opts down to plain SDXL).**
+The Pillow based PNG metadata rewrite uses the normal image save path and may
+reduce a sixteen bit PNG to eight bits. A byte-level PNG metadata stripper
+would be required to preserve that bit depth.
 
-SDXL + the canny ControlNet `xinsir/controlnet-canny-sdxl-1.0` via `StableDiffusionXLControlNetImg2ImgPipeline` (`watermark_remover._run_controlnet` / `_load_controlnet_pipeline`).
+## Detection extras
 
-**Removal still comes from the img2img regeneration (`strength`); the ControlNet only PRESERVES text and face STRUCTURE by conditioning on the canny edge map** (`cv2.Canny(gray, 100, 200)`, 3-channel). Canny preserves edges, NOT face identity (a regenerated face drifts in likeness). The drifted cleaned face is the LEAST-AI state we can reach without re-introducing SynthID; **the library does NOT ship a face-restore extra** (every approach evaluated 2026-06-04 - 2026-06-08 -- GFPGAN-on-cleaned, PhotoMaker-V2, InstantID txt2img, InstantID img2img-on-cleaned at three parameter sweeps -- regenerated the face via SDXL and made it look MORE AI-generated). Full empirical conclusion in `docs/synthid-robust-identity-research-2026-06-08.md` "Empirical follow-up". For production face preservation, ship the cleaned image as-is. No original pixels are copied or frozen, **BUT removal at the low vendor-adaptive strength is CONTENT × PIPELINE dependent and NEITHER pipeline clears all content -- oracle-validated against the OpenAI verifier 2026-06-04 (8 images, strength 0.10/0.15, `--max-resolution 1536`).**
+The `detect` extra decodes an open DWT-DCT watermark used in some Stable
+Diffusion, SDXL, and FLUX workflows. That decoder is sensitive to the carrier
+and transformations. A negative result is not a universal negative.
 
-The survivors FLIP by content type: **photoreal** (a 9-face grid, a bracelet product photo) SURVIVES controlnet but CLEARS `default` (controlnet's dense edge map keeps the regen too close to the original, so the SynthID-destroying perturbation never happens; plain img2img perturbs photoreal texture enough); **flat graphic** (a logo/poster with large flat color fills) SURVIVES `default` but CLEARS controlnet (at low strength img2img barely changes flat fills so SynthID persists there, while controlnet repaints them more freely); a flat **text** card cleared under both.
+The `trustmark` extra adds Adobe TrustMark decoding. The implementation retains
+an additional JPEG re-encode gate because isolated decoder hits can otherwise
+be content noise.
 
-**Root cause is insufficient STRENGTH, not the pipeline: at 0.10 the low-change regions -- dense-edge photoreal under controlnet, large flat fills under `default` -- are not perturbed enough to destroy SynthID. The vendor-adaptive 0.10 from the June study is NOT universally sufficient (that study's content happened to clear at 0.10).**
+External AI versus real image classifiers are out of scope. The project
+identifies concrete local provenance signals instead of shipping a generic
+statistical classifier.
 
-The robust fix is a HIGHER strength, oracle-revalidated per content type (controlnet can be cranked harder without losing structure; a lower `controlnet_conditioning_scale` also frees the regen on photoreal). So at today's default strength **both pipelines AND `--auto` can LEAVE SynthID on some content** -- a removal-priority caller (raiw.cc) MUST oracle-validate strength across content types before adopting, not pick a pipeline and assume removal.
+## Output and traceability
 
-**Follow-up same day: re-running the two photoreal survivors through controlnet at an explicit `--strength 0.15` cleared BOTH on the oracle -- BUT one of them (the bracelet) had SURVIVED the SAME 0.15 controlnet config in the first pass (only the random, unset seed differed). So removal near the threshold is SEED-NON-DETERMINISTIC: the same image+pipeline+strength+resolution can pass or fail run-to-run (img2img uses `seed=None`/random unless `--seed` is passed, and there is no local SynthID detector to self-verify). 0.15 is the borderline, NOT a robust floor -- pick a strength with MARGIN (controlnet ~>= 0.20) rather than exactly on it; the content×pipeline table's 0.15 data point is near-threshold noise. A confirming run at `--strength 0.20` controlnet cleared BOTH photoreal survivors on the oracle (ladder: 0.10 grid detected → 0.15 borderline/non-deterministic → 0.20 both clean), so **0.20 is the recommended robust controlnet floor for OpenAI photoreal** (one margin run, not an N-run repeatability proof -- a service should add margin or verify repeatability since there is no local SynthID detector to self-check).
+Removing file-local signals does not remove:
 
-**Engineering follow-up DONE 2026-06-09 (three coupled changes):** (1) **strength raised + unified** -- `resolve_strength(strength, vendor)` now applies ONE vendor-adaptive ladder (the certified controlnet floors 0.20/0.30/0.30) to BOTH pipelines; see the DEFAULT STRENGTH bullet above for why one ladder covers `sdxl`. (2) **`controlnet` is now the DEFAULT pipeline** (CLI `--pipeline` default = `controlnet` + both engine ctors). Rationale: with the certified higher ladder it clears BOTH content classes that flipped in the content-x-pipeline table (photoreal AND flat graphic), whereas plain SDXL left SynthID on flat graphics -- so controlnet is the more removal-robust default. Cost: every non-`--auto` run now downloads the canny ControlNet weights + a higher memory peak (MPS->CPU fallback covers OOM). (3) **the plain-SDXL profile was renamed `default` -> `sdxl`** (`watermark_profiles.SDXL_PROFILE`/`normalize_profile`); `default` stays as a back-compat CLI/ctor alias (the `--pipeline` Choice accepts `sdxl`/`controlnet`/`default`, a click callback `_normalize_pipeline` maps `default`->`sdxl` AND warns that `default` is deprecated). (4) **the content-detection layer + `--auto` planner were removed and `--auto` was retired to a deprecated alias for `--adaptive-polish`** -- see the dedicated `auto_config.py`-removal bullet above (controlnet is the default pipeline and the polish self-gates, so detection changed nothing). A production caller still needs its own per-vendor/content calibration at its deployed native resolution. The Gemini-native resolution caveat stands: controlnet 0.30 is certified only <=1536.** **CERTIFIED 2026-06-04 via an isolated Modal certification harness, restore OFF, ≤1536, each vendor on its own oracle: controlnet floors are OpenAI 0.20 (2 photoreal × 3 seeds = 6/6 clean; the 0.15-flipper is seed-robust at 0.20) and Gemini 0.30 (0.20 detected → 0.30 clean on 2/2 seeds). OpenAI 0.20 transfers to production (resolution-independent); Gemini 0.30 holds only ≤1536 — Gemini is resolution-sensitive, so a native-resolution caller should cap Gemini to ≤1536 at 0.30 or calibrate its native path (~0.35+). Production recipe: controlnet + per-vendor floor in `resolve_strength` (not the default ladder) + FIXED seed (kills the non-determinism).
+- provider account history;
+- server side copies or provenance stores;
+- perceptual fingerprints;
+- evidence that an image passed through a removal pipeline;
+- legal disclosure duties.
 
-**No face-restore runs in the default controlnet profile:** every earlier approach evaluated there (GFPGAN-on-cleaned, PhotoMaker-V2, InstantID txt2img, InstantID img2img-on-cleaned, 2026-06-04 - 2026-06-08 cert sweeps) regenerated the face via SDXL diffusion -- the output face inherited SDXL "clean skin" gloss and lost original identity precision, looking MORE AI-generated than the cleaned image, not less. The separate experimental `qwen-zimage` profile now tests a different architecture, Z-Image regeneration from the original SAM-masked face crop. Its first ArcFace/LPIPS run is recorded below, but it still needs its own oracle and multi-image face/text matrix.**
-
-See `docs/synthid.md` §5.5 + `docs/controlnet-removal-pipeline-research.md` (certified floors table).** **Lesson: visual-quality + face-recovery validation does NOT prove watermark removal -- only the SynthID oracle does, across MULTIPLE content types; never infer removal from sharpness/identity, and never conclude from a partial result (the photoreal-only data first read as "controlnet shields, default removes" -- the flat-graphic result reversed it).**
-
-`controlnet_conditioning_scale` (CLI `--controlnet-scale`, default 1.0) is the structure-preservation knob (higher = closer to the original structure); fp32 on cpu/mps, fp16-fixed VAE on cuda/xpu. The `controlnet` profile is threaded explicitly (`WatermarkRemover(pipeline=...)` / `InvisibleEngine(pipeline=...)`), NOT inferred from `model_id`. This productionizes the `scripts/controlnet_sweep.py` prototype; see `docs/controlnet-removal-pipeline-research.md`.
-
-**Forensic-stealth caveat still applies** (arXiv:2605.09203): defeating the SynthID verifier is not forensic invisibility -- a "this image went through a removal pipeline" classifier can still flag the output.
-
-## `qwen` pipeline (experimental, Qwen-Image 20B, certified floors)
-
-`--pipeline qwen` runs `QwenImageImg2ImgPipeline` on `Qwen/Qwen-Image` (20B MMDiT, Apache-2.0 code AND weights), as an img2img alternative to the SDXL pipelines. Motivation: the controlnet over-regeneration problem above (it plasticizes real photos / loses fine text at the scrub floor). Qwen-Image renders text natively (incl. CJK) and preserves structure markedly better, so at the strength that removes SynthID it damages real content far less.
-
-The scrub still comes from the img2img `strength` (same lever as SDXL); the call shape lives in the pure `_build_qwen_kwargs` (uses Qwen's `true_cfg_scale`, not SDXL's `guidance_scale` — the CLI `--guidance-scale` maps onto it, and ~4.0 is typical vs the SDXL default 7.5). bf16 on CUDA. It is **CUDA/cloud-class — the 20B does not fit MPS — so `_run_qwen` has NO MPS→CPU fallback** (unlike the SDXL paths). Cost on Modal A100-80GB is ~$0.05-0.10/image vs SDXL.
-
-**Certified oracle floors (Modal A100-80GB, 2026-06-20):** on native-resolution OpenAI and Gemini cert inputs (`data/qwen_in/`, both controls SynthID-POSITIVE): **OpenAI 0.10** (0.05 and 0.075 still detected; 0.10 clean and SEED-ROBUST — clean on seeds 0-4, so a random seed is safe) and **Gemini 0.25** (0.20 still detected, 0.25 clean on both images; lowered from the 0.30 first measured). Gemini seed-repeat is single-seed (seed 0): the Gemini oracle rate-limits volume, so PIN a seed in production rather than relying on seed-robustness there.
-
-**Fidelity vs controlnet was MEASURED, not eyeballed (`scripts/fidelity_metrics.py`, text scored against a vision-transcribed ground truth in `data/qwen_in/ground_truth.json` + PaddleOCR on the variants; an initial eyeball read was wrong and overturned by the metrics).** Methodology rule: only compare fidelity at each pipeline's OWN oracle-confirmed scrub floor -- i.e. between outputs where SynthID is actually removed in BOTH (controlnet OpenAI 0.10 / Gemini 0.15; Qwen OpenAI 0.10 / Gemini 0.25). An equal-strength comparison is invalid where it leaves one pipeline un-scrubbed (Qwen at 0.15 does NOT clear Gemini SynthID, so that run was dropped). At those scrub floors:
-- **Text:** Qwen wins on substantial Latin/mixed-script text -- OCR CER, controlnet vs Qwen: openai_1 (EN+RU+ZH, both 0.10) 0.385 vs **0.241**, openai_2 (EN, both 0.10) 0.341 vs **0.290**. On a SHORT CJK sign (gemini_1, cnet 0.15 / Qwen 0.25) it is a TIE (0.037 vs 0.037 -- both near-perfect; the earlier Qwen 0.000 was at the higher 0.30, not the certified floor).
-- **Faces:** controlnet wins -- gemini_3, 18 faces (cnet 0.15 / Qwen 0.25): ArcFace identity 0.546 vs 0.382, Laplacian-variance retention 0.62 vs 0.40, face LPIPS 0.09 vs 0.17 (Qwen smooths faces MORE; the gap narrows vs Qwen 0.30 but controlnet still wins clearly).
-
-**Conclusion: Qwen wins TEXT only for clean body text on a plain background with NO faces; controlnet wins faces AND display/decorative text in a scene. So `qwen` is a MANUAL `--pipeline qwen` opt-in, not a routed lane.** A content `--pipeline auto` router + a faces+text mixed dual-pass were prototyped and DROPPED (2026-06-20): on the canonical faces+text case (the abba poster, faces + display text) controlnet won EVERY metric incl. text (CER 0.114 vs qwen 0.379), so grafting qwen text only hurts; and "text→qwen" is undecidable cheaply (body-vs-display text is what matters). Caveat: `resolve_strength(..., pipeline="qwen")` carries the Qwen ladder (`_QWEN_VENDOR_STRENGTH`, Gemini 0.25), so `--pipeline qwen` gets the 0.25 Gemini floor automatically — the old manual `--strength 0.25` workaround is retired. `_build_qwen_kwargs` now passes an explicit height/width (qwen squished non-square inputs to 1024² without it). Flat-graphic content was not in the sample.
-
-**Improving Qwen (ship vs improve):** the cited research lives in `docs/qwen-improvement-research.md` -- read it before extending the `qwen` pipeline. Verdict: shippable as an opt-in text lane. **The "add a Qwen-Image ControlNet to fix face smoothing" lead was built, measured, and CLOSED (2026-06-20):** a DiffSynth-Studio Qwen + Apache-2.0 blockwise-canny ControlNet at the Gemini floor 0.25 did NOT restore face skin texture (face Laplacian-variance retention flat 0.40 -> 0.40, 13/16 faces within +-0.02; the SDXL+canny target 0.62 was not approached), because canny carries edges not skin grain and Qwen's higher Gemini floor (0.25 vs SDXL+canny 0.15) forces more smoothing -- and a deep-research sweep confirmed NO permissively-licensed Qwen tile/detail/realism/skin ControlNet exists anywhere (every Qwen conditioning is geometry). So **base Qwen stays the text lane, not a face fix.** The distinct Z-Image face-crop lead is now implemented as `qwen-zimage`; direct face comparisons are below, and its exact current six-output candidate is negative in the corresponding provider oracles. Broad seeded removal and text behavior remain unmeasured. Non-regenerative high-frequency detail re-injection is NOT safe by assumption (the "clean-output high frequencies do not carry the watermark" claim was refuted) -- it must be oracle-gated.
-
-**Seed as a quality lever (measured, openai_1 at 0.10, seeds 0-4):** the seed barely moves whole-image fidelity (img LPIPS 0.062-0.065, SSIM 0.855-0.857, PSNR 28.5-28.7 — flat) but does shift TEXT legibility (OCR CER 0.241-0.290, ~17% spread) -- the seed changes WHICH details get regenerated, not the overall level. So a per-image best-of-N-seed selection is a WEAK, text-only lever (pick the lowest-CER seed that still scrubs; fidelity selection needs no oracle). Not worth the N× cost for general use -- pin one decent seed in prod; reserve best-of-N for text-heavy premium cases.
-
-## `qwen-zimage` pipeline
-
-`--pipeline qwen-zimage` is the recommended high-quality SynthID removal mode when CUDA capacity is available and fidelity matters more than latency or cost. It remains a manual opt-in so the broadly compatible, much cheaper ControlNet path can stay the default. The profile ports the upstream two-stage workflow: an input-resolution Qwen-Image-2512 Lightning Canny pass regenerates the frame, then original face crops are segmented and regenerated with Z-Image Turbo before a feathered paste. DiffSynth requires both pixel inputs and the requested dimensions to use the same /16 latent grid, so each stage makes that small alignment resize internally and restores the global result to the original dimensions. The profile defaults to deterministic seed 0 because the release-candidate oracle evidence was produced at that seed; explicit callers can still override it.
-
-The port is architectural, not bit-identical. The active graph was traced from upstream commit `3007d0351596ae0a78b7074dae7ad179710b1e48`, including its linked Impact Pack implementation. It confirms that the active face path is YOLO + SAM; the MediaPipe node visible on the canvas is unconnected. The port keeps the two adaptive-denoise formulas, four-step Qwen Lightning stage, Canny thresholds and scale, AuraFlow shift 3 equivalent, original-image face source, SAM center + box prompts, IoU-0.93 proposal union with highest-score fallback, detector-box intersection, crop factor 2.5, 768 face guide, 1024 crop cap, eight-step face stage, and paste feather 10.
-
-Four runtime differences remain. This package uses full safetensors instead of the source graph's quantized GGUF models, YuNet instead of Ultralytics YOLO to avoid an AGPL runtime, DiffSynth FlowMatch samplers instead of ComfyUI's DPM++ 2M / SGM Uniform and `res_2s` / `bong_tangent` pairs, and no latent-space 20 px detailer noise-mask feather. The face crop is regenerated in full, then only the feathered SAM pixels are composited back, so generated pixels outside that mask are discarded. These differences prevent an exact-output claim even though the architecture and active decision path match.
-
-The default full-frame denoise is resolution-adaptive, not vendor-adaptive. The face denoise is separate and scales from the largest detected face. `--strength` overrides only the global Qwen stage. The profile fixes the global step count at four because its Lightning LoRA is distilled for that schedule; the face stage uses its own eight-step schedule. `--model` is unsupported. `--tile` follows the global-only route described above, with one full-frame face stage after blending.
-
-Direct comparison now covers two official upstream before/after pairs plus the existing crowded `gemini_3` fixture. The published upstream examples were scored against their own original inputs, with the upstream output resized back only for metric alignment where necessary:
-
-| Case | Result | ArcFace identity | Face LPIPS | Texture retention | Image LPIPS | SSIM |
-|---|---:|---:|---:|---:|---:|---:|
-| Upstream example 10 | published upstream | 0.976 | 0.172 | 0.166 | 0.259 | 0.627 |
-| Upstream example 10 | local `qwen-zimage` | 0.950 | 0.045 | 0.570 | 0.167 | 0.765 |
-| Upstream example 10 | current polished ControlNet | 0.701 | 0.105 | 0.941 | 0.094 | 0.781 |
-| Upstream example 12, matched size | published upstream | 0.976 | 0.014 | 0.873 | 0.111 | 0.777 |
-| Upstream example 12, matched size | local `qwen-zimage` | 0.947 | 0.015 | 0.708 | 0.085 | 0.896 |
-| Upstream example 12, matched size | current polished ControlNet | 0.548 | 0.061 | 0.961 | 0.105 | 0.887 |
-
-The result reproduces the upstream architecture's main advantage: identity retention is far stronger than the current ControlNet path. On the group example, local face LPIPS nearly matches the published upstream output and whole-image fidelity is better; upstream still leads slightly on ArcFace identity and texture retention. ControlNet preserves more global detail and, on example 10, lower provisional OCR CER, but its faces drift to different identities. The OCR reference for example 10 came from the original image's OCR rather than hand transcription, so it is supporting evidence, not a text certification. The published upstream outputs are also downscaled relative to their originals, which penalizes their detail metrics but is the actual result the repository presents.
-
-The comparison exposed a real implementation defect on a non-/16 input: the requested DiffSynth dimensions were floored while the PIL image remained at its original size, so the VAE latent and noise grid disagreed. Regression tests were written to fail on that mismatch, then both global and face inputs were changed to use the exact same aligned grid as their `height` and `width`.
-
-**Final candidate oracle result (2026-07-25):** the user checked every image in the provider-separated `full-clean-final-candidate-2026-07-25-by-oracle` bundle with the corresponding provider oracle and confirmed that none of the six outputs retained SynthID or the provider generation signal. These are the current seed-0 bytes after the complete `visible -> qwen-zimage -> metadata` route, including the calibrated YuNet 0.5 gate and the prompt-cache/model-residency optimizations. This supersedes the earlier first-port batch check as the release-candidate result. It certifies these exact outputs, not every seed, resolution, or content class.
-
-YuNet's score threshold is 0.5, not the upstream graph's YOLO threshold of 0.2: detector scores are not interchangeable. The copied 0.2 threshold admitted false/duplicate boxes and multiplied serial Z-Image calls. The calibrated gate retained every visible face in the public and upstream fixtures while reducing `gemini_3` from 36 boxes to 18 and the poster from 30 to 10. Serial face regeneration still scales with the retained detector count. Visual QA also found that the smallest multilingual text degraded on the typography sheet even though the larger headings survived. Keep `controlnet` as the compatibility and cost default, but recommend `qwen-zimage` when the user prioritizes output fidelity, especially face identity. The final exact-output oracle check covers the current YuNet threshold and runtime optimizations; do not call the profile broadly certified until a wider seeded face/text matrix is complete.
-
-**Modal runtime measurement (2026-07-24 through 2026-07-25, seed 0, GPU stage only):** the exact paired A100-40GB run measured ControlNet at 3.342-12.543 seconds per image. `qwen-zimage` took 133.556-188.493 seconds on the three zero-face images and 1212.496 seconds on the 18-face group. The same group initially took 262.072 seconds on an exact H100, including 181.764 seconds in serial face regeneration. On H100 the three zero-face cases took 45.029-65.071 seconds. The shipped fast-load resident placement reduced the group to 133.543 seconds total and 38.272 seconds for face regeneration while producing a pixel-identical output; peak CUDA allocation rose from 24.364 to 43.477 GiB. Setup increased from 32.282 to 43.960 seconds, so even a cold one-request total fell from 294.354 to 177.503 seconds. Reusing the fixed prompt embeddings reduced a warm 18-face request further to 78.474 seconds after an earlier request populated the Qwen embedding; the cached and uncached outputs were pixel-identical, and peak VRAM was unchanged. The Qwen cache helps from the second request in one container, while the Z-Image cache helps after the first face in a multi-face request. Residency is automatic at 64 GiB VRAM or above; smaller cards retain offload. H100 remains both faster and cheaper at the live Modal rates for this workload. Pricing is intentionally not copied here; calculate from the current Modal rate and the recorded GPU seconds. Model setup must be added to an un-warmed single call or amortized over a warm batch.
+See [scope, safety, and legal notes](legal-and-safety.md).

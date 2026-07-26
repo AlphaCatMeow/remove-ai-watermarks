@@ -1,6 +1,6 @@
 """Policy-level tests for the shared text-mark engine config.
 
-These assert TUNING that was set by corpus measurement, not algorithm behaviour --
+These assert calibrated TUNING, not algorithm behaviour --
 they exist so a future edit cannot silently revert a calibrated constant back to a
 value that was measured to be wrong. The measurements themselves live in
 `docs/module-internals.md` and in the comment at
@@ -13,11 +13,9 @@ class TestRivalMargin:
 
     Doubao "豆包AI生成" and Jimeng "★ 即梦AI" both sit bottom-right in near-white CJK
     and survive binarization as similar blobs, so an absolute NCC gate cannot tell
-    them apart -- 33 of jimeng's 68 false additions were Doubao marks. Measured
-    separability scoring both templates on the SAME blob (n=40 jimeng / 75 doubao):
-    absolute ncc_jimeng 0.96, ncc_jimeng MINUS ncc_doubao 0.99. Corpus effect of the
-    margin gate: jimeng precision 38% -> 63% with genuine detections unchanged at 40
-    (false fires 65 -> 23).
+    them apart because many Jimeng false additions were Doubao marks. Calibration
+    showed that the relative template margin separates them without reducing genuine
+    Jimeng detections.
     """
 
     def test_jimeng_competes_against_doubao(self):
@@ -54,12 +52,8 @@ class TestRivalMargin:
 class TestPerMarkProvenanceRelaxation:
     """The provenance NCC relaxation is PER MARK, not one shared multiplier.
 
-    Corpus-measured 2026-07-18 on the default `auto` path (4417 unique TC260
-    carriers, blind hand-label, two-sided control): the single shared 0.7 ran at
-    76% precision on doubao but 17% on jimeng, because jimeng's relaxed silhouette
-    keys on "text in the bottom-right corner" rather than the wordmark -- 33 of its
-    68 false additions were DOUBAO marks. Full table at
-    `_text_mark_engine._DEFAULT_PROVENANCE_NCC_FACTOR`.
+    Calibration showed that one shared relaxation factor was too permissive for
+    Jimeng because its relaxed silhouette confuses other bottom-right text marks.
     """
 
 
@@ -68,12 +62,10 @@ class TestScaleBasis:
 
     Every tuned fraction was calibrated on PORTRAIT captures, where width and short
     side coincide, so the basis was never exercised until landscape inputs were
-    measured. Corpus-measured 2026-07-18 (2572 unique TC260 carriers): doubao
-    detection was portrait 60% / square 41% / **landscape 0% of 435** -- a width-scaled
-    box is inflated by the aspect ratio on a wide image and the glyph never lands in
-    it. A short-side basis recovered 56% of the previously-undetected landscape set.
-    The same switch broke JIMENG (labelled landscape positives 13/13 -> 0/13), whose
-    wordmark tracks the width -- hence per-mark, not a house rule.
+    measured. Calibration showed that a width-scaled Doubao box is inflated by the
+    aspect ratio on a wide image and can miss the glyph. A short-side basis recovered
+    the affected landscape cases. The same switch broke Jimeng, whose wordmark tracks
+    the width, hence per-mark rather than a house rule.
     """
 
     def test_doubao_scales_with_the_short_side(self):
@@ -89,8 +81,7 @@ class TestScaleBasis:
         assert jimeng_engine._CONFIG.scale_basis == "width"
 
     def test_samsung_keeps_width_because_it_is_unmeasured(self):
-        """1 addition corpus-wide, so there is no evidence either way; an unmeasured
-        change is not an improvement."""
+        """There is no calibration evidence for changing this basis."""
         from remove_ai_watermarks import samsung_engine
 
         assert samsung_engine._CONFIG.scale_basis == "width"
@@ -133,8 +124,7 @@ class TestTophatFrontend:
     the gate). The `tophat` front-end never binarizes: the saturation/luma gates become
     weights, and the response is max-normalized so the score is contrast-invariant.
 
-    Corpus effect on the 240-image unbiased recall sample: doubao recall 89% -> 92% at
-    an unchanged 99% precision.
+    Calibration showed improved Doubao recall without reducing precision.
     """
 
     def test_doubao_uses_the_continuous_frontend(self):

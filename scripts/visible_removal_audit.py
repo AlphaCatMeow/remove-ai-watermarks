@@ -15,11 +15,11 @@ fill), not ``cv2``. Removal SUCCESS (detector-clean) is backend-independent, so 
 is fine for a fast pass/fail sweep, but only migan/lama reflect the recovered-region
 quality a user actually gets. Run migan when validating the visible pipeline for real.
 
-Operates on gitignored data only (data/spaces/...); writes nothing tracked.
+Operates on gitignored local data only; writes nothing tracked.
 
     uv run python scripts/visible_removal_audit.py \
-        --corpus data/spaces/originals --out data/spaces/_visible_audit.csv \
-        --dataset-root data/spaces/_visible_datasets
+        --corpus .local-eval/originals --out .local-eval/visible-audit.csv \
+        --dataset-root .local-eval/visible-datasets
 """
 
 from __future__ import annotations
@@ -48,10 +48,16 @@ def _rel(p: Path, corpus: Path) -> str:
 
 @click.command()
 @click.option(
-    "--corpus", type=click.Path(exists=True, file_okay=False, path_type=Path), default=Path("data/spaces/originals")
+    "--corpus",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=Path(".local-eval/originals"),
 )
-@click.option("--out", type=click.Path(path_type=Path), default=Path("data/spaces/_visible_audit.csv"))
-@click.option("--dataset-root", type=click.Path(path_type=Path), default=Path("data/spaces/_visible_datasets"))
+@click.option("--out", type=click.Path(path_type=Path), default=Path(".local-eval/visible-audit.csv"))
+@click.option(
+    "--dataset-root",
+    type=click.Path(path_type=Path),
+    default=Path(".local-eval/visible-datasets"),
+)
 @click.option(
     "--paths-file",
     type=click.Path(exists=True, path_type=Path),

@@ -545,6 +545,29 @@ class TestAllCommand:
         assert "remove-ai-watermarks[gpu]" in result.output
         assert output.exists()  # visible + metadata still produced a file
 
+    def test_all_reports_metadata_that_survived_stripping(self, runner, sample_png, tmp_path):
+        """The full pipeline must verify the metadata result before reporting success.
+
+        ``remove_ai_metadata`` is deliberately fail-safe and may copy an undecodable
+        input through unchanged. Calling it directly let ``all`` print a successful
+        strip even when a marker survived.
+        """
+        output = tmp_path / "clean.png"
+        with (
+            patch("remove_ai_watermarks.invisible_engine.is_available", return_value=True),
+            patch("remove_ai_watermarks.cli._should_skip_invisible_scrub", return_value=True),
+            patch(
+                "remove_ai_watermarks.metadata.strip_and_verify",
+                return_value=(tmp_path / "intermediate.png", {"c2pa": True}),
+            ),
+        ):
+            result = runner.invoke(main, ["all", str(sample_png), "-o", str(output)])
+
+        assert result.exit_code != 0
+        assert "metadata" in result.output.lower()
+        assert "survived" in result.output.lower()
+        assert "AI metadata stripped" not in result.output
+
     def test_all_preserves_rgba_across_invisible_step(self, runner, tmp_path):
         """Regression: ``all`` must keep transparency even when the invisible
         step writes a 3-channel result (as the real diffusion engine does).
@@ -610,8 +633,8 @@ class TestMetadataCommand:
 
         That is correct (never crash a worker on a partial upload) but the command used
         to print "AI metadata stripped ->" and exit 0 for it, so a caller could not tell
-        a real strip from a no-op and the output still read as AI. Found on real Samsung
-        Galaxy S22 C2PA PNGs during the corpus parity audit, 2026-07-19.
+        a real strip from a no-op and the output still read as AI. A Samsung C2PA
+        compatibility case exposed the defect.
         """
         # PNG signature + a C2PA (caBX) chunk, then garbage: the byte scanner sees the
         # marker, PIL cannot decode it.
@@ -672,7 +695,7 @@ class TestIdentifyCommand:
         'AI-generated (fully synthetic)' at the CLI (the ai_source_kind branch)."""
         from pathlib import Path
 
-        sample = Path(__file__).resolve().parent.parent / "data" / "samples" / "chatgpt-1.png"
+        sample = Path(__file__).resolve().parent.parent / "data" / "fixtures" / "provenance" / "chatgpt-1.png"
         if not sample.exists():
             pytest.skip("chatgpt sample not present")
         result = runner.invoke(main, ["identify", str(sample), "--no-visible"])
@@ -1009,7 +1032,7 @@ def test_visible_backend_runtime_error_exits_cleanly(runner, tmp_path, monkeypat
 
     from remove_ai_watermarks import region_eraser
 
-    doubao = Path(__file__).resolve().parent.parent / "data" / "samples" / "doubao-1.png"
+    doubao = Path(__file__).resolve().parent.parent / "data" / "fixtures" / "provenance" / "doubao-1.png"
     if not doubao.exists():
         pytest.skip("doubao sample not present")
 

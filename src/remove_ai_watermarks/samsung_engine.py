@@ -9,8 +9,8 @@ Doubao/Jimeng marks but bottom-left.
 
 Detection matches the bundled glyph silhouette against the corner; removal is the
 shared **localize -> fill** (the glyph-bbox :meth:`footprint_mask` feeds
-``region_eraser``), NOT reverse-alpha. This is one of the registered text-mark engines that
-share :class:`remove_ai_watermarks._text_mark_engine.TextMarkEngine`; this module
+``region_eraser``), NOT reverse-alpha. This module shares
+:class:`remove_ai_watermarks._text_mark_engine.TextMarkEngine` and
 supplies only Samsung's tuned :class:`TextMarkConfig` (bottom-LEFT corner, a lower glyph
 luma since the mark is faint, ``assets/samsung_alpha.png`` -- the detection silhouette,
 solved from the flat captures by ``scripts/visible_alpha_solve.py``). Samsung Galaxy AI

@@ -14,10 +14,10 @@ WHAT "PASS" MEANS HERE
   the exit code looks tidy.
 
 WHY THESE INPUTS
-  Every case is drawn from something real: ~0.2% of corpus uploads are truncated, ~2% carry
-  a mismatched extension, Unicode filenames were issue #17, and a wrapping service will run
+  The suite covers truncated files, mismatched extensions, Unicode filenames, and
+  concurrent access because a wrapping service may run
   concurrent jobs against one path. Decompression bombs and absurd geometry are the cheap
-  denial-of-service shapes any tool taking user uploads must survive.
+  denial-of-service shapes any tool taking untrusted files must survive.
 
 DATA SAFETY
   Builds its own inputs (synthetic, or truncated copies of committed fixtures) inside a
@@ -43,7 +43,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 REPO = Path(__file__).resolve().parents[1]
-SAMPLES = REPO / "data" / "samples"
+SAMPLES = REPO / "data" / "fixtures" / "provenance"
 _UV = shutil.which("uv") or "uv"
 
 # A traceback in the output means the failure escaped the error handling, whatever the
@@ -103,7 +103,7 @@ def graceful(res: Results, case: str, cmd: str, args: list[str], timeout: int = 
 
 
 def make_inputs(tmp: Path) -> dict[str, Path]:
-    """Build the adversarial corpus. Each entry is something a real upload can be."""
+    """Build the adversarial corpus from representative malformed inputs."""
     import numpy as np
 
     from remove_ai_watermarks.image_io import imwrite
@@ -115,7 +115,7 @@ def make_inputs(tmp: Path) -> dict[str, Path]:
     imwrite(good, np.full((600, 800, 3), 128, np.uint8))
     made["good"] = good
 
-    # Truncated: a real PNG cut mid-stream (~0.2% of real uploads).
+    # Truncated PNG cut mid-stream.
     src = SAMPLES / "chatgpt-1.png"
     if src.exists():
         raw = src.read_bytes()
@@ -159,7 +159,7 @@ def make_inputs(tmp: Path) -> dict[str, Path]:
     shutil.copy2(good, rtl)
     made["rtl_filename"] = rtl
 
-    # Mismatched extension: PNG content named .jpg (~2% of real uploads).
+    # Mismatched extension: PNG content named .jpg.
     mismatch = tmp / "png_named_jpg.jpg"
     shutil.copy2(good, mismatch)
     made["mismatched_extension"] = mismatch
@@ -280,8 +280,8 @@ def check_batch_silent_loss(res: Results, tmp: Path, inputs: dict[str, Path]) ->
     """The nastiest shape: NO output files AND a success exit code.
 
     `graceful()` cannot see this class -- it scores exit code and traceback markers, and a
-    run that writes nothing while exiting 0 has neither. Corpus-reproduced 2026-07-20:
-    `batch --mode visible` into a read-only directory wrote 0 of 2 files and exited 0, so a
+    run that writes nothing while exiting 0 has neither. A regression case showed that
+    `batch --mode visible` into a read-only directory could write no files and exit 0, so a
     wrapping service would treat an empty output directory as a completed run. Any check
     for a silent no-op must assert on the ARTIFACTS, not on the status.
     """

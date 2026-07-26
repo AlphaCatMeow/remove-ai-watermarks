@@ -6,8 +6,8 @@ label mandated by China's TC260 standard, a near-white semi-transparent overlay.
 
 Detection matches the bundled glyph silhouette against the corner candidate; removal
 is the shared **localize -> fill** (the glyph-bbox :meth:`footprint_mask` feeds
-``region_eraser``), NOT reverse-alpha. This is one of the registered text-mark engines that
-share :class:`remove_ai_watermarks._text_mark_engine.TextMarkEngine`; this module
+``region_eraser``), NOT reverse-alpha. This module shares
+:class:`remove_ai_watermarks._text_mark_engine.TextMarkEngine` and
 supplies only Doubao's tuned :class:`TextMarkConfig` (bottom-right corner,
 ``assets/doubao_alpha.png`` -- the detection silhouette, rebuilt by
 ``scripts/visible_alpha_solve.py``). Arbitrary-region inpainting still lives in

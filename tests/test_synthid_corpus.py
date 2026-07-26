@@ -15,9 +15,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 import synthid_corpus
 
-SAMPLES_DIR = Path(__file__).resolve().parent.parent / "data" / "samples"
-CORPUS_DIR = Path(__file__).resolve().parent.parent / "data" / "synthid_corpus"
-QUALITY_SET = CORPUS_DIR / "quality_sets" / "full_pipeline_quality_2026-07-25.csv"
+SAMPLES_DIR = Path(__file__).resolve().parent.parent / "data" / "fixtures" / "provenance"
+CORPUS_DIR = Path(__file__).resolve().parent.parent / "data" / "synthid"
+QUALITY_SET = CORPUS_DIR / "full-pipeline-quality.csv"
 
 EXPECTED_QUALITY_SOURCE_FILENAMES = {
     "ChatGPT Image May 30, 2026, 10_31_08 AM.png",
@@ -47,7 +47,15 @@ def test_reusable_quality_set_has_expected_inputs_and_valid_hashes() -> None:
         assert hashlib.sha256(corpus_path.read_bytes()).hexdigest() == row["sha256"]
 
 
-@pytest.mark.skipif(not SAMPLES_DIR.exists(), reason="data/samples not present")
+def test_manifest_matches_canonical_originals() -> None:
+    rows = _manifest_rows(CORPUS_DIR)
+    originals = {path.name for path in (CORPUS_DIR / "originals").iterdir() if path.is_file()}
+
+    assert {row["filename"] for row in rows} == originals
+    assert len({row["sha256"] for row in rows}) == len(rows)
+
+
+@pytest.mark.skipif(not SAMPLES_DIR.exists(), reason="data/fixtures/provenance not present")
 class TestIngest:
     def test_ingest_openai_flags_synthid_metadata(self, tmp_path: Path):
         runner = CliRunner()
@@ -64,8 +72,9 @@ class TestIngest:
         assert row["synthid_metadata"] == "yes"
         assert int(row["width"]) > 0
         assert int(row["height"]) > 0
-        # The copied file lands under images/pos/ with a sha-prefixed name.
-        assert (tmp_path / "images" / "pos" / row["filename"]).exists()
+        assert row["filename"] == "chatgpt-1.png"
+        # Every label shares one canonical originals/ directory.
+        assert (tmp_path / "originals" / row["filename"]).exists()
 
     def test_ingest_firefly_not_flagged(self, tmp_path: Path):
         runner = CliRunner()

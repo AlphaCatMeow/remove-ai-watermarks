@@ -1,14 +1,14 @@
 """Parallel detection pass: list every corpus image carrying a known visible mark.
 
 Why this exists separately from `visible_removal_audit.py`: that audit is single-process,
-so a full-corpus sweep costs ~10 h and running it once per backend costs ~30 h. But its
+so repeated full-dataset sweeps waste time. Its
 expensive half is DETECTION, and detection does not depend on the fill backend. Splitting
 it out means detecting once in parallel and then feeding the positives to the audit via
 its `--paths-file` seam, over a few thousand images instead of forty thousand.
 
 CRASH TOLERANCE IS NOT OPTIONAL AT THIS SCALE
-  cv2/libpng decode native-crash on some real uploads. A plain `ProcessPoolExecutor.map`
-  over 39k files then DEADLOCKS: the worker dies without a Python traceback and the parent
+  cv2/libpng can crash natively on malformed images. A plain `ProcessPoolExecutor.map`
+  over a large dataset can deadlock: the worker dies without a Python traceback and the parent
   waits forever on a result that never arrives (observed 2026-07-19 -- 26 min of work lost
   because results were only written at the end). So this script:
     * writes every result to JSONL as it arrives -- a kill never costs more than a batch;
@@ -16,7 +16,7 @@ CRASH TOLERANCE IS NOT OPTIONAL AT THIS SCALE
     * runs a FRESH pool per batch with a timeout, so one poisoned file costs one batch,
       and that batch is retried serially to find and record the offender.
 
-Corpus images are user uploads: read-only, local analysis, gitignored output.
+Treat input datasets as sensitive and read-only, and keep output gitignored.
 
     uv run python scripts/visible_positives.py --jobs 6
 """
@@ -41,9 +41,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from remove_ai_watermarks.noai.constants import SUPPORTED_FORMATS as _EXTS
 
 REPO = Path(__file__).resolve().parents[1]
-CORPUS = REPO / "data" / "spaces" / "originals"
-OUT = REPO / "data" / "spaces" / "_visible_positives.jsonl"
-PATHS = REPO / "data" / "spaces" / "_visible_positives.txt"
+CORPUS = REPO / ".local-eval" / "originals"
+OUT = REPO / ".local-eval" / "visible-positives.jsonl"
+PATHS = REPO / ".local-eval" / "visible-positives.txt"
 
 
 def _one(path: str) -> dict[str, object]:

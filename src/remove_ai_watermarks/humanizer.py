@@ -89,7 +89,7 @@ def unsharp_mask(image: NDArray, amount: float = 0.5, sigma: float = 1.0) -> NDA
 
 # ── Adaptive polish (target the input's detail level; spare text) ──────────────
 # A capped unsharp scaled to the sharpness deficit, then edge-masked grain to close
-# the rest -- tunable constants. Validated 2026-06-03 on the spaces corpus: a soft
+# the rest -- tunable constants. Compatibility testing showed that a soft
 # gemini_3 face/photo (lap-var 84 vs the 592 of its original) is pulled up to ~327
 # with full polish, while a sharp openai_1 text card (1175 vs 1644) gets near-zero
 # (the deficit is tiny) so text is left alone -- the polish self-limits on text.

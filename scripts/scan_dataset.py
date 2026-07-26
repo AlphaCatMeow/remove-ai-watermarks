@@ -157,7 +157,7 @@ def read_full_exif(
         for t, v in tags.items():
             name = tag_names.get(t, {}).get("name", f"tag_{t}")
             if name == "MakerNote" and isinstance(v, bytes):
-                # full hex, no cap: measured on real uploads, Apple is ~2 KB
+                # Full hex, no cap: some Apple manifests are several kilobytes.
                 # but Canon reaches 28 KB and Sony 38 KB (AF data, serials,
                 # embedded previews) -- a cap would silently drop exactly the
                 # camera-original evidence this scan exists to preserve

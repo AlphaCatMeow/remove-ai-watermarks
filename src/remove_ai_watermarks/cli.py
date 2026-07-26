@@ -193,9 +193,9 @@ _auto_option = click.option(
     "--auto",
     is_flag=True,
     default=False,
-    help="DEPRECATED: controlnet is already the default pipeline, so --auto now only "
-    "enables --adaptive-polish (the content detectors were removed). Use "
-    "--adaptive-polish instead.",
+    help="DEPRECATED: controlnet and adaptive polish are already the defaults, so "
+    "--auto only emits a warning and changes nothing. Use --no-adaptive-polish "
+    "to disable polishing.",
 )
 
 _adaptive_polish_option = click.option(
@@ -210,8 +210,8 @@ _adaptive_polish_option = click.option(
 
 
 # Tiled-diffusion knobs, shared by the diffusion commands (invisible/all/batch).
-# Tiling is the lossless alternative to --max-resolution for large inputs that OOM
-# on MPS/GPU: process at native resolution in overlapping, feather-blended tiles.
+# Tiling avoids an explicit resolution cap for large inputs that OOM on MPS/GPU:
+# it regenerates overlapping tiles at the input's native dimensions.
 def _tile_options(f: Any) -> Any:
     """Apply the --tile / --tile-size / --tile-overlap options to a command."""
     f = click.option(
@@ -229,9 +229,9 @@ def _tile_options(f: Any) -> Any:
     return click.option(
         "--tile/--no-tile",
         default=False,
-        help="Process large images in overlapping tiles instead of one forward pass -- the lossless "
-        "alternative to --max-resolution for inputs that OOM on MPS/GPU. Engages only when the long "
-        "side exceeds --tile-size; pair with --max-resolution 0 (default) to keep native resolution. Default off.",
+        help="Process large images in overlapping tiles instead of one forward pass. This keeps "
+        "the input's native dimensions instead of applying --max-resolution, but still regenerates "
+        "every tile. Engages only when the long side exceeds --tile-size. Default off.",
     )(f)
 
 
@@ -417,8 +417,8 @@ def _remove_visible_auto(
     """Remove every auto-detected visible mark via the registry (localize -> fill).
 
     Routes the ``all``/``batch`` visible step through the same registry path the
-    standalone ``visible`` command uses, so EVERY registered mark is handled (the
-    Gemini sparkle and all registered vendor text marks), not just the sparkle.
+    standalone ``visible`` command uses, so every registered mark is handled rather
+    than only the Gemini sparkle.
     Returns ``(result, label-or-None)``; when no ``in_auto`` mark fires the image is
     returned unchanged with ``None``. ``backend`` selects the shared fill; ``sensitivity``
     controls how hard a borderline mark is trusted (auto reads metadata provenance)."""
@@ -474,10 +474,9 @@ def _write_output_or_exit(output: Path, bgr: NDArray[Any], alpha: NDArray[Any] |
 def _no_visible_mark_exit(source: Path) -> NoReturn:
     """Explain why no visible watermark was removed, then exit non-zero.
 
-    The visible registry handles only known visual marks (the Gemini sparkle and
-    the registered vendor text marks). Most real uploads carry no such mark
-    -- frequently an invisible/metadata watermark instead (e.g. an OpenAI or
-    Gemini image whose only signal is C2PA + SynthID). Returning the input
+    The visible registry handles only known visual marks. Most images carry no
+    registered mark and may instead have an invisible or metadata watermark.
+    Returning the input
     unchanged with exit 0 reads as success to a caller and re-serves the
     watermarked image -- the recurring "it didn't work" report. Instead, run a
     cheap metadata-only :func:`identify`, tell the user what the image actually
@@ -533,9 +532,9 @@ def _no_visible_mark_exit(source: Path) -> NoReturn:
 
 
 # Same value as EXIT_NO_VISIBLE_MARK (2): a distinct-from-success / distinct-from-
-# error code that tells a wrapping service (raiw.cc) "the diffusion scrub was skipped
-# because no invisible watermark was locally detectable", so it can surface the
-# message instead of charging for and serving an unchanged image as done.
+# error code that tells a wrapping service "the diffusion scrub was skipped because
+# no invisible watermark was locally detectable", so it can surface the message
+# instead of treating an unchanged image as a completed removal.
 EXIT_NO_INVISIBLE_SIGNAL = 2
 
 
@@ -639,7 +638,7 @@ def _run_visible_auto(
     console.print(f"  Input:  {source.name}  ({w}x{h})")
     if not removed:
         # write_noop=False means nothing was written, so a pre-existing output is intact.
-        console.print("  No registered visible mark detected.")
+        console.print(f"  No known visible mark detected. Checked: {', '.join(watermark_registry.mark_keys())}.")
         _no_visible_mark_exit(source)
     console.print(f"  Removed: {', '.join(removed)}")
     size_kb = output.stat().st_size / 1024
@@ -737,11 +736,11 @@ def cmd_visible(
 ) -> None:
     """Remove a known visible AI watermark from an image.
 
-    Finds a known mark in its usual place (Gemini sparkle / Doubao-Jimeng-Qwen-Samsung
-    text) via the watermark registry and removes it by LOCALIZING the mark to a mask
-    and filling that mask with the chosen ``--backend`` (auto: best available, LaMa >
-    MI-GAN > cv2). ``--mark auto`` removes every detected mark in one
-    pass. For arbitrary logos/objects, use ``erase``.
+    Finds registered marks in their expected areas and removes them by localizing
+    each mark to a mask, then filling that mask with the selected ``--backend``.
+    ``--mark auto`` removes every detected registry entry in one pass. Run
+    ``--help`` to see the current mark keys. For arbitrary logos and objects, use
+    ``erase``.
     """
     _banner()
     source = _validate_image(source)
@@ -822,7 +821,7 @@ def cmd_erase(
 
     Universal and position-agnostic: removes any logo / watermark / object inside
     the boxes you pass, regardless of color or location. Runs on CPU. Use this
-    for marks the dedicated ``visible`` engines (Gemini, Doubao) do not cover.
+    for marks the dedicated ``visible`` registry does not cover.
     """
     from remove_ai_watermarks.region_eraser import erase
 
@@ -899,7 +898,7 @@ def cmd_erase(
     "--max-resolution",
     type=int,
     default=0,
-    help="Cap long side (px) before diffusion; 0 = native (best quality, like raiw.cc). Raise only on GPU/MPS OOM.",
+    help="Cap long side (px) before diffusion; 0 = native and preserves the most detail. Raise only on GPU/MPS OOM.",
 )
 @_controlnet_scale_option
 @_min_resolution_option
@@ -1096,10 +1095,10 @@ def cmd_metadata(
 def cmd_identify(ctx: click.Context, source: Path, no_visible: bool, as_json: bool) -> None:
     """Identify where an image was made and what watermarks it carries.
 
-    Aggregates C2PA Content Credentials, IPTC "Made with AI" tags, embedded
-    generation parameters, the SynthID metadata proxy, and the visible Gemini
-    sparkle into a single provenance verdict. Absence of signals is reported as
-    "unknown", never as "clean" (stripped metadata leaves no local proof).
+    Aggregates supported C2PA, IPTC, EXIF, XMP, generator, visible-mark, and
+    optional invisible-watermark signals into one provenance verdict. Absence of
+    signals is reported as "unknown", never as "clean" because stripped metadata
+    leaves no local proof.
     """
     from dataclasses import asdict
 
@@ -1189,7 +1188,7 @@ def cmd_identify(ctx: click.Context, source: Path, no_visible: bool, as_json: bo
     "--max-resolution",
     type=int,
     default=0,
-    help="Cap long side (px) before diffusion; 0 = native (best quality, like raiw.cc). Raise only on GPU/MPS OOM.",
+    help="Cap long side (px) before diffusion; 0 = native and preserves the most detail. Raise only on GPU/MPS OOM.",
 )
 @_controlnet_scale_option
 @_min_resolution_option
@@ -1361,12 +1360,16 @@ def cmd_all(
         # ── Step 3: Metadata ──
         console.print("\n  3) AI metadata stripping")
         try:
-            from remove_ai_watermarks.metadata import remove_ai_metadata
+            from remove_ai_watermarks.metadata import strip_and_verify
 
-            remove_ai_metadata(tmp_path, tmp_path)
-            console.print("    AI metadata stripped")
+            _, leftover = strip_and_verify(tmp_path, tmp_path)
         except Exception as e:
-            console.print(f"    Warning: Metadata strip failed: {e}")
+            console.print(f"    Error: metadata strip failed: {e}")
+            raise SystemExit(1) from e
+        if leftover:
+            console.print(f"    Error: metadata stripping was incomplete; {', '.join(sorted(leftover))} survived")
+            raise SystemExit(1)
+        console.print("    AI metadata stripped")
 
         # ── Write final result ──
         # The invisible step (and downstream cv2.IMREAD_COLOR paths) drops alpha,
@@ -1629,7 +1632,7 @@ def _process_batch_image(
     "--max-resolution",
     type=int,
     default=0,
-    help="Cap long side (px) before diffusion; 0 = native (best quality, like raiw.cc). Raise only on GPU/MPS OOM.",
+    help="Cap long side (px) before diffusion; 0 = native and preserves the most detail. Raise only on GPU/MPS OOM.",
 )
 @_min_resolution_option
 @_unsharp_option

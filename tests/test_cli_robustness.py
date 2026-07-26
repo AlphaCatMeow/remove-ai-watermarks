@@ -65,8 +65,8 @@ class TestFailedWriteIsReported:
     def test_batch_counts_a_failed_write_instead_of_exiting_zero(self, tmp_path, bgr, monkeypatch):
         """The worst shape of this bug: no output files AND a success exit code.
 
-        Corpus-reproduced 2026-07-20 -- `batch --mode visible` into a read-only directory
-        wrote ZERO files for 2 inputs and exited 0, so a wrapping service would treat an
+        Regression: `batch --mode visible` into a read-only directory wrote no files
+        and exited 0, so a wrapping service would treat an
         empty output directory as a completed run. The batch loop counts per-image
         exceptions, so the write must RAISE there, never `SystemExit` (which would abort
         the whole run instead of failing one image).

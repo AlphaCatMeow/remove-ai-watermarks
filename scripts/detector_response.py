@@ -57,8 +57,8 @@ READING `mask_hit`
   top-left geometry box, so it covers the stamp by definition. Reported, and flagged.
 
 DATA SAFETY
-  Corpus images are user uploads: read-only, local analysis, gitignored output under
-  data/spaces/. Records source filenames and measurements, never image content.
+  Treat input datasets as sensitive and read-only. Keep generated reports under
+  .local-eval/. Reports record source filenames and measurements, never image content.
 
     uv run python scripts/detector_response.py --n 12          # trial, measures throughput
     uv run python scripts/detector_response.py --n 150         # the real run, resumable
@@ -84,7 +84,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from fill_quality import SLOT_STAMPABLE, STAMPABLE, clean_sources, stamp_any, texture_of
 
 REPO = Path(__file__).resolve().parents[1]
-OUT = REPO / "data" / "spaces" / "_detector_response.jsonl"
+OUT = REPO / ".local-eval" / "detector-response.jsonl"
 
 # 1.0 = the geometry/opacity the engine's own constants assume. The sweep reaches below
 # it (a mark rendered smaller, or a faint translucent overlay -- the class the tophat

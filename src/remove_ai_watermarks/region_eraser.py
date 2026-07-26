@@ -4,7 +4,7 @@ Position- and content-agnostic. You supply the rectangle(s); the eraser inpaints
 whatever is inside, so it removes any visible logo / watermark / object regardless
 of color, style, or location. Localization is the user's responsibility (pass the
 box); restoration runs on CPU. This is the universal fallback for marks the
-deterministic per-generator engines (Gemini sparkle, Doubao) do not cover.
+registered visible detectors do not cover.
 
 Backends:
   - ``cv2`` (default): ``cv2.inpaint`` (Telea / Navier-Stokes). Instant, no extra
@@ -235,8 +235,8 @@ def erase_migan(image_bgr: NDArray[Any], mask: NDArray[Any]) -> NDArray[Any]:
 
     Mask polarity: the shipped ``andraniksargsyan/migan`` ONNX expects 0 = hole
     (inpaint) / 255 = known (keep) -- the INVERSE of this package's 255-erase
-    convention -- so the mask is inverted before feeding the model (corpus-validated
-    2026-07; feeding 255=hole regenerates the whole frame into stripes).
+    convention -- so the mask is inverted before feeding the model. Feeding 255=hole
+    regenerates the whole frame into stripes.
 
     Accepts 1-channel (grayscale) and 4-channel (BGRA) input.
     """

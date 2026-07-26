@@ -21,7 +21,7 @@ from remove_ai_watermarks.doubao_engine import (
     load_image_bgr,
 )
 
-SAMPLE = Path(__file__).resolve().parents[1] / "data" / "samples" / "doubao-1.png"
+SAMPLE = Path(__file__).resolve().parents[1] / "data" / "fixtures" / "provenance" / "doubao-1.png"
 
 
 def _compose(w: int, h: int, bg: float = 100.0):

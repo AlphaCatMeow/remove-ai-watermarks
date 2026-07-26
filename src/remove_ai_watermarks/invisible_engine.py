@@ -226,10 +226,9 @@ class InvisibleEngine:
                 case); a ``max_resolution`` downscale always uses Lanczos. Falls back
                 to Lanczos if the extra is absent.
             tile: Process the diffusion pass in overlapping tiles instead of one
-                forward pass -- the lossless alternative to ``max_resolution`` for
-                large inputs that OOM on MPS/GPU. Engages only when the long side
-                exceeds ``tile_size``. Pair with ``max_resolution=0`` (the default)
-                so the input keeps its native resolution.
+                forward pass. This retains the input's native dimensions instead
+                of applying ``max_resolution``, but each tile is still regenerated.
+                Engages only when the long side exceeds ``tile_size``.
             tile_size: Tile dimension in px (default 1024).
             tile_overlap: Overlap between adjacent tiles in px (default 128).
 

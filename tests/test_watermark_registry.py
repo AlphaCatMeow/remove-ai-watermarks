@@ -9,7 +9,7 @@ import pytest
 
 from remove_ai_watermarks import watermark_registry as reg
 
-DOUBAO_SAMPLE = Path(__file__).resolve().parents[1] / "data" / "samples" / "doubao-1.png"
+DOUBAO_SAMPLE = Path(__file__).resolve().parents[1] / "data" / "fixtures" / "provenance" / "doubao-1.png"
 
 
 class TestCatalog:
@@ -383,7 +383,7 @@ class TestArbiter:
     def test_weak_pill_detection_does_not_confirm_the_jimeng_wordmark(self):
         """The pill is too false-fire-prone (~7%) to grant a sibling `confirmed` trust.
 
-        Corpus-measured defect (2026-07-18): a pill false fire on clean non-ByteDance
+        Regression: a pill false fire on clean non-ByteDance
         content confirmed jimeng, relaxing its NCC gate 0.45 -> 0.3825; jimeng then
         false-fired, and _keep_pill's wordmark arm removed the pill UNRESTRICTED,
         skipping the flatness guard. Closed loop on the default `auto` path.

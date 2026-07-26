@@ -30,12 +30,12 @@ THE KEY
 
 WHAT IT COSTS
   Metadata only. The expensive pixel pass is NOT re-run: which detectors fired is
-  joined from `_visible_positives.jsonl` (the completed full-corpus artifact), per
+  joined from `_visible_positives.jsonl` (a completed local evaluation artifact), per
   the standing rule against relaunching finished sweeps to re-check them.
 
 DATA SAFETY
-  Corpus images are real user uploads: read-only, local analysis, gitignored
-  output. Contact sheets stay under `data/spaces/`; nothing here is committed.
+  Treat input datasets as sensitive and read-only. Contact sheets stay under
+  `.local-eval/`; nothing generated here is committed.
 
     uv run python scripts/vendor_cohort_harvest.py
     uv run python scripts/vendor_cohort_harvest.py --report-only --sheets 12
@@ -57,10 +57,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent))
 
 REPO = Path(__file__).resolve().parents[1]
-CORPUS = REPO / "data" / "spaces" / "originals"
-OUT = REPO / "data" / "spaces" / "_vendor_cohorts.jsonl"
-FIRED = REPO / "data" / "spaces" / "_visible_positives.jsonl"
-SHEET_DIR = REPO / "data" / "spaces" / "_vendor_cohort_sheets"
+CORPUS = REPO / ".local-eval" / "originals"
+OUT = REPO / ".local-eval" / "vendor-cohorts.jsonl"
+FIRED = REPO / ".local-eval" / "visible-positives.jsonl"
+SHEET_DIR = REPO / ".local-eval" / "vendor-cohort-sheets"
 
 # A producer code is `001` + `1` + USCC(18) + a 5-digit app/product suffix, so two
 # codes sharing the USCC are the same legal entity registering different products.
@@ -95,7 +95,7 @@ def _one(path_str: str) -> dict[str, Any] | None:
 
 
 def load_fired() -> dict[str, list[str]]:
-    """path -> detector keys that fired, from the completed full-corpus artifact."""
+    """Map each path to detector keys from a completed local evaluation artifact."""
     if not FIRED.exists():
         print(f"WARNING: {FIRED.name} missing; cohorts will show no detector state")
         return {}
@@ -112,7 +112,7 @@ def scan(limit: int, workers: int, out_path: Path) -> list[dict[str, Any]]:
     pool = sorted(glob.glob(str(CORPUS / "*" / "*")))
     if limit:
         pool = pool[:limit]
-    print(f"scanning {len(pool)} corpus files for TC260 labels  workers={workers}", flush=True)
+    print(f"scanning {len(pool)} local files for TC260 labels  workers={workers}", flush=True)
     rows: list[dict[str, Any]] = []
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as fh, ProcessPoolExecutor(max_workers=workers) as ex:
@@ -218,7 +218,7 @@ def sheets(rows: list[dict[str, Any]], fired: dict[str, list[str]], per: int, mi
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--limit", type=int, default=0, help="cap files scanned (0 = whole corpus)")
+    ap.add_argument("--limit", type=int, default=0, help="cap files scanned (0 = all)")
     ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 4) - 2))
     ap.add_argument("--out", type=Path, default=OUT)
     ap.add_argument("--report-only", action="store_true")
