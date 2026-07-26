@@ -11,6 +11,18 @@ from click.testing import CliRunner
 from PIL import Image
 
 
+def _mock_watermark_runtime_deps(monkeypatch):
+    """Bypass optional GPU imports while testing Qwen Z-Image routing."""
+    from remove_ai_watermarks.noai import watermark_remover
+
+    fake_torch = MagicMock()
+    fake_torch.float16 = object()
+    fake_torch.float32 = object()
+    monkeypatch.setattr(watermark_remover, "torch", fake_torch)
+    monkeypatch.setattr(watermark_remover, "_HAS_TORCH", False)
+    monkeypatch.setattr(watermark_remover, "is_watermark_removal_available", lambda: True)
+
+
 def test_resolution_adaptive_denoise_matches_reference_formula():
     from remove_ai_watermarks.noai.qwen_zimage_pipeline import resolution_adaptive_denoise
 
@@ -298,6 +310,7 @@ def test_cli_qwen_zimage_keeps_upstream_postprocess_default(tmp_image_path, monk
 
     mock_engine = MagicMock()
     mock_engine.remove_watermark.return_value = tmp_image_path
+    monkeypatch.setattr("remove_ai_watermarks.invisible_engine.is_available", lambda: True)
     monkeypatch.setattr("remove_ai_watermarks.invisible_engine.InvisibleEngine", MagicMock(return_value=mock_engine))
 
     result = CliRunner().invoke(
@@ -327,6 +340,7 @@ def test_cli_qwen_zimage_keeps_upstream_postprocess_default(tmp_image_path, monk
 def test_watermark_remover_dispatches_to_full_pipeline(tmp_path, monkeypatch):
     from remove_ai_watermarks.noai.watermark_remover import WatermarkRemover
 
+    _mock_watermark_runtime_deps(monkeypatch)
     source = tmp_path / "source.png"
     output = tmp_path / "output.png"
     Image.new("RGB", (64, 48), (20, 30, 40)).save(source)
@@ -352,6 +366,7 @@ def test_watermark_remover_dispatches_to_full_pipeline(tmp_path, monkeypatch):
 def test_watermark_remover_dispatches_qwen_tiling_to_full_pipeline(tmp_path, monkeypatch):
     from remove_ai_watermarks.noai.watermark_remover import WatermarkRemover
 
+    _mock_watermark_runtime_deps(monkeypatch)
     source = tmp_path / "source.png"
     output = tmp_path / "output.png"
     Image.new("RGB", (96, 80), (20, 30, 40)).save(source)
@@ -425,9 +440,10 @@ def test_qwen_tiling_runs_global_tiles_then_one_full_frame_face_stage(monkeypatc
     assert result.size == image.size
 
 
-def test_qwen_zimage_rejects_runtime_knobs_that_change_fixed_graph(tmp_path):
+def test_qwen_zimage_rejects_runtime_knobs_that_change_fixed_graph(tmp_path, monkeypatch):
     from remove_ai_watermarks.noai.watermark_remover import WatermarkRemover
 
+    _mock_watermark_runtime_deps(monkeypatch)
     with pytest.raises(ValueError, match="fixed Qwen-Image-2512"):
         WatermarkRemover(model_id="custom/model", device="cpu", pipeline="qwen-zimage")
 
