@@ -43,6 +43,7 @@ PyPI API token from the repository.
 waits for the matching source distribution to appear on PyPI, then:
 
 - updates the Homebrew tap formula URL and SHA-256;
+- updates the repository conda recipe version and source-distribution SHA-256;
 - triggers a factory rebuild of the Hugging Face Space.
 
 The workflow can also be started manually with an optional version input.
@@ -52,12 +53,11 @@ If a distribution job fails because a repository or Hugging Face credential is
 invalid, rotate the corresponding GitHub secret and rerun the failed job. A
 manual Homebrew formula update is the fallback when its automation is blocked.
 
-After PyPI publication, update `packaging/conda/recipe.yaml` to the released
-version and the SHA-256 of the published source distribution. Use the published
-artifact rather than a locally built archive as the hash source. Keep the
-recipe's runtime dependencies aligned with the core dependencies in
-`pyproject.toml`; document any conda-forge package that is unavailable and must
-be omitted.
+The conda job uses the published artifact rather than a locally built archive
+as the hash source and commits the resulting recipe change to `main`. Runtime
+dependency mapping remains review-controlled: keep it aligned with the core
+dependencies in `pyproject.toml`, and document any conda-forge package that is
+unavailable and must be omitted.
 
 ## Source distribution boundary
 
@@ -77,8 +77,12 @@ The package uses hatchling through the unpinned `hatchling` build requirement in
 
 The repository includes a conda recipe under `packaging/conda/recipe.yaml`.
 
-The ComfyUI nodes are maintained and versioned separately from this package.
-A library release does not by itself publish a new ComfyUI node version.
+The ComfyUI nodes are maintained and versioned in their own repository. Its
+scheduled workflow detects a newer PyPI library release, updates the dependency
+floor, runs compatibility tests, bumps the node patch version, and publishes to
+the ComfyUI Registry only when those tests pass. The library release event does
+not publish the node package directly, so the registry update follows on that
+schedule rather than inside `distribute.yml`.
 
 ## Release verification
 
