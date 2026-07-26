@@ -15,7 +15,7 @@ uvx uv-outdated
 # reported all-safe (even if it then crashed), but still FAIL on a real finding (no
 # all-safe line) so a genuine CVE is never masked, and fail loud if it never got a
 # verdict at all (so a broken run is never silently skipped).
-secure_out="$(uvx uv-secure --ignore-unfixed 2>&1)" || true
+secure_out="$(uvx uv-secure uv.lock 2>&1)" || true
 printf '%s\n' "$secure_out"
 if ! grep -qE "No vulnerabilities or maintenance issues detected|All dependencies appear safe" <<<"$secure_out"; then
     echo "maintain.sh: uv-secure reported a finding or failed before its verdict -- triage before committing." >&2

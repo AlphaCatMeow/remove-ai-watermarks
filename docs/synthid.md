@@ -421,6 +421,16 @@ conditioning, never by copying original pixels.**
   The plain-SDXL profile was also renamed `default` -> `sdxl` (`default` stays as an
   alias). The 0.10/0.15 numbers in this analysis are the PRE-raise values it was
   measured at. See §5.2.**
+- **Highest-fidelity CUDA option:** `--pipeline qwen-zimage` is the recommended
+  quality mode when preserving face identity matters more than latency, model size,
+  and GPU cost. ControlNet remains the default because it is much cheaper and supports
+  CUDA, XPU, MPS, and CPU, but canny conditioning preserves edges rather than identity.
+  On two direct upstream comparisons, `qwen-zimage` retained substantially more
+  ArcFace identity than polished ControlNet. On 2026-07-25 the exact six-output
+  `visible -> qwen-zimage -> metadata` candidate was negative in the corresponding
+  OpenAI and Gemini oracles. This is a quality recommendation for the measured content,
+  not broad removal certification; very small text can still degrade.
+  See `docs/known-limitations.md` for the metrics, runtime, and validation scope.
 - **Face identity:** canny holds face *structure* but not *identity*. Shipped as the
   optional `--restore-faces` GFPGAN post-pass (`face_restore.py`, the `restore`
   extra, experimental/opt-in, off by default). It runs GFPGAN on the ORIGINAL
@@ -589,7 +599,7 @@ openai.com/verify):
   robust to downscaling by design, and the study's resolution trend says LOWER
   processing res needs LESS strength, so 1024 was never the wall.)
 
-**Certified controlnet floors (Modal GPU sweep `raiw-app/modal_cert.py` + oracle,
+**Certified controlnet floors (isolated Modal GPU sweep + oracle,
 restore OFF, <= 1536, each vendor on its own oracle):** OpenAI **0.20** (2 photoreal x
 seed {1,2,3} = 6/6 clean; the 0.15-flipper is seed-robust at 0.20) and Gemini **0.30**
 (0.20 detected -> 0.30 clean on 2/2 seeds). OpenAI 0.20 transfers to prod
