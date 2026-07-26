@@ -435,6 +435,10 @@ def test_qwen_tiling_runs_global_tiles_then_one_full_frame_face_stage(monkeypatc
     assert all(strength == pytest.approx(resolution_adaptive_denoise(1500, 1500)) for _, strength, _ in global_calls)
     assert all(seed == 0 for _, _, seed in global_calls)
     face_stage.assert_called_once()
+    # Keep this literal independent from the runtime helper: the port deliberately
+    # uses half the upstream face denoise because it lacks the reference latent
+    # noise-mask feather and uses a different sampler/runtime.
+    assert face_stage.call_args.kwargs["strength"] == pytest.approx(0.0296296296)
     assert face_stage.call_args.args[0] is image
     assert face_stage.call_args.args[1].size == image.size
     assert result.size == image.size

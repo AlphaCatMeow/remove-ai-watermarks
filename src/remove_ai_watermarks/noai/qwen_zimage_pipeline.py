@@ -10,7 +10,8 @@ This profile ports the two-stage architecture used by cebeuq/Synthid-Bypass:
 
 The runtime intentionally uses permissively licensed YuNet instead of the reference
 workflow's Ultralytics detector. All diffusion and segmentation models remain the same
-model families and the denoise formulas are direct ports of the reference custom node.
+model families. The adaptive formulas are direct ports, while the face result is scaled
+for this runtime's different sampler and mask-compositing path.
 """
 
 # DiffSynth, torch, transformers, and cv2 expose mostly untyped tensor/array APIs.
@@ -64,6 +65,11 @@ GLOBAL_CFG = 1.0
 FACE_CFG = 1.0
 GLOBAL_CONTROLNET_SCALE = 1.0
 RESIDENT_FACE_MODEL_MIN_VRAM_GIB = 64.0
+# The reference face denoise assumes its ComfyUI detailer sampler, latent
+# noise-mask feather, and inpaint path. Applying that value unchanged to this
+# DiffSynth crop-regeneration port over-processes faces. Paired public-fixture
+# measurements and both provider oracles certified half the reference value.
+FACE_DENOISE_SCALE = 0.5
 
 # The source graph uses normalized Canny thresholds 0.05 and 0.25. OpenCV takes
 # byte thresholds, so round 255*x to the matching integer values.
@@ -893,7 +899,7 @@ class QwenZImagePipeline:
             self._progress("No faces detected; keeping the Qwen global result.")
             return global_result
         masks = self._sam_masks(image, boxes)
-        face_strength = largest_face_denoise(boxes, image.size)
+        face_strength = largest_face_denoise(boxes, image.size) * FACE_DENOISE_SCALE
         return self._run_faces(
             image,
             global_result,

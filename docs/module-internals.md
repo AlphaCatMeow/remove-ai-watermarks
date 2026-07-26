@@ -312,6 +312,14 @@ The profile rejects a custom model identifier. Its global and face model stack
 is fixed by the implementation. When tiling is enabled, only the global stage
 is tiled; the face stage runs once after the tiles are blended.
 
+The resolution and largest-face adaptive formulas remain exact ports of the
+reference workflow. The face stage applies half the reference result because
+this port uses a different sampler and composites regenerated SAM pixels rather
+than using the reference latent inpaint mask and noise feather. Paired face
+evaluations favored this scale on identity, perceptual distance, and full-image
+similarity, and the exact OpenAI and Gemini candidates both passed their
+matching provider oracle. The global stage stays unchanged.
+
 Regression coverage:
 
 - [`test_qwen_zimage_pipeline.py`](../tests/test_qwen_zimage_pipeline.py)
