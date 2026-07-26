@@ -52,6 +52,13 @@ If a distribution job fails because a repository or Hugging Face credential is
 invalid, rotate the corresponding GitHub secret and rerun the failed job. A
 manual Homebrew formula update is the fallback when its automation is blocked.
 
+After PyPI publication, update `packaging/conda/recipe.yaml` to the released
+version and the SHA-256 of the published source distribution. Use the published
+artifact rather than a locally built archive as the hash source. Keep the
+recipe's runtime dependencies aligned with the core dependencies in
+`pyproject.toml`; document any conda-forge package that is unavailable and must
+be omitted.
+
 ## Source distribution boundary
 
 The wheel includes the package under `src/`.
@@ -69,7 +76,6 @@ The package uses hatchling through the unpinned `hatchling` build requirement in
 ## Other channels
 
 The repository includes a conda recipe under `packaging/conda/recipe.yaml`.
-Keep its runtime dependencies aligned with `pyproject.toml`.
 
 The ComfyUI nodes are maintained and versioned separately from this package.
 A library release does not by itself publish a new ComfyUI node version.
@@ -82,4 +88,6 @@ After publication, verify:
 - the package version matches the tag;
 - the Homebrew formula points to the new source distribution;
 - the distribution workflow completed successfully;
+- the repository's conda recipe matches the published version and source
+  distribution;
 - a clean install can run `remove-ai-watermarks --version`.
