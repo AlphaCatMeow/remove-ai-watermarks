@@ -1,9 +1,9 @@
 [project]
 name = "remove-ai-watermarks"
-version = "0.18.0"
+version = "0.20.0"
 description = "AI watermark remover: strip visible and invisible AI watermarks (Gemini / Nano Banana sparkle, SynthID) and provenance metadata (C2PA, EXIF) from images"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.10.1"
 license = {text = "Apache-2.0"}
 keywords = [
     "ai-watermark",
@@ -92,6 +92,15 @@ gpu = [
     "tokenizers>=0.22,<0.23",
     "accelerate>=0.25.0",
     "safetensors",
+]
+# Full two-stage high-fidelity profile: Qwen-Image-2512 Lightning + DiffSynth
+# Canny ControlNet for the frame, then SAM-masked Z-Image Turbo face repair.
+# CUDA-only and intentionally separate from the normal gpu extra because the
+# additional model stack and DiffSynth runtime are large.
+qwen-zimage = [
+    "remove-ai-watermarks[gpu]",
+    "diffsynth>=2.0.17,<3",
+    "torchvision>=0.20.0",
 ]
 # Open invisible-watermark (imwatermark) decoder for detecting the DWT-DCT
 # watermarks embedded by Stable Diffusion / SDXL / FLUX. Optional because it

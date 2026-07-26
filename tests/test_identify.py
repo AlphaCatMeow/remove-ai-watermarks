@@ -171,6 +171,23 @@ class TestIdentifyNonPng:
         assert r.platform == "ElevenLabs"
         assert not any("SynthID" in w for w in r.watermarks)  # ElevenLabs does not use SynthID
 
+    def test_fal_ai_attributed(self, tmp_path: Path):
+        # fal.ai signs as "fal - Features & Labels Inc." with a "fal-ai/<model>"
+        # claim generator; corpus-measured 2026-07-23 (17 files).
+        path = self._c2pa_jpeg(tmp_path, b"fal - Features & Labels Inc. fal-ai/seedvr trainedAlgorithmicMedia")
+        r = identify(path, check_visible=False, check_invisible=False)
+        assert r.is_ai_generated is True
+        assert r.platform == "fal.ai"
+
+    def test_bria_attributed_without_source_type(self, tmp_path: Path):
+        # Bria signs as "Bria Artificial Intelligence" with source type ``empty``
+        # (NO trainedAlgorithmicMedia) -- a pure-generator asserts_ai vendor, so
+        # the issuer/generator strings alone must flag AI. Corpus-found 2026-07-23.
+        path = self._c2pa_jpeg(tmp_path, b"Bria Artificial Intelligence Bria Ai c2pa.created c2pa.edited")
+        r = identify(path, check_visible=False, check_invisible=False)
+        assert r.is_ai_generated is True
+        assert r.platform == "Bria AI"
+
     def test_stability_ai_issuer_attributed_no_synthid(self, tmp_path: Path):
         path = self._c2pa_jpeg(tmp_path, b"Stability AI ... trainedAlgorithmicMedia")
         r = identify(path, check_visible=False)
@@ -284,6 +301,20 @@ class TestIdentifyRealSamples:
         r = identify(SAMPLES_DIR / "mj-1.png", check_visible=False)
         assert r.is_ai_generated is True
         assert any("IPTC" in w for w in r.watermarks)
+
+    def test_apple_clean_up_attributed(self, tmp_path: Path):
+        # Apple Photos Clean Up (Apple Intelligence object removal) marks the
+        # AI edit via photoshop:Credit next to compositeWithTrainedAlgorithmicMedia
+        # -- it must be attributed, not reported as a generic made-with-AI tag.
+        # Corpus-measured 2026-07-23 (35 files).
+        p = tmp_path / "apple_cleanup.jpg"
+        p.write_bytes(
+            b'\xff\xd8\xff\xe1<x:xmpmeta photoshop:Credit="Apple Photos Clean Up" '
+            b"Iptc4xmpExt:DigitalSourceType=compositeWithTrainedAlgorithmicMedia></x:xmpmeta>\xff\xd9"
+        )
+        r = identify(p, check_visible=False, check_invisible=False)
+        assert r.is_ai_generated is True
+        assert r.platform == "Apple Photos (Clean Up AI edit)"
 
     def test_flux_bfl_c2pa_png(self):
         # flux-1.png: real Black Forest Labs FLUX.2 Playground output (signed C2PA).

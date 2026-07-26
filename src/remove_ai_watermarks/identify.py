@@ -312,6 +312,9 @@ _AI_VENDOR_TOKENS: tuple[tuple[str, str], ...] = (
     ("elevenlabs", "ElevenLabs"),
     ("eleven labs", "ElevenLabs"),
     ("black forest", "Black Forest Labs"),
+    ("fal-ai", "fal.ai"),
+    ("bria", "Bria"),
+    ("apple photos clean up", "Apple"),
 )
 
 
@@ -673,7 +676,15 @@ def identify(image_path: Path, *, check_visible: bool = True, check_invisible: b
         watermarks.append("IPTC digitalSourceType (Made with AI)")
         caveats.append(_IPTC_ONLY_CAVEAT)
         if platform is None:
-            platform = "Made-with-AI tag (e.g. Meta AI); platform not specified"
+            # Apple Photos Clean Up (Apple Intelligence object removal) marks
+            # the edit with photoshop:Credit / IPTC "Apple Photos Clean Up"
+            # next to compositeWithTrainedAlgorithmicMedia -- corpus-measured
+            # 2026-07-23 (35 files); it was detected but never attributed.
+            platform = (
+                "Apple Photos (Clean Up AI edit)"
+                if b"Apple Photos Clean Up" in head
+                else "Made-with-AI tag (e.g. Meta AI); platform not specified"
+            )
 
     # ── IPTC 2025.1 AI-disclosure fields (Iptc4xmpExt:AISystemUsed etc.) ─
     iptc_ai = any(m in head for m in IPTC_AI_FIELD_MARKERS)

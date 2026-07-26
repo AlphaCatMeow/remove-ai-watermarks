@@ -777,6 +777,23 @@ class TestExifGenerator:
         remove_ai_metadata(src, out)
         assert exif_generator(out) is None
 
+    def test_apple_clean_up_removal_parity(self, tmp_path: Path):
+        # The "Apple Photos Clean Up" credit is an AI-edit VALUE under a
+        # non-AI key, so removal must drop it by value too (corpus 2026-07-23).
+        from PIL.PngImagePlugin import PngInfo
+
+        from remove_ai_watermarks.metadata import remove_ai_metadata
+
+        info = PngInfo()
+        info.add_text("Software", "Apple Photos Clean Up")
+        src = tmp_path / "apple.png"
+        Image.new("RGB", (64, 64)).save(src, pnginfo=info)
+        assert exif_generator(src) is not None
+
+        out = tmp_path / "clean.png"
+        remove_ai_metadata(src, out)
+        assert exif_generator(out) is None
+
     def test_imagedescription_tag_ai_tool_detected(self, tmp_path: Path):
         # ...and the EXIF ImageDescription field.
         exif = piexif.dump(

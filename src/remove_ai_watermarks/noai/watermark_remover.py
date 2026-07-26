@@ -1,8 +1,11 @@
 """Watermark removal using diffusion model regeneration attack.
 
-Three pipelines (selected by the explicit ``pipeline`` ctor arg):
+Four pipelines (selected by the explicit ``pipeline`` ctor arg):
 
-0. ``qwen`` -- Qwen-Image (20B MMDiT, Apache-2.0) img2img. The scrub still comes from
+0. ``qwen-zimage`` -- Qwen-Image-2512 Lightning + DiffSynth Canny regenerates the
+   frame, then SAM-masked Z-Image Turbo regenerates original face crops and feathers
+   them into the global result. CUDA-only and installed through its own optional extra.
+1. ``qwen`` -- Qwen-Image (20B MMDiT, Apache-2.0) img2img. The scrub still comes from
    the img2img ``strength``; Qwen preserves text (incl. CJK) and structure markedly
    better than SDXL at the scrub floor, so it over-regenerates real photos far less.
    CUDA/cloud-class (does not fit MPS). See ``watermark_profiles`` for the certified
@@ -11,14 +14,14 @@ Three pipelines (selected by the explicit ``pipeline`` ctor arg):
    is the release gate, not sweeping seeds.)
 
 Two SDXL pipelines:
-1. ``controlnet`` (DEFAULT) -- SDXL img2img with a canny ControlNet. The watermark
+2. ``controlnet`` (DEFAULT) -- SDXL img2img with a canny ControlNet. The watermark
    REMOVAL still comes from the img2img regeneration (``strength``); the ControlNet
    only PRESERVES structure (text/faces) by conditioning on the edge map. No original
    pixels are ever copied or frozen. Because the edge map keeps the regeneration
    closer to the original, it needs a higher ``strength`` floor than ``default`` to
    destroy SynthID (the certified controlnet ladder; see ``watermark_profiles``).
    ``controlnet_conditioning_scale`` is the preservation knob.
-2. ``default`` -- plain SDXL img2img. Partial-noise regeneration scrubs the
+3. ``default`` -- plain SDXL img2img. Partial-noise regeneration scrubs the
    invisible watermark; ``strength`` controls how much is regenerated. Lighter (no
    ControlNet weights), but at the low default strength it leaves SynthID on
    flat-graphic content -- use it for inputs without text/faces.
@@ -47,7 +50,10 @@ from remove_ai_watermarks.noai.watermark_profiles import (
     DEFAULT_MODEL_ID,
     DEFAULT_STRENGTH,
     QWEN_MODEL_ID,
+    QWEN_ZIMAGE_PROFILE,
     normalize_profile,
+    resolve_seed,
+    resolve_steps,
     resolve_strength,
     viable_steps,
 )
@@ -384,14 +390,21 @@ class WatermarkRemover:
         cpu_offload: bool = False,
     ) -> None:
         self.model_id = model_id or self.DEFAULT_MODEL_ID
-        # Stream pipeline submodules to CUDA on demand instead of holding the whole
-        # fp16 pipeline in VRAM -- lets an 8 GB card run SDXL that would otherwise OOM.
+        # Diffusers offloads whole model components between CUDA calls. The custom
+        # qwen-zimage runtime uses the same flag to keep its face stack off VRAM.
         self.cpu_offload = cpu_offload
         # The pipeline profile is threaded explicitly (not inferred from model_id):
         # both "sdxl" and "controlnet" use the same SDXL base checkpoint. Normalize so
         # the legacy "default" alias resolves to "sdxl".
         self.model_profile = normalize_profile(pipeline)
         self.controlnet_conditioning_scale = controlnet_conditioning_scale
+        if self.model_profile == QWEN_ZIMAGE_PROFILE and self.model_id != self.DEFAULT_MODEL_ID:
+            raise ValueError(
+                "The qwen-zimage pipeline uses a fixed Qwen-Image-2512 + Z-Image model stack; "
+                "--model is not supported for this profile."
+            )
+        if self.model_profile == QWEN_ZIMAGE_PROFILE:
+            self.model_id = "Qwen/Qwen-Image-2512 + Tongyi-MAI/Z-Image-Turbo"
 
         if not is_watermark_removal_available():
             _ensure_watermark_deps()
@@ -403,8 +416,8 @@ class WatermarkRemover:
         if torch_dtype is None:
             if self.device == "cpu" or self.device == "mps":
                 self.torch_dtype = torch.float32  # type: ignore
-            elif self.model_profile == "qwen":
-                # Qwen-Image is published in bf16; fp16 risks overflow on the 20B MMDiT.
+            elif self.model_profile in {"qwen", QWEN_ZIMAGE_PROFILE}:
+                # Qwen-Image and Z-Image are published in bf16; fp16 risks overflow.
                 # cuda/xpu-only by construction: the cpu/mps guard above already forced
                 # fp32, and the 20B model does not fit MPS anyway.
                 self.torch_dtype = torch.bfloat16  # type: ignore
@@ -416,6 +429,7 @@ class WatermarkRemover:
         self._pipeline: AutoImg2ImgPipeline | None = None
         self._controlnet_pipeline: Any = None
         self._qwen_pipeline: Any = None
+        self._qwen_zimage_pipeline: Any = None
         self._progress_callback = progress_callback
         self.hf_token: str | None = hf_token or os.environ.get("HF_TOKEN")
 
@@ -430,7 +444,9 @@ class WatermarkRemover:
 
     def preload(self) -> None:
         """Eagerly load the pipeline so download progress bars are visible."""
-        if self.model_profile == "qwen":
+        if self.model_profile == QWEN_ZIMAGE_PROFILE:
+            self._load_qwen_zimage_pipeline().preload()
+        elif self.model_profile == "qwen":
             self._load_qwen_pipeline()
         elif self.model_profile == "controlnet":
             self._load_controlnet_pipeline()
@@ -472,25 +488,29 @@ class WatermarkRemover:
         trigger the torch-CUDA reinstall+restart. Returns the moved pipeline.
         """
         self._set_progress(f"Moving model to device: {self.device}")
-        try:
-            # Low-VRAM CUDA cards (e.g. an 8 GB Pascal card) cannot hold the whole SDXL
-            # fp16 pipeline in VRAM. With --cpu-offload, stream submodules to the GPU on
-            # demand (accelerate hooks) instead of a full .to("cuda"): peak VRAM drops to
-            # roughly the largest single submodule, at the cost of per-step transfers.
-            if self.cpu_offload and self.device == "cuda" and hasattr(pipeline, "enable_model_cpu_offload"):
-                self._set_progress("Enabling CUDA model CPU offload (low-VRAM mode)...")
-                pipeline.enable_model_cpu_offload()
-            else:
+        if self.cpu_offload and self.device == "cuda":
+            enable_cpu_offload = getattr(pipeline, "enable_model_cpu_offload", None)
+            if not callable(enable_cpu_offload):
+                raise RuntimeError(
+                    "CPU offload was requested, but this pipeline does not support enable_model_cpu_offload()."
+                )
+            self._set_progress("Enabling CUDA model CPU offload (low-VRAM mode)...")
+            try:
+                enable_cpu_offload(device=self.device)
+            except (RuntimeError, AssertionError) as exc:
+                raise RuntimeError(f"Failed to enable model CPU offload ({exc}).") from exc
+        else:
+            try:
                 pipeline = pipeline.to(self.device)
-        except (RuntimeError, AssertionError) as exc:
-            if self.device == "cuda" and not os.environ.get(_CUDA_FIX_ENV_KEY):
-                self._set_progress("CUDA failed. Reinstalling torch with CUDA support...")
-                _reinstall_torch_cuda_and_restart()
-            raise RuntimeError(
-                f"Failed to move model to {self.device} ({exc}). "
-                "Install CUDA-enabled PyTorch manually:\n"
-                f"  pip install torch --index-url {_detect_cuda_index_url()}"
-            ) from exc
+            except (RuntimeError, AssertionError) as exc:
+                if self.device == "cuda" and not os.environ.get(_CUDA_FIX_ENV_KEY):
+                    self._set_progress("CUDA failed. Reinstalling torch with CUDA support...")
+                    _reinstall_torch_cuda_and_restart()
+                raise RuntimeError(
+                    f"Failed to move model to {self.device} ({exc}). "
+                    "Install CUDA-enabled PyTorch manually:\n"
+                    f"  pip install torch --index-url {_detect_cuda_index_url()}"
+                ) from exc
 
         if hasattr(pipeline, "enable_xformers_memory_efficient_attention"):
             with contextlib.suppress(Exception):
@@ -623,6 +643,21 @@ class WatermarkRemover:
 
         return self._qwen_pipeline
 
+    def _load_qwen_zimage_pipeline(self) -> Any:
+        """Load the two-stage Qwen-Image-2512 + Z-Image runtime lazily."""
+        if self._qwen_zimage_pipeline is None:
+            from remove_ai_watermarks.noai.qwen_zimage_pipeline import QwenZImagePipeline
+
+            self._qwen_zimage_pipeline = QwenZImagePipeline(
+                device=self.device,
+                torch_dtype=self.torch_dtype,
+                hf_token=self.hf_token,
+                progress_callback=self._progress_callback,
+                controlnet_conditioning_scale=self.controlnet_conditioning_scale,
+                keep_face_models_on_device=False if self.cpu_offload else None,
+            )
+        return self._qwen_zimage_pipeline
+
     # ── Core removal ─────────────────────────────────────────────────
 
     def remove_watermark(
@@ -630,7 +665,7 @@ class WatermarkRemover:
         image_path: Path,
         output_path: Path | None = None,
         strength: float | None = None,
-        num_inference_steps: int = 50,
+        num_inference_steps: int | None = None,
         guidance_scale: float | None = None,
         seed: int | None = None,
         vendor: str | None = None,
@@ -649,7 +684,8 @@ class WatermarkRemover:
                 default (see ``vendor``).
             num_inference_steps: Number of denoising steps.
             guidance_scale: Classifier-free guidance scale.
-            seed: Random seed for reproducibility.
+            seed: Random seed for reproducibility. None resolves to 0 for
+                qwen-zimage and stays random for the other profiles.
             vendor: SynthID vendor (``"openai"`` / ``"google"`` / None) used to pick the
                 default strength when ``strength`` is None. Detect it from the ORIGINAL
                 input with ``watermark_profiles.vendor_for_strength`` before processing
@@ -659,7 +695,7 @@ class WatermarkRemover:
                 The lossless alternative to a ``--max-resolution`` downscale for large
                 inputs that OOM on MPS/GPU (issue #10). Only engages when the long side
                 exceeds ``tile_size``; smaller images run a single pass unchanged.
-            tile_size: Tile dimension in px (default 1024, SDXL's training size).
+            tile_size: Tile dimension in px (default 1024).
             tile_overlap: Overlap between adjacent tiles in px (default 128), feather-
                 blended so there is no visible seam.
             region: Restrict the regeneration to the AI-composited box ``(x, y, w, h)``
@@ -685,18 +721,26 @@ class WatermarkRemover:
         if output_path is None:
             output_path = image_path
 
-        strength = resolve_strength(strength, vendor, self.model_profile)
-
-        if not 0.0 <= strength <= 1.0:
-            raise ValueError(f"Strength must be between 0.0 and 1.0, got {strength}")
-
-        if guidance_scale is None:
-            guidance_scale = 7.5
-
         self._set_progress("Loading and preprocessing input image...")
         init_image = Image.open(image_path).convert("RGB")
         w, h = init_image.size
         self._set_progress(f"Image loaded: {w}x{h}px | Model: {self.model_id}")
+
+        if self.model_profile == QWEN_ZIMAGE_PROFILE:
+            from remove_ai_watermarks.noai.qwen_zimage_pipeline import resolution_adaptive_denoise
+
+            strength = strength if strength is not None else resolution_adaptive_denoise(w, h)
+        else:
+            strength = resolve_strength(strength, vendor, self.model_profile)
+        seed = resolve_seed(seed, self.model_profile)
+        if not 0.0 <= strength <= 1.0:
+            raise ValueError(f"Strength must be between 0.0 and 1.0, got {strength}")
+
+        num_inference_steps = resolve_steps(num_inference_steps, self.model_profile)
+        if guidance_scale is None:
+            guidance_scale = 1.0 if self.model_profile == QWEN_ZIMAGE_PROFILE else 7.5
+        elif self.model_profile == QWEN_ZIMAGE_PROFILE and guidance_scale != 1.0:
+            raise ValueError("The qwen-zimage profile fixes both diffusion stages at CFG 1.0.")
 
         generator = None
         if seed is not None and _HAS_TORCH:
@@ -707,17 +751,26 @@ class WatermarkRemover:
         # inside attention with an opaque reshape error, so raise it to the minimum that
         # denoises. Must be applied to the value HANDED TO THE PIPELINE -- the old
         # max(1, ...) below only clamped the number in the log line.
-        adjusted = viable_steps(num_inference_steps, strength)
-        if adjusted != num_inference_steps:
-            logger.warning(
-                "steps=%s at strength=%s denoises 0 steps and would crash; using steps=%s (1 effective)",
-                num_inference_steps,
-                strength,
-                adjusted,
-            )
-            num_inference_steps = adjusted
+        if self.model_profile != QWEN_ZIMAGE_PROFILE:
+            adjusted = viable_steps(num_inference_steps, strength)
+            if adjusted != num_inference_steps:
+                logger.warning(
+                    "steps=%s at strength=%s denoises 0 steps and would crash; using steps=%s (1 effective)",
+                    num_inference_steps,
+                    strength,
+                    adjusted,
+                )
+                num_inference_steps = adjusted
+        elif num_inference_steps != 4:
+            raise ValueError("The qwen-zimage profile uses the 4-step Lightning LoRA, so --steps must be 4.")
 
-        effective_steps = max(1, int(num_inference_steps * strength))
+        # DiffSynth keeps all timesteps and compresses their sigma range for a low
+        # denoise value. Diffusers instead truncates the schedule by strength.
+        effective_steps = (
+            num_inference_steps
+            if self.model_profile == QWEN_ZIMAGE_PROFILE
+            else max(1, int(num_inference_steps * strength))
+        )
         self._set_progress(
             f"Config: strength={strength}, steps={num_inference_steps} "
             f"(~{effective_steps} effective), guidance={guidance_scale}, device={self.device}"
@@ -733,6 +786,17 @@ class WatermarkRemover:
             return self._run_img2img(img, strength, num_inference_steps, guidance_scale, generator)
 
         def _generate() -> Image.Image:
+            # qwen-zimage owns its global-only tiling because its face stage must run
+            # once after the tiles are blended. Other profiles tile their whole pass.
+            if self.model_profile == QWEN_ZIMAGE_PROFILE:
+                return self._run_qwen_zimage(
+                    init_image,
+                    strength,
+                    seed,
+                    tile=tile,
+                    tile_size=tile_size,
+                    tile_overlap=tile_overlap,
+                )
             # Tile only when asked AND the image is larger than one tile; otherwise a
             # single full-image pass (tiling a sub-tile image is pure overhead).
             if tile and max(init_image.size) > tile_size:
@@ -754,6 +818,7 @@ class WatermarkRemover:
             self.torch_dtype = torch.float32
             self._pipeline = None
             self._controlnet_pipeline = None
+            self._qwen_zimage_pipeline = None
             cleaned_image = _generate()
 
         # Region-targeted regeneration for AI-enhanced composites: keep the real photo
@@ -953,6 +1018,27 @@ class WatermarkRemover:
         result = pipeline(**kwargs)
         return result.images[0]
 
+    def _run_qwen_zimage(
+        self,
+        init_image: Image.Image,
+        strength: float,
+        seed: int | None,
+        *,
+        tile: bool = False,
+        tile_size: int = 1024,
+        tile_overlap: int = 128,
+    ) -> Image.Image:
+        """Run the Qwen 2512 Canny pass and masked Z-Image face repair."""
+        pipeline = self._load_qwen_zimage_pipeline()
+        return pipeline.run(
+            init_image,
+            strength=strength,
+            seed=seed,
+            tile=tile,
+            tile_size=tile_size,
+            tile_overlap=tile_overlap,
+        )
+
     # ── Batch ────────────────────────────────────────────────────────
 
     def remove_watermark_batch(
@@ -960,7 +1046,7 @@ class WatermarkRemover:
         input_dir: Path,
         output_dir: Path,
         strength: float | None = None,
-        num_inference_steps: int = 50,
+        num_inference_steps: int | None = None,
         extensions: tuple[str, ...] = (".png", ".jpg", ".jpeg", ".webp"),
     ) -> list[Path]:
         """Remove watermarks from all images in a directory."""

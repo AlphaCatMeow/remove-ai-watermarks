@@ -18,6 +18,7 @@ external oracle, recorded per image in `verified_via` (see below).
 data/synthid_corpus/
   README.md        # this protocol (committed)
   manifest.csv     # labels + provenance (committed; one row per tracked image)
+  quality_sets/    # reusable test-suite manifests over corpus images
   images/          # the labeled corpus (committed)
     pos/           # SynthID present
     neg/           # SynthID absent (incl. reviewed real photos)
@@ -32,6 +33,28 @@ removed). Before adding any image, confirm it carries no private or
 identifiable content you would not publish -- this is a public repo and git
 history is permanent. The synthetic `refs/` fills stay gitignored (regenerable,
 not part of the labeled set).
+
+## Reusable removal-quality set
+
+`quality_sets/full_pipeline_quality_2026-07-25.csv` is the canonical reusable
+input set for full-pipeline visual-quality and watermark-removal tests. Its
+fixtures are cleared for permanent public test reuse. Tests, benchmarks, and
+manual evaluation bundles may read these images repeatedly without requesting
+new permission.
+
+The CSV preserves each platform's original filename and maps it to the one
+SHA-256-addressed corpus copy. Use `corpus_path` to read the input, but preserve
+`source_filename` in generated result names and keep OpenAI and Gemini outputs
+in separate provider groups. This avoids duplicating large PNGs while retaining
+the names needed for the corresponding provider oracle.
+
+Rows with a dated negative `final_clean_oracle` were checked after the complete
+`visible -> qwen-zimage -> metadata` route with the matching provider oracle.
+`not-checked-in-final-candidate` means the input is available as an additional
+quality stress fixture, but a newly generated output still needs the matching
+oracle before claiming removal. The checked result applies to those exact
+output bytes; re-run the oracle after changing the pipeline, seed, model
+versions, or runtime settings.
 
 ## Verification levels (`verified_via`)
 

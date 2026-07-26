@@ -299,6 +299,22 @@ class TestInvisibleCommand:
         assert output.exists()
         mock_engine.remove_watermark.assert_called_once()
 
+    def test_invisible_cpu_offload_flows_to_engine(self, runner, sample_png, tmp_path):
+        mock_cls, _mock_engine = _mock_invisible_engine()
+        output = tmp_path / "clean.png"
+        with (
+            patch("remove_ai_watermarks.invisible_engine.is_available", return_value=True),
+            patch("remove_ai_watermarks.cli.InvisibleEngine", mock_cls, create=True),
+            patch("remove_ai_watermarks.invisible_engine.InvisibleEngine", mock_cls),
+        ):
+            result = runner.invoke(
+                main,
+                ["invisible", str(sample_png), "-o", str(output), "--cpu-offload", "--force"],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert mock_cls.call_args.kwargs["cpu_offload"] is True
+
     def test_invisible_default_output(self, runner, sample_png):
         mock_cls, _mock_engine = _mock_invisible_engine()
         with (
@@ -455,6 +471,22 @@ class TestAllCommand:
             )
         assert result.exit_code == 0, result.output
         assert output.exists()
+
+    def test_all_cpu_offload_flows_to_engine(self, runner, sample_png, tmp_path):
+        mock_cls, _mock_engine = _mock_invisible_engine()
+        output = tmp_path / "clean.png"
+        with (
+            patch("remove_ai_watermarks.cli.InvisibleEngine", mock_cls, create=True),
+            patch("remove_ai_watermarks.invisible_engine.InvisibleEngine", mock_cls),
+            patch("remove_ai_watermarks.invisible_engine.is_available", return_value=True),
+        ):
+            result = runner.invoke(
+                main,
+                ["all", str(sample_png), "-o", str(output), "--cpu-offload", "--force"],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert mock_cls.call_args.kwargs["cpu_offload"] is True
 
     def test_all_nonexistent_file(self, runner):
         result = runner.invoke(main, ["all", "/nonexistent/file.png"])
@@ -717,6 +749,33 @@ class TestBatchCommand:
             )
         assert result.exit_code == 0, result.output
         assert "3 processed" in result.output
+
+    def test_batch_cpu_offload_flows_to_cached_engine(self, runner, tmp_path):
+        input_dir = _make_batch_dir(tmp_path)
+        output_dir = tmp_path / "output"
+        mock_cls, _mock_engine = _mock_invisible_engine()
+        with (
+            patch("remove_ai_watermarks.cli.InvisibleEngine", mock_cls, create=True),
+            patch("remove_ai_watermarks.invisible_engine.InvisibleEngine", mock_cls),
+            patch("remove_ai_watermarks.cli.invisible_available", return_value=True, create=True),
+            patch("remove_ai_watermarks.invisible_engine.is_available", return_value=True),
+        ):
+            result = runner.invoke(
+                main,
+                [
+                    "batch",
+                    str(input_dir),
+                    "-o",
+                    str(output_dir),
+                    "--mode",
+                    "invisible",
+                    "--cpu-offload",
+                    "--force",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert mock_cls.call_args.kwargs["cpu_offload"] is True
 
     def test_batch_invisible_skips_no_signal_and_copies_through(self, runner, tmp_path):
         """P0#5: batch invisible mode skips the scrub on signal-less images (no

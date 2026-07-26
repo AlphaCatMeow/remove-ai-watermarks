@@ -21,6 +21,8 @@ import click
 from remove_ai_watermarks import __version__, image_io, watermark_registry
 from remove_ai_watermarks.noai.constants import SUPPORTED_FORMATS
 from remove_ai_watermarks.noai.watermark_profiles import (
+    resolve_seed,
+    resolve_steps,
     resolve_strength,
     strength_default_help,
     vendor_for_strength,
@@ -137,6 +139,23 @@ def _validate_image(path: Path) -> Path:
     return path
 
 
+def _resolved_strength_for_display(
+    source: Path,
+    strength: float | None,
+    vendor: str | None,
+    pipeline: str,
+) -> float:
+    """Resolve the same profile-specific strength the engine will execute."""
+    if pipeline == "qwen-zimage" and strength is None:
+        from PIL import Image
+
+        from remove_ai_watermarks.noai.qwen_zimage_pipeline import resolution_adaptive_denoise
+
+        with Image.open(source) as image:
+            return resolution_adaptive_denoise(image.width, image.height)
+    return resolve_strength(strength, vendor, pipeline)
+
+
 # Shared option decorator for commands that run the invisible-watermark pipeline.
 # Both cmd_invisible and cmd_all expose this flag; defining it once avoids
 # copy-paste drift.
@@ -184,8 +203,9 @@ _adaptive_polish_option = click.option(
     default=True,
     help="Restore the input's detail level after removal (capped unsharp + edge-masked grain "
     "targeting the input's sharpness, sparing text), countering the over-smoothed look. ON by "
-    "default; it self-limits where there is no detail deficit (text/flat graphics), so it is a "
-    "no-op there. Pass --no-adaptive-polish to disable. Independent of --unsharp/--humanize.",
+    "default except for qwen-zimage, whose upstream-matching output is left unchanged; it "
+    "self-limits where there is no detail deficit (text/flat graphics). Pass --adaptive-polish "
+    "or --no-adaptive-polish to override. Independent of --unsharp/--humanize.",
 )
 
 
@@ -204,7 +224,7 @@ def _tile_options(f: Any) -> Any:
         "--tile-size",
         type=int,
         default=1024,
-        help="Tile dimension in px for --tile (SDXL's training size). Default 1024.",
+        help="Tile dimension in px for --tile. Default 1024.",
     )(f)
     return click.option(
         "--tile/--no-tile",
@@ -227,8 +247,8 @@ _guidance_scale_option = click.option(
     "--guidance-scale",
     type=float,
     default=None,
-    help="Classifier-free guidance scale (CFG). Default: 7.5 (the library default). "
-    "Lower = follow the prompt less / stay closer to the input.",
+    help="Classifier-free guidance scale (CFG). Default: 7.5, except qwen-zimage "
+    "fixes CFG at 1.0. Lower = follow the prompt less / stay closer to the input.",
 )
 
 
@@ -255,13 +275,15 @@ def _normalize_pipeline(ctx: click.Context, param: click.Parameter, value: str |
 # ``controlnet`` (the default-SELECTED value), ``sdxl`` (plain SDXL img2img) and
 # ``qwen`` (Qwen-Image, CUDA/cloud-class) are the current profiles; ``default`` is an
 # OUTDATED back-compat alias for ``sdxl`` (warned + normalized away by _normalize_pipeline).
-_PIPELINE_CHOICES = ["sdxl", "controlnet", "qwen", "default"]
+_PIPELINE_CHOICES = ["sdxl", "controlnet", "qwen", "qwen-zimage", "default"]
 _PIPELINE_HELP = (
     "Pipeline profile. controlnet (DEFAULT) = SDXL + canny ControlNet that preserves "
     "text/faces via edge conditioning while removing SynthID; sdxl = plain SDXL img2img "
     "(lighter, no extra model download, but leaves SynthID on flat-graphic content); "
     "qwen = Qwen-Image (20B, Apache-2.0) img2img, best text/structure preservation but "
-    "CUDA/cloud-class (does not fit MPS). ('default' is an OUTDATED alias for 'sdxl'.)"
+    "CUDA/cloud-class; qwen-zimage = Qwen-Image-2512 + Lightning + Canny, followed by "
+    "SAM-masked Z-Image face repair (CUDA-only; install the qwen-zimage extra). "
+    "('default' is an OUTDATED alias for 'sdxl'.)"
 )
 
 # Shared --pipeline / --strength decorators so the three diffusion commands
@@ -294,10 +316,10 @@ _cpu_offload_option = click.option(
     "--cpu-offload/--no-cpu-offload",
     default=False,
     help=(
-        "Stream pipeline submodules to the GPU on demand instead of holding the whole "
-        "fp16 pipeline in VRAM (CUDA only). Lets a low-VRAM card (e.g. 8 GB) run SDXL "
-        "that would otherwise OOM, at the cost of speed. Pair with --pipeline sdxl on "
-        "the tightest cards. No effect on cpu/mps."
+        "Offload model components to CPU between CUDA calls instead of keeping the "
+        "whole pipeline in VRAM, at the cost of speed. For qwen-zimage, forces the "
+        "face stack to offload instead of using automatic residency. No effect on "
+        "cpu/mps."
     ),
 )
 
@@ -343,6 +365,19 @@ def _resolve_auto_polish(auto: bool, adaptive_polish: bool) -> bool:
             "enabled is ON by default). Use --no-adaptive-polish to turn the polish off.",
             err=True,
         )
+    return adaptive_polish
+
+
+def _resolve_profile_polish(auto: bool, adaptive_polish: bool, pipeline: str) -> bool:
+    """Keep the upstream qwen-zimage output unchanged unless polish was explicit."""
+    adaptive_polish = _resolve_auto_polish(auto, adaptive_polish)
+    if pipeline != "qwen-zimage":
+        return adaptive_polish
+    ctx = click.get_current_context(silent=True)
+    if ctx is None:
+        return adaptive_polish
+    if ctx.get_parameter_source("adaptive_polish") == click.core.ParameterSource.DEFAULT:
+        return False
     return adaptive_polish
 
 
@@ -837,7 +872,12 @@ def cmd_erase(
     "-o", "--output", type=click.Path(path_type=Path), default=None, help="Output path (default: <source>_clean.<ext>)."
 )
 @_strength_option
-@click.option("--steps", type=int, default=50, help="Number of denoising steps. Default: 50.")
+@click.option(
+    "--steps",
+    type=int,
+    default=None,
+    help="Number of denoising steps. Default: 4 for qwen-zimage, 50 otherwise.",
+)
 @_pipeline_option
 @click.option(
     "--device",
@@ -845,7 +885,12 @@ def cmd_erase(
     default="auto",
     help="Inference device.",
 )
-@click.option("--seed", type=int, default=None, help="Random seed for reproducibility.")
+@click.option(
+    "--seed",
+    type=int,
+    default=None,
+    help="Random seed for reproducibility. Default: 0 for qwen-zimage, random otherwise.",
+)
 @click.option("--hf-token", type=str, default=None, help="HuggingFace API token.")
 @click.option(
     "--humanize", type=float, default=0.0, help="Analog Humanizer film grain intensity (0 = off, typical: 2.0-6.0)."
@@ -873,7 +918,7 @@ def cmd_invisible(
     source: Path,
     output: Path | None,
     strength: float | None,
-    steps: int,
+    steps: int | None,
     pipeline: str,
     device: str,
     seed: int | None,
@@ -910,8 +955,10 @@ def cmd_invisible(
     from remove_ai_watermarks.invisible_engine import InvisibleEngine
 
     source = _validate_image(source)
+    steps = resolve_steps(steps, pipeline)
+    seed = resolve_seed(seed, pipeline)
     _warn_if_esrgan_unavailable(upscaler)
-    adaptive_polish = _resolve_auto_polish(auto, adaptive_polish)
+    adaptive_polish = _resolve_profile_polish(auto, adaptive_polish, pipeline)
     if output is None:
         output = source.with_stem(source.stem + "_clean")
 
@@ -942,7 +989,7 @@ def cmd_invisible(
     vendor = vendor_for_strength(source)
     console.print(f"  Input:    {source.name}")
     console.print(f"  Pipeline: {pipeline}")
-    console.print(f"  Strength: {resolve_strength(strength, vendor, pipeline)}  Steps: {steps}")
+    console.print(f"  Strength: {_resolved_strength_for_display(source, strength, vendor, pipeline)}  Steps: {steps}")
 
     t0 = time.monotonic()
     result_path = engine.remove_watermark(
@@ -1114,7 +1161,12 @@ def cmd_identify(ctx: click.Context, source: Path, no_visible: bool, as_json: bo
 @_visible_backend_option
 @_visible_sensitivity_option
 @_strength_option
-@click.option("--steps", type=int, default=50, help="Number of denoising steps for invisible removal.")
+@click.option(
+    "--steps",
+    type=int,
+    default=None,
+    help="Number of denoising steps. Default: 4 for qwen-zimage, 50 otherwise.",
+)
 @_pipeline_option
 @_model_option
 @click.option(
@@ -1123,7 +1175,12 @@ def cmd_identify(ctx: click.Context, source: Path, no_visible: bool, as_json: bo
     default="auto",
     help="Inference device.",
 )
-@click.option("--seed", type=int, default=None, help="Random seed for reproducibility.")
+@click.option(
+    "--seed",
+    type=int,
+    default=None,
+    help="Random seed for reproducibility. Default: 0 for qwen-zimage, random otherwise.",
+)
 @click.option("--hf-token", type=str, default=None, help="HuggingFace API token.")
 @click.option(
     "--humanize", type=float, default=0.0, help="Analog Humanizer film grain intensity (0 = off, typical: 2.0-6.0)."
@@ -1152,7 +1209,7 @@ def cmd_all(
     backend: str,
     sensitivity: str,
     strength: float | None,
-    steps: int,
+    steps: int | None,
     pipeline: str,
     model: str | None,
     device: str,
@@ -1184,8 +1241,10 @@ def cmd_all(
     """
     _banner()
     source = _validate_image(source)
+    steps = resolve_steps(steps, pipeline)
+    seed = resolve_seed(seed, pipeline)
     _warn_if_esrgan_unavailable(upscaler)
-    adaptive_polish = _resolve_auto_polish(auto, adaptive_polish)
+    adaptive_polish = _resolve_profile_polish(auto, adaptive_polish, pipeline)
 
     if output is None:
         output = source.with_stem(source.stem + "_clean")
@@ -1276,7 +1335,9 @@ def cmd_all(
             # already lost its C2PA to the visible-removal pass, so reading it would
             # always resolve to the unknown-vendor default.
             vendor = vendor_for_strength(source)
-            console.print(f"    Strength: {resolve_strength(strength, vendor, pipeline)}  Steps: {steps}")
+            console.print(
+                f"    Strength: {_resolved_strength_for_display(source, strength, vendor, pipeline)}  Steps: {steps}"
+            )
             inv_engine.remove_watermark(
                 image_path=tmp_path,
                 output_path=tmp_path,
@@ -1539,7 +1600,12 @@ def _process_batch_image(
     "--mode", type=click.Choice(["visible", "invisible", "metadata", "all"]), default="visible", help="Processing mode."
 )
 @_strength_option
-@click.option("--steps", type=int, default=50, help="Number of denoising steps (invisible mode).")
+@click.option(
+    "--steps",
+    type=int,
+    default=None,
+    help="Number of denoising steps. Default: 4 for qwen-zimage, 50 otherwise.",
+)
 @_visible_backend_option
 @_visible_sensitivity_option
 @click.option(
@@ -1552,7 +1618,12 @@ def _process_batch_image(
     default="auto",
     help="Inference device.",
 )
-@click.option("--seed", type=int, default=None, help="Random seed for reproducibility.")
+@click.option(
+    "--seed",
+    type=int,
+    default=None,
+    help="Random seed for reproducibility. Default: 0 for qwen-zimage, random otherwise.",
+)
 @click.option("--hf-token", type=str, default=None, help="HuggingFace API token.")
 @click.option(
     "--max-resolution",
@@ -1578,7 +1649,7 @@ def cmd_batch(
     mode: str,
     output_dir: Path | None,
     strength: float | None,
-    steps: int,
+    steps: int | None,
     pipeline: str,
     device: str,
     seed: int | None,
@@ -1619,7 +1690,9 @@ def cmd_batch(
     console.print(f"  Mode: {mode}")
     if mode in ("invisible", "all"):
         _warn_if_esrgan_unavailable(upscaler)
-    adaptive_polish = _resolve_auto_polish(auto, adaptive_polish)
+    adaptive_polish = _resolve_profile_polish(auto, adaptive_polish, pipeline)
+    steps = resolve_steps(steps, pipeline)
+    seed = resolve_seed(seed, pipeline)
     options = _BatchOptions(
         strength=strength,
         steps=steps,

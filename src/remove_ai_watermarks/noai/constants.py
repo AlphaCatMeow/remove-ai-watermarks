@@ -184,6 +184,20 @@ C2PA_AI_VENDORS: tuple[C2paAiVendor, ...] = (
     # manifest alone marks AI generation. Verified against the mined retained
     # corpus, 2026-06-20. ElevenLabs does not use SynthID.
     C2paAiVendor(b"Eleven Labs", "ElevenLabs", "ElevenLabs", "ElevenLabs"),
+    # fal.ai (generative inference platform, issuer "fal - Features & Labels
+    # Inc." / common name "fal.ai", claim generators like "fal-ai/seedvr",
+    # "fal-ai/gpt-image-2"). Corpus-measured 2026-07-23 on the retained
+    # uploads (17 files): the files carry trainedAlgorithmicMedia, so the
+    # verdict already fired, but the platform stayed unattributed. fal.ai is
+    # a pure generative platform, so ``asserts_ai`` also covers its output
+    # that omits the source-type.
+    C2paAiVendor(b"fal-ai", "fal.ai", "fal.ai", "fal.ai", asserts_ai=True),
+    # Bria AI (bria.ai, generative platform) signs as "Bria Artificial
+    # Intelligence" with a "Bria Ai" claim generator and source type
+    # ``empty`` (NOT trainedAlgorithmicMedia), so a real signed file was
+    # completely missed by identify -- corpus-found 2026-07-23. A pure-AI
+    # vendor with distinctive strings, so ``asserts_ai`` is safe here.
+    C2paAiVendor(b"Bria", "Bria Artificial Intelligence", "Bria AI", "Bria", asserts_ai=True),
     # Truepic is a C2PA signing authority, not an AI generator: no platform label,
     # never asserts is_ai (the verdict comes from the digital-source-type).
     C2paAiVendor(b"Truepic", "Truepic", None, None),
@@ -307,6 +321,13 @@ AI_GENERATOR_TOKENS: frozenset[str] = frozenset(
         "novelai",
         "reve.com",
         "aphrodite ai",
+        # Corpus-mined 2026-07-23:
+        #   - Apple Photos Clean Up (Apple Intelligence object removal): XMP
+        #     photoshop:Credit / IPTC credit value; composite source-type
+        #     covered detection, this token covers removal parity (35 files).
+        #   - fal-ai: generative-platform generator string (17 files).
+        "apple photos clean up",
+        "fal-ai",
     }
 )
 

@@ -1,5 +1,4 @@
 """Collect all raw metadata over a dataset, for later offline analysis.
-
 Read-only; analysis is NOT this script's job. For every image it writes
 one JSONL record containing:
 
@@ -17,15 +16,24 @@ one JSONL record containing:
   download provenance xattrs, Live Photo content identifier. Embedded
   binary blobs are base64'd in full with a 1 MB ceiling per blob.
 
-Everything collected is raw bytes or a mechanical container decode;
-no verdicts, no estimates, no edit-trail interpretation.
+By default everything collected is raw bytes or a mechanical container
+decode; no verdicts, no estimates, no edit-trail interpretation. The
+optional pixel modes add a clearly-separated derived layer (aggregate
+statistics only, still no verdicts).
 
 Usage:
-    python scan_dataset.py /path/to/dataset out_prefix
+    python scan_dataset.py /path/to/dataset out_prefix [--pixels|--pixels-full]
 
 Writes out_prefix.jsonl (one record per file) and out_prefix.csv (flat
 summary for quick sorting). If the prefix ends with .gz, the JSONL is
 gzip-compressed on the fly (3-5x smaller, still streamable line by line).
+
+--pixels adds aggregate pixel forensics to each record (DCT histograms,
+noise/FFT/ELA/gradient/color statistics) from which the image CANNOT be
+reconstructed, plus per-section timing_ms for pipeline latency planning.
+--pixels-full additionally stores the privacy-lifting artifacts (phash,
+128px thumbnail, coarse ELA/noise/FFT-phase maps). Pixel modes require
+numpy; the metadata-only mode needs no numpy.
 
 For a large dataset, parallelize by sharding the input into folders and
 running one process per shard (a multiprocessing pool hangs on macOS once
@@ -48,12 +56,16 @@ Dependencies: pip install pillow piexif c2pa-python pillow-heif
 (pillow-heif is only needed for HEIC/AVIF inputs).
 """
 
+from __future__ import annotations
+
 import base64
 import contextlib
 import csv
+import io
 import json
 import struct
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -111,16 +123,19 @@ def _decode_exif_value(v: Any) -> Any:
     return v
 
 
-def read_full_exif(path: Path, exif_blob: bytes | None = None) -> tuple[dict[str, Any], bytes | None]:
+def read_full_exif(
+    path: Path, exif_blob: bytes | None = None, data: bytes | None = None
+) -> tuple[dict[str, Any], bytes | None]:
     """All EXIF IFDs with decoded tag names (piexif, no re-encode), plus the
     raw embedded-thumbnail bytes for the caller's own thumbnail forensics.
 
     ``exif_blob`` is the PIL-exposed EXIF blob (PNG/WebP/HEIC path) so the
-    caller's single Image.open is not repeated here."""
+    caller's single Image.open is not repeated here. ``data`` is the
+    already-read file bytes so piexif does not re-read the file."""
     import piexif
 
     try:
-        exif = piexif.load(str(path))
+        exif = piexif.load(data) if data is not None else piexif.load(str(path))
     except Exception:
         if not exif_blob:
             return {}, None
@@ -654,7 +669,7 @@ def _sha256_stream(path: Path) -> str:
     return h.hexdigest()
 
 
-def scan_file(path: Path) -> dict[str, Any]:
+def scan_file(path: Path, *, pixel_mode: str | None = None) -> dict[str, Any]:
     stat = path.stat()
     oversized = stat.st_size > _MAX_FULL_READ
     if oversized:
@@ -688,7 +703,7 @@ def scan_file(path: Path) -> dict[str, Any]:
     if live_photo_id:
         record["live_photo_content_id"] = live_photo_id
     record["pil"], record["iptc"], exif_blob = read_pil_info(path)
-    record["exif"], thumbnail = read_full_exif(path, exif_blob)
+    record["exif"], thumbnail = read_full_exif(path, exif_blob, data)
     record["c2pa_store"] = read_c2pa_store(path)
     if data is not None:
         fmt = record["content_format"]
@@ -710,6 +725,75 @@ def scan_file(path: Path) -> dict[str, Any]:
         thumb_forensics = _jpeg_forensics_bytes(thumbnail)
         thumb_forensics["base64"] = _b64(thumbnail)
         record["exif_thumbnail_forensics"] = thumb_forensics
+    if pixel_mode is not None:
+        if oversized:
+            # symmetric with the metadata oversized marker: distinguish
+            # "skipped because oversized" from "decode failed" downstream
+            record["pixel"] = {"skipped": "oversized"}
+        else:
+            record.update(scan_pixels_of(path, full=pixel_mode == "full"))
+    return record
+
+
+def scan_pixels_of(path: Path, *, full: bool) -> dict[str, Any]:
+    """The optional pixel layer for one file (see the pixel-layer section
+    below). Returns {"pixel_error": ...} when numpy is unavailable."""
+    if np is None:
+        return {"pixel_error": "numpy not installed"}
+    t0 = time.perf_counter()
+    timing: dict[str, float] = {}
+    record: dict[str, Any] = {}
+
+    t = time.perf_counter()
+    gray, rgb, info = read_gray(path)
+    record["pixel"] = info
+    timing["decode"] = time.perf_counter() - t
+    if gray is not None:
+        # maps shared between the scalar features and the --pixels-full
+        # artifacts, computed once (the JPEG re-save and the sliding-window
+        # conv are the two most expensive features in the scan)
+        t = time.perf_counter()
+        residual = noise_residual_map(gray)
+        timing["noise"] = time.perf_counter() - t
+        if residual is not None:
+            record["noise"] = noise_features(residual)
+
+        t = time.perf_counter()
+        spectrum = fft_decompose(gray)
+        timing["fft"] = time.perf_counter() - t
+        mag = phase = None
+        if spectrum is not None:
+            mag, phase = spectrum
+            record["fft"] = fft_features(mag)
+
+        t = time.perf_counter()
+        ela = ela_map(rgb)
+        timing["ela"] = time.perf_counter() - t
+        if ela is not None:
+            record["ela"] = ela_features(ela)
+
+        for name, fn, arg in (
+            ("dct", dct_features, gray),
+            ("gradient", gradient_features, gray),
+            ("color", color_features, rgb),
+        ):
+            t = time.perf_counter()
+            try:
+                result = fn(arg)
+            except Exception as exc:
+                result = {"error": _safe_str(exc)}
+            timing[name] = time.perf_counter() - t
+            if result:
+                record[name] = result
+        if full:
+            t = time.perf_counter()
+            try:
+                record["full"] = full_artifacts(gray, rgb, ela=ela, residual=residual, phase=phase)
+            except Exception as exc:
+                record["full"] = {"error": _safe_str(exc)}
+            timing["full_artifacts"] = time.perf_counter() - t
+    timing["total"] = time.perf_counter() - t0
+    record["timing_ms"] = {k: round(v * 1000, 1) for k, v in timing.items()}
     return record
 
 
@@ -728,10 +812,17 @@ def summary_row(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def main() -> None:
-    if len(sys.argv) != 3:
+    flags, positional = set(), []
+    for arg in sys.argv[1:]:
+        (flags.add if arg.startswith("--") else positional.append)(arg)
+    if len(positional) != 2 or flags - {"--pixels", "--pixels-full"}:
         print(__doc__)
         sys.exit(2)
-    root, prefix = Path(sys.argv[1]), sys.argv[2]
+    pixel_mode = "full" if "--pixels-full" in flags else ("basic" if "--pixels" in flags else None)
+    if pixel_mode is not None and np is None:
+        print("pixel modes require numpy: pip install numpy")
+        sys.exit(2)
+    root, prefix = Path(positional[0]), positional[1]
     files = sorted(str(p) for p in root.rglob("*") if p.is_file() and p.suffix.lower() in SUPPORTED)
     # resume: skip files already present in the output of a previous
     # (interrupted) run with the same prefix
@@ -762,7 +853,7 @@ def main() -> None:
             writer.writeheader()
         for path_str in files:
             try:
-                record = scan_file(Path(path_str))
+                record = scan_file(Path(path_str), pixel_mode=pixel_mode)
             except Exception as exc:  # one corrupt file must not kill the scan
                 record = {"file": path_str, "error": _safe_str(exc)}
             jsonl.write(json.dumps(record, default=str) + "\n")
@@ -771,6 +862,237 @@ def main() -> None:
             if n_done % 500 == 0:
                 print(f"  {n_done}/{len(files)}", flush=True)
     print(f"done: {jsonl_name}, {csv_name}")
+
+
+# --- optional pixel layer (--pixels / --pixels-full), requires numpy ---
+
+try:
+    import numpy as np
+    from numpy.lib.stride_tricks import sliding_window_view
+except ImportError:
+    np = None  # type: ignore[assignment]
+
+_MAX_SIDE = 2048  # downscale before analysis; stats are scale-robust
+_DCT_BINS = np.linspace(-20.5, 20.5, 22) if np is not None else None
+_AC_POSITIONS = [(0, 1), (1, 0), (1, 1), (0, 2), (2, 0), (2, 1), (1, 2), (0, 3)]
+_FFT_BANDS = 8
+_BAYER_OFFSETS = [(1, 1), (1, -1)]  # CFA diagonal periodicity candidates
+
+
+def _arr_b64(arr: np.ndarray) -> dict[str, Any]:
+    """Compact array payload for the --full spatial maps."""
+    return {
+        "shape": list(arr.shape),
+        "dtype": str(arr.dtype),
+        "base64": _b64(arr.tobytes()),
+    }
+
+
+def _coarse(arr: np.ndarray, side: int = 64) -> np.ndarray:
+    """Downscale a 2D map to at most `side` on the long edge."""
+    h, w = arr.shape
+    if max(h, w) <= side:
+        return arr
+    img = Image.fromarray(arr.astype(np.float32), mode="F")
+    img.thumbnail((side, side), Image.BILINEAR)
+    return np.asarray(img)
+
+
+def phash(gray: np.ndarray) -> str:
+    """64-bit DCT perceptual hash (invertible to a rough layout; --full only)."""
+    img = Image.fromarray(gray.astype(np.float32), mode="F").resize((32, 32), Image.LANCZOS)
+    small = np.asarray(img)
+    m = _dct_matrix(32)
+    coeff = m @ small @ m.T
+    low = coeff[:8, :8].ravel()[1:]  # drop DC
+    bits = low > np.median(low)
+    return f"{int(''.join('1' if b else '0' for b in bits), 2):016x}"
+
+
+def full_artifacts(
+    gray: np.ndarray,
+    rgb: np.ndarray,
+    *,
+    ela: np.ndarray | None,
+    residual: np.ndarray | None,
+    phase: np.ndarray | None,
+) -> dict[str, Any]:
+    """The privacy-lifting set: phash, thumbnail, ELA map, noise residual,
+    FFT phase. Maps are computed once by the caller and shared with the
+    scalar feature paths."""
+    out: dict[str, Any] = {}
+    out["phash"] = phash(gray)
+    img = Image.fromarray(rgb.astype(np.uint8))
+    img.thumbnail((128, 128), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=70)
+    out["thumbnail_jpeg_b64"] = _b64(buf.getvalue())
+
+    if ela is not None:
+        out["ela_map"] = _arr_b64(_coarse(ela))
+    if residual is not None:
+        clipped = np.clip(residual / 4.0, -1, 1)
+        out["noise_residual"] = _arr_b64(_coarse((clipped * 127).astype(np.int8)))
+    if phase is not None:
+        out["fft_phase"] = _arr_b64(_coarse(phase.astype(np.float32), 32))
+    return out
+
+
+def read_gray(path: Path) -> tuple[np.ndarray | None, np.ndarray | None, dict[str, Any]]:
+    """Decode to float32 grayscale (and RGB for color stats), downscaled."""
+    try:
+        with Image.open(path) as img:
+            info: dict[str, Any] = {"width": img.width, "height": img.height}
+            if max(img.size) > _MAX_SIDE:
+                img.thumbnail((_MAX_SIDE, _MAX_SIDE), Image.LANCZOS)
+            rgb = np.asarray(img.convert("RGB"), dtype=np.float32)
+            gray = np.asarray(img.convert("L"), dtype=np.float32)
+        return gray, rgb, info
+    except Exception as exc:
+        return None, None, {"error": _safe_str(exc)}
+
+
+def _dct_matrix(n: int = 8) -> np.ndarray:
+    """Orthonormal n x n DCT-II basis: M[i, j] = cos(pi (2j + 1) i / 2n)."""
+    i = np.arange(n)[:, None]
+    j = np.arange(n)[None, :]
+    m = np.cos(np.pi * (2 * j + 1) * i / (2 * n))
+    m[0, :] *= 1 / np.sqrt(2)
+    return m * np.sqrt(2 / n)
+
+
+_DCT_M = _dct_matrix() if np is not None else None
+
+
+def dct_features(gray: np.ndarray) -> dict[str, Any]:
+    """AC coefficient histograms over 8x8 block DCT + Benford deviation."""
+    h, w = gray.shape
+    h8, w8 = h // 8 * 8, w // 8 * 8
+    if h8 < 8 or w8 < 8:
+        return {}
+    blocks = gray[:h8, :w8].reshape(h8 // 8, 8, w8 // 8, 8).swapaxes(1, 2)
+    coeff = np.einsum("ij,abjk,lk->abil", _DCT_M, blocks, _DCT_M)
+    hists = []
+    lead_vals: list[np.ndarray] = []
+    for dy, dx in _AC_POSITIONS:
+        vals = coeff[:, :, dy, dx].ravel()
+        hists.append(np.histogram(vals, bins=_DCT_BINS)[0].tolist())
+        lead_vals.append(np.abs(vals))
+    out: dict[str, Any] = {"dct_ac_hist": hists}
+    flat = np.abs(np.concatenate(lead_vals))
+    flat = flat[flat >= 1]
+    if flat.size > 100:
+        leading = (flat / 10 ** np.floor(np.log10(flat))).astype(int)
+        leading = leading[(leading >= 1) & (leading <= 9)]
+        if leading.size > 100:
+            obs = np.bincount(leading, minlength=10)[1:10] / leading.size
+            ben = np.log10(1 + 1 / np.arange(1, 10))
+            out["benford_mad"] = float(np.abs(obs - ben).mean())
+    return out
+
+
+def noise_residual_map(gray: np.ndarray) -> np.ndarray | None:
+    """High-pass residual. The map itself is spatial (shows edges), so it
+    is only stored under --full; the default mode keeps scalar stats."""
+    if gray.shape[0] < 3 or gray.shape[1] < 3:
+        return None
+    k = np.array([[-1.0, -1.0, -1.0], [-1.0, 8.0, -1.0], [-1.0, -1.0, -1.0]])
+    h, w = gray.shape
+    # k is float64, so the residual is float64 like the unchunked form
+    out = np.empty((h - 2, w - 2), dtype=np.float64)
+    # row-chunked: the (win * k) temp is ~150 MB at 2048px if materialized
+    # whole; per-element 9-tap sums are computed in the same order, so the
+    # result is bit-identical to the unchunked form
+    for y0 in range(0, h - 2, 256):
+        y1 = min(y0 + 256, h - 2)
+        win = sliding_window_view(gray[y0 : y1 + 2], (3, 3))
+        out[y0:y1] = (win * k).sum(axis=(-1, -2))
+    return out
+
+
+def noise_features(residual: np.ndarray) -> dict[str, Any]:
+    """High-pass residual std/kurtosis; the residual map is NOT stored."""
+    flat = residual.ravel()
+    std = float(flat.std())
+    if std < 1e-9:
+        return {"noise_std": 0.0, "noise_kurtosis": 0.0}
+    z = (flat - flat.mean()) / std
+    return {"noise_std": std, "noise_kurtosis": float((z**4).mean() - 3.0)}
+
+
+def fft_decompose(gray: np.ndarray) -> tuple[np.ndarray, np.ndarray] | None:
+    """Log-magnitude (fftshifted) and phase of the image spectrum."""
+    if min(gray.shape) < 32:
+        return None
+    spectrum = np.fft.fftshift(np.fft.fft2(gray - gray.mean()))
+    return np.log1p(np.abs(spectrum)), np.angle(spectrum)
+
+
+def fft_features(mag: np.ndarray) -> dict[str, Any]:
+    """Radial magnitude band energies (no phase) + CFA periodicity peaks."""
+    h, w = mag.shape
+    cy, cx = h // 2, w // 2
+    # 1D broadcast instead of an mgrid: saves ~160 MB of int64 temporaries
+    # at 2048px; the squares are exact in float64 (values < 2^53), so band
+    # means are identical to the mgrid form
+    r2y = (np.arange(h, dtype=np.float64) - cy) ** 2
+    r2x = (np.arange(w, dtype=np.float64) - cx) ** 2
+    r = np.sqrt(r2y[:, None] + r2x[None, :])
+    r_max = r.max()
+    bands = []
+    for i in range(_FFT_BANDS):
+        mask = (r >= r_max * i / _FFT_BANDS) & (r < r_max * (i + 1) / _FFT_BANDS)
+        bands.append(float(mag[mask].mean()) if mask.any() else 0.0)
+    # Bayer CFA shows as symmetric peaks at half the Nyquist on diagonals
+    peaks = []
+    for dy, dx in _BAYER_OFFSETS:
+        y, x = cy + dy * (h // 4), cx + dx * (w // 4)
+        neighborhood = mag[y - 2 : y + 3, x - 2 : x + 3]
+        peaks.append(float(neighborhood.max() - mag.mean()))
+    return {"fft_band_energy": bands, "cfa_peaks": peaks, "cfa_peak": max(peaks)}
+
+
+def ela_map(rgb: np.ndarray) -> np.ndarray | None:
+    """Absolute per-pixel error after a q90 JPEG re-save."""
+    try:
+        img = Image.fromarray(rgb.astype(np.uint8))
+        buf = io.BytesIO()
+        img.save(buf, "JPEG", quality=90)
+        buf.seek(0)
+        resaved = np.asarray(Image.open(buf).convert("RGB"), dtype=np.float32)
+    except Exception:
+        return None
+    if resaved.shape != rgb.shape:
+        return None
+    return np.abs(rgb - resaved).mean(axis=-1)
+
+
+def ela_features(err: np.ndarray) -> dict[str, Any]:
+    """Error-level stats after a q90 JPEG re-save; global only, no map."""
+    return {"ela_mean": float(err.mean()), "ela_p95": float(np.percentile(err, 95))}
+
+
+def gradient_features(gray: np.ndarray) -> dict[str, Any]:
+    gy, gx = np.gradient(gray)
+    mag = np.sqrt(gx**2 + gy**2)
+    hist = np.histogram(mag, bins=10, range=(0, 255))[0].tolist()
+    lap = np.gradient(gy, axis=0) + np.gradient(gx, axis=1)
+    return {"gradient_hist": hist, "laplacian_var": float(lap.var())}
+
+
+def color_features(rgb: np.ndarray) -> dict[str, Any]:
+    small = rgb[::4, ::4]  # decimate; histogram is position-blind anyway
+    bins = (small / 256 * 4).astype(int).clip(0, 3)
+    idx = bins[..., 0] * 16 + bins[..., 1] * 4 + bins[..., 2]
+    hist = np.bincount(idx.ravel(), minlength=64).tolist()
+    mx = small.max(axis=-1)
+    mn = small.min(axis=-1)
+    sat = np.where(mx > 0, (mx - mn) / np.maximum(mx, 1e-6), 0)
+    return {
+        "color_hist_4x4x4": hist,
+        "saturation_mean": float(sat.mean()),
+        "value_mean": float(mx.mean() / 255),
+    }
 
 
 if __name__ == "__main__":

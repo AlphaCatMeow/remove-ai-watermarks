@@ -19,7 +19,12 @@ import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .noai.watermark_profiles import DEFAULT_MODEL_ID as DEFAULT_SDXL_MODEL_ID
+from .noai.watermark_profiles import (
+    DEFAULT_MODEL_ID as DEFAULT_SDXL_MODEL_ID,
+)
+from .noai.watermark_profiles import (
+    resolve_seed,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -106,14 +111,17 @@ class InvisibleEngine:
                 that preserves text/face structure via edge conditioning while removing
                 SynthID), "sdxl" (plain SDXL img2img, lighter but leaves SynthID on
                 flat-graphic content), or "qwen" (Qwen-Image 20B img2img, best text/
-                structure preservation but CUDA/cloud-class). "default" aliases "sdxl".
+                structure preservation but CUDA/cloud-class), or "qwen-zimage"
+                (Qwen-Image-2512 Lightning + Canny, then SAM-masked Z-Image face
+                repair; CUDA-only). "default" aliases "sdxl".
             hf_token: HuggingFace API token.
             progress_callback: Optional callback for progress messages.
             controlnet_conditioning_scale: ControlNet structure-preservation
                 strength (controlnet pipeline only).
-            cpu_offload: Stream pipeline submodules to CUDA on demand instead of
-                holding the whole fp16 pipeline in VRAM. Lets a low-VRAM card (e.g.
-                8 GB) run SDXL that would otherwise OOM, at the cost of speed. CUDA only.
+            cpu_offload: Offload model components to CPU between CUDA calls instead
+                of keeping the whole pipeline in VRAM, at the cost of speed. For
+                qwen-zimage, force the face stack to offload instead of using automatic
+                residency. CUDA only.
         """
 
         from remove_ai_watermarks.noai.watermark_remover import WatermarkRemover
@@ -166,7 +174,7 @@ class InvisibleEngine:
         image_path: Path,
         output_path: Path | None = None,
         strength: float | None = None,
-        num_inference_steps: int = 100,
+        num_inference_steps: int | None = None,
         guidance_scale: float | None = None,
         seed: int | None = None,
         humanize: float = 0.0,
@@ -187,9 +195,12 @@ class InvisibleEngine:
             output_path: Output path (None = overwrite source).
             strength: Denoising strength (0.0-1.0). None -> the vendor-adaptive
                 default.
-            num_inference_steps: Number of denoising steps.
+            num_inference_steps: Number of denoising steps. None keeps the existing
+                100-step library default, except qwen-zimage uses its required
+                four-step Lightning schedule.
             guidance_scale: Classifier-free guidance scale.
-            seed: Random seed for reproducibility.
+            seed: Random seed for reproducibility. None resolves to 0 for
+                qwen-zimage and stays random for the other profiles.
             humanize: Intensity of Analog Humanizer film grain (0 = off).
             unsharp: Final unsharp-mask sharpening strength (0 = off, default).
                 Applied last to counter the soft / over-smoothed look of the
@@ -227,6 +238,12 @@ class InvisibleEngine:
         """
         import tempfile
 
+        if num_inference_steps is None:
+            profile = getattr(self._remover, "model_profile", None)
+            num_inference_steps = 4 if profile == "qwen-zimage" else 100
+        profile = getattr(self._remover, "model_profile", "controlnet")
+        seed = resolve_seed(seed, profile)
+
         from PIL import Image, ImageOps
 
         # Resolution policy: a max_resolution cap (0 = none) bounds memory on huge
@@ -247,7 +264,18 @@ class InvisibleEngine:
         # reassigned to the resized copy below; PIL resize returns a new object).
         reference_pil = image
 
-        target = _target_size(image.width, image.height, max_resolution, min_resolution)
+        # qwen-zimage operates at the input's native geometry in its reference graph.
+        # Keep an explicit max cap available for callers, but do not apply the SDXL
+        # 1024px minimum-resolution floor to this profile.
+        effective_min_resolution = (
+            0 if getattr(self._remover, "model_profile", None) == "qwen-zimage" else min_resolution
+        )
+        target = _target_size(
+            image.width,
+            image.height,
+            max_resolution,
+            effective_min_resolution,
+        )
         if target is not None:
             upscaling = max(target) > max(image.width, image.height)
             if self._progress_callback:
@@ -361,9 +389,12 @@ class InvisibleEngine:
         input_dir: Path,
         output_dir: Path,
         strength: float | None = None,
-        steps: int = 50,
+        steps: int | None = None,
     ) -> list[Path]:
         """Remove invisible watermarks from all images in a directory."""
+        if steps is None:
+            profile = getattr(self._remover, "model_profile", None)
+            steps = 4 if profile == "qwen-zimage" else 50
         return self._remover.remove_watermark_batch(
             input_dir=input_dir,
             output_dir=output_dir,

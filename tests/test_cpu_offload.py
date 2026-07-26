@@ -1,12 +1,9 @@
-"""Unit tests for the --cpu-offload device-placement branch (mocked pipeline).
+"""Unit tests for the --cpu-offload device-placement branch.
 
 ``WatermarkRemover._move_to_device_and_optimize`` chooses between a full
-``pipeline.to("cuda")`` and ``enable_model_cpu_offload()`` (low-VRAM streaming).
-Constructing the remover is cheap -- the diffusion pipeline is lazy and the
-device string is not validated -- so the placement decision is exercised with a
-mock pipeline, no model download or GPU required. Gated on torch (the module
-imports it at top), so it runs under the ``gpu`` extra and skips the core CI
-matrix, matching the model-running test policy.
+``pipeline.to("cuda")`` and ``enable_model_cpu_offload()``. The placement
+decision is exercised with a mock pipeline and an uninitialized remover, so the
+core CI matrix needs no diffusion dependency, model download, or GPU.
 """
 
 from __future__ import annotations
@@ -15,13 +12,15 @@ from unittest.mock import Mock
 
 import pytest
 
-pytest.importorskip("torch")
-
 from remove_ai_watermarks.noai.watermark_remover import WatermarkRemover
 
 
 def _remover(device: str, cpu_offload: bool) -> WatermarkRemover:
-    return WatermarkRemover(device=device, pipeline="sdxl", cpu_offload=cpu_offload)
+    remover = WatermarkRemover.__new__(WatermarkRemover)
+    remover.device = device
+    remover.cpu_offload = cpu_offload
+    remover._progress_callback = None
+    return remover
 
 
 class TestCpuOffloadPlacement:
@@ -31,7 +30,7 @@ class TestCpuOffloadPlacement:
 
         returned = remover._move_to_device_and_optimize(pipeline)
 
-        pipeline.enable_model_cpu_offload.assert_called_once_with()
+        pipeline.enable_model_cpu_offload.assert_called_once_with(device="cuda")
         pipeline.to.assert_not_called()
         # Offload leaves the pipeline object in place (accelerate hooks handle it).
         assert returned is pipeline
@@ -54,3 +53,23 @@ class TestCpuOffloadPlacement:
 
         pipeline.to.assert_called_once_with("cpu")
         pipeline.enable_model_cpu_offload.assert_not_called()
+
+    def test_offload_fails_loudly_when_pipeline_lacks_support(self):
+        remover = _remover("cuda", cpu_offload=True)
+        pipeline = Mock(spec=["to"])
+
+        with pytest.raises(RuntimeError, match="does not support"):
+            remover._move_to_device_and_optimize(pipeline)
+
+        pipeline.to.assert_not_called()
+
+    def test_qwen_zimage_forces_face_stack_offload(self):
+        remover = _remover("cuda", cpu_offload=True)
+        remover.torch_dtype = object()
+        remover.hf_token = None
+        remover.controlnet_conditioning_scale = 1.0
+        remover._qwen_zimage_pipeline = None
+
+        runtime = remover._load_qwen_zimage_pipeline()
+
+        assert runtime.keep_face_models_on_device is False

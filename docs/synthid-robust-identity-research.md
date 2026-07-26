@@ -249,7 +249,7 @@ from the test set + this doc).
      img2img at the certified strength (0.20 OpenAI, 0.30 Gemini-capped-1536)
      with the canny edge map.
 3. **Oracle validation** on the cert sweep: run the new PhotoMaker variant
-   through `raiw-app/modal_cert.py` over the same 6 image set, certify on the
+   through the isolated Modal certification harness over the same 6 image set, certify on the
    per-vendor oracles. Expected: SynthID cleared (the regeneration is the same)
    AND identity recovered (the embedding adds it back).
 4. **Honest exit criteria.** Ship only if BOTH oracle reads clean AND a small
