@@ -767,12 +767,13 @@ class QwenZImagePipeline:
             log.warning("SAM face-mask refinement failed (%s); using box-derived ellipse masks", exc)
             return _ellipse_masks(boxes, image.size)
 
-    def preload(self) -> None:
-        """Eagerly load both diffusion stages and the face segmentation model."""
+    def preload(self, *, global_only: bool = False) -> None:
+        """Eagerly load the mandatory stage and, by default, the face stack."""
         self._load_qwen()
-        self._load_zimage()
-        self._load_sam()
         _yunet_model_path()
+        if not global_only:
+            self._load_zimage()
+            self._load_sam()
 
     def _run_global(self, image: Image.Image, strength: float, seed: int | None) -> Image.Image:
         pipe, controlnet_input_cls = self._load_qwen()

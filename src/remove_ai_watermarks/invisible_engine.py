@@ -139,9 +139,14 @@ class InvisibleEngine:
         )
         self._progress_callback = progress_callback
 
-    def preload(self) -> None:
-        """Eagerly load the pipeline so download progress is visible."""
-        self._remover.preload()
+    def preload(self, *, global_only: bool = False) -> None:
+        """Eagerly load the pipeline so download progress is visible.
+
+        For ``qwen-zimage``, ``global_only=True`` loads the mandatory Qwen stage
+        and leaves the optional Z-Image and SAM face stack lazy until a face is
+        detected. Other profiles have no optional stage and ignore the flag.
+        """
+        self._remover.preload(global_only=global_only)
 
     def _esrgan_upscale(self, image: Any, target: tuple[int, int]) -> Any:
         """Upscale a PIL image to ``target`` with Real-ESRGAN, else Lanczos.

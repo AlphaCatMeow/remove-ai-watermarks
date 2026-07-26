@@ -440,6 +440,67 @@ def test_qwen_tiling_runs_global_tiles_then_one_full_frame_face_stage(monkeypatc
     assert result.size == image.size
 
 
+def test_global_only_preload_skips_face_models(monkeypatch):
+    from remove_ai_watermarks.noai.qwen_zimage_pipeline import QwenZImagePipeline
+
+    runtime = QwenZImagePipeline(device="cuda", torch_dtype="bf16")
+    qwen = MagicMock()
+    zimage = MagicMock()
+    sam = MagicMock()
+    yunet = MagicMock()
+    monkeypatch.setattr(runtime, "_load_qwen", qwen)
+    monkeypatch.setattr(runtime, "_load_zimage", zimage)
+    monkeypatch.setattr(runtime, "_load_sam", sam)
+    monkeypatch.setattr(
+        "remove_ai_watermarks.noai.qwen_zimage_pipeline._yunet_model_path",
+        yunet,
+    )
+
+    runtime.preload(global_only=True)
+
+    qwen.assert_called_once_with()
+    zimage.assert_not_called()
+    sam.assert_not_called()
+    yunet.assert_called_once_with()
+
+
+def test_full_preload_still_loads_face_models(monkeypatch):
+    from remove_ai_watermarks.noai.qwen_zimage_pipeline import QwenZImagePipeline
+
+    runtime = QwenZImagePipeline(device="cuda", torch_dtype="bf16")
+    qwen = MagicMock()
+    zimage = MagicMock()
+    sam = MagicMock()
+    yunet = MagicMock()
+    monkeypatch.setattr(runtime, "_load_qwen", qwen)
+    monkeypatch.setattr(runtime, "_load_zimage", zimage)
+    monkeypatch.setattr(runtime, "_load_sam", sam)
+    monkeypatch.setattr(
+        "remove_ai_watermarks.noai.qwen_zimage_pipeline._yunet_model_path",
+        yunet,
+    )
+
+    runtime.preload()
+
+    qwen.assert_called_once_with()
+    zimage.assert_called_once_with()
+    sam.assert_called_once_with()
+    yunet.assert_called_once_with()
+
+
+def test_watermark_remover_forwards_global_only_preload(monkeypatch):
+    from remove_ai_watermarks.noai.watermark_remover import WatermarkRemover
+
+    runtime = MagicMock()
+    remover = WatermarkRemover.__new__(WatermarkRemover)
+    remover.model_profile = "qwen-zimage"
+    monkeypatch.setattr(remover, "_load_qwen_zimage_pipeline", lambda: runtime)
+
+    remover.preload(global_only=True)
+
+    runtime.preload.assert_called_once_with(global_only=True)
+
+
 def test_qwen_zimage_rejects_runtime_knobs_that_change_fixed_graph(tmp_path, monkeypatch):
     from remove_ai_watermarks.noai.watermark_remover import WatermarkRemover
 

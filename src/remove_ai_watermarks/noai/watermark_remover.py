@@ -442,10 +442,13 @@ class WatermarkRemover:
 
     # ── Preload ──────────────────────────────────────────────────────
 
-    def preload(self) -> None:
-        """Eagerly load the pipeline so download progress bars are visible."""
+    def preload(self, *, global_only: bool = False) -> None:
+        """Eagerly load the pipeline so download progress bars are visible.
+
+        ``global_only`` applies to qwen-zimage, whose face stage is optional.
+        """
         if self.model_profile == QWEN_ZIMAGE_PROFILE:
-            self._load_qwen_zimage_pipeline().preload()
+            self._load_qwen_zimage_pipeline().preload(global_only=global_only)
         elif self.model_profile == "qwen":
             self._load_qwen_pipeline()
         elif self.model_profile == "controlnet":

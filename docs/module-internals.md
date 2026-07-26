@@ -266,6 +266,10 @@ is the source of truth for:
 - the minimum viable step calculation.
 
 The current profiles are `controlnet`, `sdxl`, `qwen`, and `qwen-zimage`.
+For serverless cold starts, `InvisibleEngine.preload(global_only=True)` loads the
+mandatory Qwen stage and YuNet while leaving the optional Z-Image and SAM face
+stack lazy until a face is detected. The default `preload()` still loads every
+stage.
 `default` is a legacy alias for `sdxl`. There is no content-dependent automatic
 router.
 

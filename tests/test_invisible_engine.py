@@ -35,6 +35,14 @@ class TestInvisibleEngineInit:
         # SDXL base became the default in May 2026 (defeats SynthID v2).
         assert InvisibleEngine.DEFAULT_MODEL_ID == "stabilityai/stable-diffusion-xl-base-1.0"
 
+    def test_preload_forwards_global_only(self):
+        engine = object.__new__(InvisibleEngine)
+        engine._remover = SimpleNamespace(preload=lambda **kwargs: setattr(engine, "_preload_kwargs", kwargs))
+
+        engine.preload(global_only=True)
+
+        assert engine._preload_kwargs == {"global_only": True}
+
 
 class TestNativeOutputSize:
     """Model-side latent-grid rounding must not change the public output size."""
