@@ -114,7 +114,10 @@ Key contracts:
 - The low-level remover is fail-safe and can copy an undecodable file through
   unchanged.
 - A caller that reports success must use `strip_and_verify`, which scans the
-  written output for surviving markers.
+  written output for surviving markers. If the metadata-preserving decoder
+  rejected the container but `image_io` can still decode its raster,
+  `strip_and_verify` normalizes that raster and scans again. A truly undecodable
+  file keeps the surviving-marker result.
 
 Detection and removal must stay in parity. A new marker is incomplete until the
 scanner can find it, the remover can reach every supported placement, and a

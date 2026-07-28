@@ -22,12 +22,35 @@ from remove_ai_watermarks.metadata import (
     iptc_ai_system,
     remove_ai_metadata,
     samsung_genai,
+    strip_and_verify,
     synthid_source,
     xai_signature,
 )
 
 # Real, committed C2PA sample images used to ground the SynthID-source tests.
 SAMPLES_DIR = Path(__file__).resolve().parent.parent / "data" / "fixtures" / "provenance"
+
+
+def _png_chunk(kind: bytes, payload: bytes, *, corrupt_crc: bool = False) -> bytes:
+    """Encode one PNG chunk, optionally corrupting its CRC."""
+    import zlib
+
+    crc = zlib.crc32(kind + payload) & 0xFFFFFFFF
+    if corrupt_crc:
+        crc ^= 1
+    return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", crc)
+
+
+def _corrupt_c2pa_png(path: Path) -> Path:
+    """Write a synthetic PNG that Pillow rejects but OpenCV can decode."""
+    Image.new("RGB", (32, 32), (80, 120, 160)).save(path)
+    png = path.read_bytes()
+    idat_start = png.index(b"IDAT") - 4
+    fake_c2pa = _png_chunk(b"caBX", b"\x00\x00\x00\x10jumbsynthetic-c2pa")
+    bad_exif = _png_chunk(b"eXIf", b"Exif\x00\x00synthetic", corrupt_crc=True)
+    path.write_bytes(png[:idat_start] + fake_c2pa + bad_exif + png[idat_start:])
+    return path
+
 
 # ── Key detection ───────────────────────────────────────────────────
 
@@ -275,6 +298,39 @@ class TestHasAiMetadata:
         result = remove_ai_metadata(truncated, out)
         assert result == out
         assert out.read_bytes() == truncated.read_bytes()
+
+    def test_strip_and_verify_normalizes_decodable_copy_through(self, tmp_path: Path):
+        """A decodable raster must not retain C2PA after verified stripping."""
+        import numpy as np
+
+        from remove_ai_watermarks import image_io
+
+        src = _corrupt_c2pa_png(tmp_path / "source.png")
+        out = tmp_path / "clean.png"
+        assert has_ai_metadata(src)
+        before = image_io.imread(src)
+        assert before is not None
+
+        result, remaining = strip_and_verify(src, out)
+
+        assert result == out
+        assert remaining == {}
+        assert not has_ai_metadata(out)
+        after = image_io.imread(out)
+        assert after is not None
+        assert np.array_equal(after, before)
+
+    def test_strip_and_verify_reports_markers_in_undecodable_copy_through(self, tmp_path: Path):
+        """A truly undecodable file keeps the established fail-safe result."""
+        src = _corrupt_c2pa_png(tmp_path / "source.png")
+        src.write_bytes(src.read_bytes()[: src.stat().st_size // 2])
+        out = tmp_path / "copy.png"
+
+        result, remaining = strip_and_verify(src, out)
+
+        assert result == out
+        assert "c2pa_manifest" in remaining
+        assert out.read_bytes() == src.read_bytes()
 
 
 class TestC2paMarkerIn:

@@ -1091,9 +1091,32 @@ def strip_and_verify(
     exposed this when `metadata --remove` reported success while the output still read
     as AI.
 
+    If markers survive but OpenCV can still decode the raster, the verified path
+    normalizes the container through :mod:`image_io` and scans once more. This
+    intentionally drops standard metadata on that recovery path because the original
+    container is too malformed for the metadata-preserving decoder.
+
     Returns ``(output_path, surviving_markers)``; an empty mapping means a real strip.
     """
     out = remove_ai_metadata(source_path, output_path, keep_standard=keep_standard)
+    remaining = get_ai_metadata(out)
+    if not remaining:
+        return out, {}
+
+    import cv2
+
+    from remove_ai_watermarks import image_io
+
+    image = image_io.imread(out, cv2.IMREAD_UNCHANGED)
+    if image is None:
+        return out, remaining
+    logger.warning(
+        "AI metadata survived stripping; normalizing decodable raster: path=%s fields=%s",
+        out,
+        ",".join(sorted(remaining)),
+    )
+    if not image_io.imwrite(out, image):
+        raise OSError(f"Failed to normalize image after incomplete metadata stripping: {out}")
     return out, get_ai_metadata(out)
 
 

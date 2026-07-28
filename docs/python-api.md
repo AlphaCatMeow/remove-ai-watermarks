@@ -119,7 +119,10 @@ if has_ai_metadata(source):
 
 Use `strip_and_verify` when your application reports that stripping succeeded.
 It checks the written output and returns `(output_path, surviving_markers)`.
-Treat a nonempty `surviving_markers` mapping as a failure.
+When the first strip leaves markers in a malformed but raster-decodable image,
+it normalizes the container through `image_io` and checks again. That recovery
+path preserves the pixels but drops standard metadata. Treat a nonempty
+`surviving_markers` mapping as a failure.
 
 `remove_ai_metadata` is the lower level fail-safe transformer. It may copy an
 undecodable input through unchanged, so its return alone must not be presented

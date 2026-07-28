@@ -178,7 +178,10 @@ cannot parse the input.
 
 `remove_ai_metadata` may copy an undecodable file through unchanged instead of
 raising. User facing callers must use `strip_and_verify` and inspect its
-surviving marker mapping before reporting success. The CLI does this.
+surviving marker mapping before reporting success. `strip_and_verify` recovers
+when `image_io` can still decode the raster by normalizing the container and
+checking again. A truly undecodable file still reports the surviving markers.
+The CLI uses this verified path.
 
 ### Sixteen bit PNG output is not preserved
 
