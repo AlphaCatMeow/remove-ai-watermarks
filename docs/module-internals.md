@@ -136,6 +136,8 @@ metadata extraction from verdict logic:
 
 - `extract_provenance_evidence` reads the supported metadata signals into
   `ProvenanceEvidence`.
+- `evidence_from_metadata_record` normalizes an externally collected nested
+  metadata record into the same evidence type without file access.
 - `identify_from_evidence` evaluates that evidence without reopening the source.
 - `identify` preserves the path-based API and adds the optional registered
   visible-mark and open invisible-watermark decoders after extraction.

@@ -23,6 +23,7 @@ from remove_ai_watermarks.identify import (
     _integrity_clashes,
     _issuers_in,
     _vendor_of,
+    evidence_from_metadata_record,
     extract_provenance_evidence,
     has_invisible_target,
     identify,
@@ -37,6 +38,29 @@ SAMPLES_DIR = Path(__file__).resolve().parent.parent / "data" / "fixtures" / "pr
 
 
 class TestProvenanceEvidence:
+    def test_external_metadata_record_builds_equivalent_evidence(self, tmp_path: Path):
+        path = tmp_path / "external.jpg"
+        signature = "A" * 64
+        artist = "c8045292-06d2-4c7d-b4f0-4f93b94e4801"
+        record = {
+            "pil": {"info:parameters": "Steps: 20, Sampler: Euler"},
+            "exif": {
+                "0th": {
+                    "ImageDescription": f"Signature: {signature}",
+                    "Artist": artist,
+                }
+            },
+        }
+
+        evidence = evidence_from_metadata_record(record, path=path)
+        report = identify_from_evidence(evidence)
+
+        assert evidence.path == path
+        assert evidence.ai_metadata["parameters"] == "Steps: 20, Sampler: Euler"
+        assert evidence.xai_signature is True
+        assert report.is_ai_generated is True
+        assert {signal.name for signal in report.signals} >= {"gen_params", "xai_signature"}
+
     @pytest.mark.parametrize(
         "filename",
         [

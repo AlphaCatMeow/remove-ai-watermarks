@@ -113,6 +113,28 @@ evidence = extract_provenance_evidence(Path("input.png"))
 report = identify_from_evidence(evidence)
 ```
 
+If metadata was collected by another component, normalize its nested record
+without reopening the original file:
+
+```python
+from remove_ai_watermarks.identify import (
+    evidence_from_metadata_record,
+    identify_from_evidence,
+)
+
+record = {
+    "pil": {"info:parameters": "Steps: 20, Sampler: Euler"},
+    "exif": {"0th": {"Software": "Stable Diffusion"}},
+}
+evidence = evidence_from_metadata_record(record, path=Path("input.png"))
+report = identify_from_evidence(evidence)
+```
+
+The normalizer recursively preserves text and byte values. It also decodes
+strings prefixed with `hex:` and fields named `base64` or ending in
+`_base64`. Pass a C2PA manifest-store dictionary in `record["c2pa_store"]`, or
+through the explicit `c2pa_manifest_store` argument.
+
 `identify_from_evidence` does not reopen the source file. It evaluates metadata
 only; registered visible marks and pixel-backed invisible watermarks remain in
 the path-based `identify` call.

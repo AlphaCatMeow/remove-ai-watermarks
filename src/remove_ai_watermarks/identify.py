@@ -19,10 +19,12 @@ never as "clean". See CLAUDE.md "SynthID detection is metadata-only".
 
 from __future__ import annotations
 
+import base64
+import contextlib
 import itertools
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from remove_ai_watermarks.metadata import (
     AI_METADATA_KEYS,
@@ -30,17 +32,27 @@ from remove_ai_watermarks.metadata import (
     IPTC_AI_FIELD_MARKERS,
     IPTC_AI_MARKERS,
     aigc_label,
+    aigc_label_from_metadata,
     c2pa_cloud_manifest_in,
     c2pa_marker_in,
     exif_generator,
+    generator_from_metadata,
     get_ai_metadata,
     huggingface_job,
     iptc_ai_system,
+    iptc_ai_system_in,
     samsung_genai,
+    samsung_genai_in,
     scan_head,
     xai_signature,
+    xai_signature_pair,
 )
-from remove_ai_watermarks.noai.c2pa import cbor_text_after, extract_c2pa_info, soft_binding_vendors_in
+from remove_ai_watermarks.noai.c2pa import (
+    c2pa_info_from_manifest_store,
+    cbor_text_after,
+    extract_c2pa_info,
+    soft_binding_vendors_in,
+)
 from remove_ai_watermarks.noai.constants import (
     C2PA_AI_TOOLS,
     C2PA_AI_VENDORS,
@@ -51,7 +63,6 @@ from remove_ai_watermarks.watermark_registry import GEMINI_SPARKLE_TRUST_CONF
 
 if TYPE_CHECKING:
     from pathlib import Path
-    from typing import Any
 
     from numpy.typing import NDArray
 
@@ -152,6 +163,182 @@ class ProvenanceEvidence:
     xai_signature: bool
     huggingface_job: str | None
     samsung_genai: int | None
+
+
+def _external_metadata(value: Any) -> tuple[list[tuple[str, Any]], bytes]:
+    """Index nested metadata and recover common encoded binary values in one pass."""
+    pairs: list[tuple[str, Any]] = []
+    parts: list[bytes] = []
+
+    def visit(item: Any) -> None:
+        if isinstance(item, dict):
+            mapping = cast("dict[object, Any]", item)
+            for key, nested in mapping.items():
+                key_text = str(key)
+                pairs.append((key_text, nested))
+                parts.append(key_text.encode("utf-8", "replace"))
+                if isinstance(nested, str) and (key_text == "base64" or key_text.endswith("_base64")):
+                    encoded = nested.split("...TRUNCATED", 1)[0]
+                    with contextlib.suppress(ValueError, TypeError):
+                        parts.append(base64.b64decode(encoded, validate=True))
+                visit(nested)
+        elif isinstance(item, (list, tuple)):
+            sequence = cast("list[Any] | tuple[Any, ...]", item)
+            for nested in sequence:
+                visit(nested)
+        elif isinstance(item, bytes):
+            parts.append(item)
+        elif isinstance(item, str):
+            parts.append(item.encode("utf-8", "replace"))
+            if item.startswith("hex:"):
+                with contextlib.suppress(ValueError):
+                    parts.append(bytes.fromhex(item[4:]))
+        elif item is not None:
+            parts.append(str(item).encode("utf-8", "replace"))
+
+    visit(value)
+    return pairs, b"\n".join(parts)
+
+
+def _external_text(value: Any) -> str:
+    if isinstance(value, bytes):
+        return value.decode("latin-1", "replace").strip()
+    if not isinstance(value, str):
+        return str(value).strip()
+    if value.startswith("hex:"):
+        try:
+            return bytes.fromhex(value[4:]).decode("latin-1", "replace").strip()
+        except ValueError:
+            pass
+    return value.strip()
+
+
+def _external_exif_generator(pairs: list[tuple[str, Any]], scan: bytes) -> str | None:
+    candidate_keys = {
+        "software",
+        "make",
+        "artist",
+        "imagedescription",
+        "source",
+        "title",
+        "description",
+        "creatortool",
+    }
+    candidates = [
+        str(value)
+        for key, value in pairs
+        if key.lower().removeprefix("info:") in candidate_keys and isinstance(value, (str, bytes))
+    ]
+    return generator_from_metadata(candidates, scan)
+
+
+def evidence_from_metadata_record(
+    record: dict[str, Any], *, path: Path, c2pa_manifest_store: str | dict[str, Any] | None = None
+) -> ProvenanceEvidence:
+    """Normalize an externally collected metadata record into provenance evidence.
+
+    The record may contain arbitrary nested dictionaries and lists. Text, bytes,
+    hexadecimal values prefixed with ``hex:``, and fields named ``base64`` or
+    ending in ``_base64`` are included in the shared byte scan. No source file is
+    opened.
+    """
+    pairs, scan = _external_metadata(record)
+    store = c2pa_manifest_store
+    if store is None:
+        candidate = record.get("c2pa_store")
+        store = (
+            cast("dict[str, Any]", candidate)
+            if isinstance(candidate, dict)
+            else candidate
+            if isinstance(candidate, str)
+            else None
+        )
+    c2pa_info = c2pa_info_from_manifest_store(store) if store is not None else {}
+
+    ai_metadata: dict[str, str] = {}
+    pil_info = record.get("pil")
+    pil_pairs = cast("dict[str, Any]", pil_info).items() if isinstance(pil_info, dict) else ()
+    for key, value in pil_pairs:
+        normalized_key = key.lower().removeprefix("info:")
+        if normalized_key not in AI_METADATA_KEYS or isinstance(value, (dict, list, tuple)):
+            continue
+        text = value.decode("utf-8", "replace") if isinstance(value, bytes) else str(value)
+        ai_metadata.setdefault(normalized_key, text[:200] + ("…" if len(text) > 200 else ""))
+    for key, value in pairs:
+        if key != "text" or not isinstance(value, str) or "\x00" not in value:
+            continue
+        metadata_key, metadata_value = value.split("\x00", 1)
+        normalized_key = metadata_key.lower()
+        if normalized_key in AI_METADATA_KEYS:
+            ai_metadata.setdefault(
+                normalized_key,
+                metadata_value[:200] + ("…" if len(metadata_value) > 200 else ""),
+            )
+    for key in (
+        "c2pa_manifest",
+        "claim_generator",
+        "c2pa_spec",
+        "issuer",
+        "source_type",
+        "actions",
+        "synthid_watermark",
+        "soft_binding",
+    ):
+        if key in c2pa_info:
+            ai_metadata.setdefault(key, str(c2pa_info[key]))
+
+    iptc_system = iptc_ai_system_in(scan)
+
+    values_by_key: dict[str, str] = {}
+    for key, value in pairs:
+        if isinstance(value, (bytes, str)):
+            values_by_key.setdefault(key.lower(), _external_text(value))
+    description = values_by_key.get("imagedescription", "")
+    artist = values_by_key.get("artist", "")
+    xai = xai_signature_pair(description, artist)
+
+    hf_job = next(
+        (
+            str(value).strip()
+            for key, value in pairs
+            if key.lower().removeprefix("info:") == "hf-job-id" and str(value).strip()
+        ),
+        None,
+    )
+    samsung = samsung_genai_in(scan)
+
+    aigc_candidates = tuple(
+        value for key, value in pairs if key.lower().removeprefix("info:") == "aigc" and isinstance(value, str)
+    )
+    aigc = aigc_label_from_metadata(scan, aigc_candidates)
+    exif_gen = _external_exif_generator(pairs, scan)
+    if aigc is not None:
+        producer = aigc.get("ContentProducer", "")
+        ai_metadata.setdefault(
+            "aigc_label",
+            f"China AIGC label (TC260){f'; producer {producer}' if producer else ''}",
+        )
+    if xai:
+        ai_metadata.setdefault("xai_signature", "xAI/Grok EXIF signature (Artist UUID + Signature blob)")
+    if iptc_system:
+        ai_metadata.setdefault("ai_system", f"IPTC 2025.1 AI disclosure ({iptc_system})")
+    if hf_job:
+        ai_metadata.setdefault("huggingface_job", f"HuggingFace-hosted job ({hf_job})")
+    if samsung is not None:
+        ai_metadata.setdefault("samsung_genai", f"Samsung Galaxy AI editing marker (genAIType={samsung})")
+
+    return ProvenanceEvidence(
+        path=path,
+        c2pa_info=c2pa_info,
+        ai_metadata=ai_metadata,
+        scan=scan,
+        iptc_ai_system=iptc_system,
+        aigc_label=aigc,
+        exif_generator=exif_gen,
+        xai_signature=xai,
+        huggingface_job=hf_job,
+        samsung_genai=samsung,
+    )
 
 
 @dataclass
