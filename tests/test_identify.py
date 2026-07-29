@@ -16,14 +16,17 @@ from unittest.mock import patch
 import pytest
 
 from remove_ai_watermarks.identify import (
+    ProvenanceEvidence,
     ProvenanceReport,
     _ai_tools_in,
     _attribute_platform,
     _integrity_clashes,
     _issuers_in,
     _vendor_of,
+    extract_provenance_evidence,
     has_invisible_target,
     identify,
+    identify_from_evidence,
 )
 from remove_ai_watermarks.watermark_registry import GEMINI_SPARKLE_TRUST_CONF
 
@@ -31,6 +34,56 @@ from remove_ai_watermarks.watermark_registry import GEMINI_SPARKLE_TRUST_CONF
 _SPARKLE_TARGET = "remove_ai_watermarks.gemini_engine.detect_sparkle_confidence"
 
 SAMPLES_DIR = Path(__file__).resolve().parent.parent / "data" / "fixtures" / "provenance"
+
+
+class TestProvenanceEvidence:
+    @pytest.mark.parametrize(
+        "filename",
+        [
+            "chatgpt-1.png",
+            "chatgpt-2.png",
+            "doubao-1.png",
+            "firefly-1.png",
+            "flux-1.jpg",
+            "flux-1.png",
+            "grok-1.jpg",
+            "mj-1.png",
+        ],
+    )
+    def test_metadata_only_identify_matches_extracted_evidence(self, filename: str):
+        path = SAMPLES_DIR / filename
+
+        direct = identify(path, check_visible=False, check_invisible=False)
+        evidence = extract_provenance_evidence(path)
+        extracted = identify_from_evidence(evidence)
+
+        assert isinstance(evidence, ProvenanceEvidence)
+        assert extracted == direct
+
+    def test_identify_from_evidence_does_not_read_the_source(self, monkeypatch, tmp_path: Path):
+        path = tmp_path / "generated.jpg"
+        path.write_bytes(b"\xff\xd8\xff\xe1jumbc2paOpenAI DALL-E trainedAlgorithmicMedia\xff\xd9")
+        evidence = extract_provenance_evidence(path)
+
+        def fail_if_called(*args, **kwargs):
+            raise AssertionError("identify_from_evidence must not read the source file")
+
+        monkeypatch.setattr("remove_ai_watermarks.identify.extract_c2pa_info", fail_if_called)
+        monkeypatch.setattr("remove_ai_watermarks.identify.get_ai_metadata", fail_if_called)
+        monkeypatch.setattr("remove_ai_watermarks.identify.scan_head", fail_if_called)
+        monkeypatch.setattr("remove_ai_watermarks.identify.iptc_ai_system", fail_if_called)
+        monkeypatch.setattr("remove_ai_watermarks.identify.aigc_label", fail_if_called)
+        monkeypatch.setattr("remove_ai_watermarks.identify.exif_generator", fail_if_called)
+        monkeypatch.setattr("remove_ai_watermarks.identify.xai_signature", fail_if_called)
+        monkeypatch.setattr("remove_ai_watermarks.identify.huggingface_job", fail_if_called)
+        monkeypatch.setattr("remove_ai_watermarks.identify.samsung_genai", fail_if_called)
+        monkeypatch.setattr("builtins.open", fail_if_called)
+        monkeypatch.setattr(Path, "open", fail_if_called)
+
+        report = identify_from_evidence(evidence)
+
+        assert report.is_ai_generated is True
+        assert any(signal.name == "c2pa" for signal in report.signals)
 
 
 # ── Pure attribution logic (no file IO) ─────────────────────────────

@@ -131,9 +131,14 @@ Regression coverage:
 
 ### Provenance report
 
-[`identify.py`](../src/remove_ai_watermarks/identify.py) combines metadata,
-registered visible marks, and optional open invisible-watermark decoders into a
-`ProvenanceReport`.
+[`identify.py`](../src/remove_ai_watermarks/identify.py) separates file-backed
+metadata extraction from verdict logic:
+
+- `extract_provenance_evidence` reads the supported metadata signals into
+  `ProvenanceEvidence`.
+- `identify_from_evidence` evaluates that evidence without reopening the source.
+- `identify` preserves the path-based API and adds the optional registered
+  visible-mark and open invisible-watermark decoders after extraction.
 
 `is_ai_generated` is `True` or `None`; absence of evidence is not reported as a
 human-made verdict. `ai_source_kind` distinguishes fully generated content from

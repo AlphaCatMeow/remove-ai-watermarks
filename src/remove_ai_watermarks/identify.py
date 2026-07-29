@@ -132,6 +132,28 @@ class Signal:
     confidence: str  # "high" | "medium"
 
 
+@dataclass(frozen=True)
+class ProvenanceEvidence:
+    """Extracted metadata evidence used by provenance detection.
+
+    Extraction is intentionally separate from verdict logic so a caller can
+    collect the file-backed evidence once and evaluate it without reopening the
+    source. Pixel-backed visible and invisible watermark checks remain part of
+    :func:`identify`.
+    """
+
+    path: Path
+    c2pa_info: dict[str, Any]
+    ai_metadata: dict[str, str]
+    scan: bytes
+    iptc_ai_system: str | None
+    aigc_label: dict[str, str] | None
+    exif_generator: str | None
+    xai_signature: bool
+    huggingface_job: str | None
+    samsung_genai: int | None
+
+
 @dataclass
 class ProvenanceReport:
     """Aggregated provenance verdict for one image."""
@@ -164,6 +186,22 @@ class ProvenanceReport:
     # AI-generation markers). Non-empty means the provenance is internally
     # inconsistent -- a strong tell of spoofed, transplanted, or laundered metadata.
     integrity_clashes: list[str] = field(default_factory=list[str])
+
+
+def extract_provenance_evidence(image_path: Path) -> ProvenanceEvidence:
+    """Read all file-backed metadata needed by provenance verdict logic once."""
+    return ProvenanceEvidence(
+        path=image_path,
+        c2pa_info=extract_c2pa_info(image_path),
+        ai_metadata=get_ai_metadata(image_path),
+        scan=scan_head(image_path, _SCAN_BYTES),
+        iptc_ai_system=iptc_ai_system(image_path),
+        aigc_label=aigc_label(image_path),
+        exif_generator=exif_generator(image_path),
+        xai_signature=xai_signature(image_path),
+        huggingface_job=huggingface_job(image_path),
+        samsung_genai=samsung_genai(image_path),
+    )
 
 
 def _issuers_in(data: bytes) -> list[str]:
@@ -549,29 +587,25 @@ def _collect_visible_signals(
     return platform
 
 
-def identify(image_path: Path, *, check_visible: bool = True, check_invisible: bool = True) -> ProvenanceReport:
-    """Identify an image's origin platform and watermark inventory.
+def _identify_from_evidence(
+    evidence: ProvenanceEvidence,
+    *,
+    image_path: Path | None = None,
+    check_visible: bool = False,
+    check_invisible: bool = False,
+) -> ProvenanceReport:
+    """Build a provenance verdict from extracted evidence.
 
-    Args:
-        image_path: Path to the image (PNG, JPEG, WebP, or ISOBMFF container).
-        check_visible: Also run the registered visible-mark detectors through cv2.
-            Set False for a pure-metadata, dependency-light scan.
-        check_invisible: Also decode open invisible watermarks (SD/SDXL/FLUX) via
-            the optional imwatermark library. No-op when it is not installed.
-
-    Returns:
-        A :class:`ProvenanceReport`. ``is_ai_generated`` is True when any AI
-        signal is found and None (unknown) when none is -- it is never asserted
-        False, because stripped metadata leaves no local proof of a clean origin.
+    ``image_path`` is supplied only by :func:`identify` for optional pixel
+    detectors. Metadata-only callers leave it unset and never reopen the source.
     """
-    info = extract_c2pa_info(image_path)  # PNG-structured; {} for other formats
-    meta = get_ai_metadata(image_path)  # PNG text + EXIF + C2PA fields + synthid
+    if (check_visible or check_invisible) and image_path is None:
+        raise ValueError("Pixel-backed checks require image_path")
+    pixel_path = image_path
 
-    # First MB covers C2PA (PNG caBX, JPEG APP11, AVIF/HEIF/JXL uuid box) and
-    # IPTC markers for the non-PNG path where extract_c2pa_info returns {}.
-    # scan_head also seeks out late ISOBMFF provenance boxes (manifest after a
-    # large mdat in a streaming MP4) that a fixed first-MB read would miss.
-    head = scan_head(image_path, _SCAN_BYTES)
+    info = evidence.c2pa_info
+    meta = evidence.ai_metadata
+    head = evidence.scan
 
     signals: list[Signal] = []
     watermarks: list[str] = []
@@ -688,7 +722,7 @@ def identify(image_path: Path, *, check_visible: bool = True, check_invisible: b
     # ── IPTC 2025.1 AI-disclosure fields (Iptc4xmpExt:AISystemUsed etc.) ─
     iptc_ai = any(m in head for m in IPTC_AI_FIELD_MARKERS)
     if iptc_ai:
-        system = iptc_ai_system(image_path)
+        system = evidence.iptc_ai_system
         named = bool(system) and system != "fields present"
         signals.append(
             Signal("iptc_ai_system", f"IPTC AI disclosure ({system})" if named else "IPTC AI disclosure fields", "high")
@@ -704,7 +738,7 @@ def identify(image_path: Path, *, check_visible: bool = True, check_invisible: b
     # URL, present in XMP and as a laundering tell even when the JSON payload is
     # truncated) OR the parsed label, which additionally catches the raw-JSON
     # PNG ``AIGC`` tEXt chunk that carries no namespaced marker at all.
-    aigc_data = aigc_label(image_path)
+    aigc_data = evidence.aigc_label
     aigc = aigc_data is not None or any(m in head for m in AIGC_MARKERS)
     if aigc:
         producer = (aigc_data or {}).get("ContentProducer", "")
@@ -725,7 +759,7 @@ def identify(image_path: Path, *, check_visible: bool = True, check_invisible: b
     # ── EXIF Software / XMP CreatorTool / PNG-text generator (cross-format) ─
     # Catches a generator tag (incl. inside AVIF/HEIF/JXL and PNG text chunks)
     # when there is no C2PA.
-    if generator_tag := exif_generator(image_path):
+    if generator_tag := evidence.exif_generator:
         signals.append(Signal("exif_generator", f"Embedded generator tag: {generator_tag}", "high"))
         watermarks.append(f"Embedded generator tag: {generator_tag}")
         if platform is None:
@@ -737,7 +771,7 @@ def identify(image_path: Path, *, check_visible: bool = True, check_invisible: b
     # Grok's only provenance signal: EXIF ImageDescription "Signature: <base64>"
     # + a UUID Artist. Distinct from exif_generator (which matches generator
     # tokens); verified stable across 3 generations. See CLAUDE.md.
-    if xai_signature(image_path):
+    if evidence.xai_signature:
         signals.append(Signal("xai_signature", "EXIF Signature blob + UUID Artist", "high"))
         watermarks.append("xAI/Grok EXIF signature")
         if platform is None:
@@ -748,7 +782,7 @@ def identify(image_path: Path, *, check_visible: bool = True, check_invisible: b
     # Marks the hosting job, not a model -- medium confidence (commonly diffusion
     # output). Like the visible sparkle, it lifts an otherwise-Unknown verdict to
     # a tentative AI, but never overrides a high-confidence metadata signal.
-    hf_job = huggingface_job(image_path)
+    hf_job = evidence.huggingface_job
     if hf_job:
         signals.append(Signal("hf_job", f"HuggingFace job {hf_job}", "medium"))
         watermarks.append("HuggingFace-hosted job (hf-job-id)")
@@ -764,7 +798,7 @@ def identify(image_path: Path, *, check_visible: bool = True, check_invisible: b
     # verdict, but the field is undocumented, so it never overrides a high-
     # confidence signal. The platform is usually already "Samsung Galaxy" via the
     # signer-token scan; the fallback covers a future file without the cert org.
-    samsung_genai_type = samsung_genai(image_path)
+    samsung_genai_type = evidence.samsung_genai
     if samsung_genai_type is not None:
         signals.append(Signal("samsung_genai", f"Samsung genAIType={samsung_genai_type}", "medium"))
         watermarks.append("Samsung Galaxy AI editing marker (genAIType)")
@@ -774,7 +808,7 @@ def identify(image_path: Path, *, check_visible: bool = True, check_invisible: b
 
     # ── Open invisible watermark (SD / SDXL / FLUX, dwtDct) ──────────
     # Public decoder, no key -- a definitive embedded signal on pristine files.
-    if check_invisible and (scheme := _invisible_watermark(image_path)) is not None:
+    if check_invisible and pixel_path is not None and (scheme := _invisible_watermark(pixel_path)) is not None:
         signals.append(Signal("invisible_watermark", scheme, "high"))
         watermarks.append(f"Open invisible watermark: {scheme}")
         caveats.append(_INVISIBLE_WM_CAVEAT)
@@ -785,7 +819,7 @@ def identify(image_path: Path, *, check_visible: bool = True, check_invisible: b
     # The watermark behind Adobe Durable Content Credentials. Decoded locally,
     # but it binds provenance for human-authored content too, so it enriches the
     # watermark inventory without by itself asserting AI origin.
-    if check_invisible and (tm_scheme := _trustmark(image_path)) is not None:
+    if check_invisible and pixel_path is not None and (tm_scheme := _trustmark(pixel_path)) is not None:
         signals.append(Signal("trustmark", tm_scheme, "high"))
         watermarks.append(f"Adobe TrustMark invisible watermark ({tm_scheme})")
         if platform is None:
@@ -806,8 +840,8 @@ def identify(image_path: Path, *, check_visible: bool = True, check_invisible: b
         or xai_sig
     )
 
-    if check_visible:
-        platform = _collect_visible_signals(image_path, signals, watermarks, platform)
+    if check_visible and pixel_path is not None:
+        platform = _collect_visible_signals(pixel_path, signals, watermarks, platform)
 
     visible_only = any(s.name.startswith("visible_") for s in signals) and not ai_from_metadata
     hf_only = bool(hf_job) and not ai_from_metadata
@@ -831,7 +865,7 @@ def identify(image_path: Path, *, check_visible: bool = True, check_invisible: b
     caveats = list(dict.fromkeys(caveats))
 
     return ProvenanceReport(
-        path=image_path,
+        path=evidence.path,
         is_ai_generated=is_ai,
         platform=platform,
         confidence=confidence,
@@ -843,6 +877,45 @@ def identify(image_path: Path, *, check_visible: bool = True, check_invisible: b
         signals=signals,
         caveats=caveats,
         integrity_clashes=clashes,
+    )
+
+
+def identify_from_evidence(evidence: ProvenanceEvidence) -> ProvenanceReport:
+    """Build a metadata-only provenance verdict without reopening the source."""
+    return _identify_from_evidence(evidence)
+
+
+def identify(
+    image_path: Path,
+    *,
+    check_visible: bool = True,
+    check_invisible: bool = True,
+) -> ProvenanceReport:
+    """Identify an image's origin platform and watermark inventory.
+
+    Args:
+        image_path: Path to the image (PNG, JPEG, WebP, or ISOBMFF container).
+        check_visible: Also run the registered visible-mark detectors through cv2.
+            Set False for a metadata-only, dependency-light scan.
+        check_invisible: Also decode open invisible watermarks (SD/SDXL/FLUX) via
+            the optional imwatermark library. No-op when it is not installed.
+
+    File-backed metadata extraction runs first. The extracted evidence is then
+    evaluated independently, followed by the optional pixel-backed visible and
+    invisible watermark checks.
+
+    Returns:
+        A :class:`ProvenanceReport`. ``is_ai_generated`` is True when any AI
+        signal is found and None (unknown) when none is found. It is never
+        asserted False because stripped metadata leaves no local proof of a
+        clean origin.
+    """
+    evidence = extract_provenance_evidence(image_path)
+    return _identify_from_evidence(
+        evidence,
+        image_path=image_path,
+        check_visible=check_visible,
+        check_invisible=check_invisible,
     )
 
 

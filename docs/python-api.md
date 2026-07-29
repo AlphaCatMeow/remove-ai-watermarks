@@ -88,8 +88,8 @@ print(report.platform)
 print(report.signals)
 ```
 
-Use `check_visible=False` and `check_invisible=False` for metadata only
-inspection:
+Use `check_visible=False` and `check_invisible=False` for metadata-only
+inspection through the compatible path-based API:
 
 ```python
 report = identify(
@@ -98,6 +98,24 @@ report = identify(
     check_invisible=False,
 )
 ```
+
+Extraction and detection are also available as separate steps. This is useful
+when a file-reading worker collects the metadata once and another component
+evaluates the resulting evidence:
+
+```python
+from remove_ai_watermarks.identify import (
+    extract_provenance_evidence,
+    identify_from_evidence,
+)
+
+evidence = extract_provenance_evidence(Path("input.png"))
+report = identify_from_evidence(evidence)
+```
+
+`identify_from_evidence` does not reopen the source file. It evaluates metadata
+only; registered visible marks and pixel-backed invisible watermarks remain in
+the path-based `identify` call.
 
 ## Strip metadata
 
