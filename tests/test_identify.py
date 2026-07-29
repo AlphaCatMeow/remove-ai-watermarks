@@ -6,6 +6,7 @@ against the real committed C2PA / IPTC fixtures in data/fixtures/provenance/.
 
 from __future__ import annotations
 
+import base64
 import json
 import subprocess
 import sys
@@ -60,6 +61,48 @@ class TestProvenanceEvidence:
         assert evidence.xai_signature is True
         assert report.is_ai_generated is True
         assert {signal.name for signal in report.signals} >= {"gen_params", "xai_signature"}
+
+    def test_external_scanner_diagnostics_do_not_create_c2pa_evidence(self, tmp_path: Path):
+        path = tmp_path / "plain.jpg"
+        record = {
+            "c2pa_store": {"error": "ManifestNotFound: no JUMBF data found"},
+            "jpeg": {
+                "segments": [
+                    {
+                        "marker": "APP11",
+                        "kind": "c2pa_or_jumbf",
+                        "base64": "AAA=",
+                    }
+                ]
+            },
+        }
+
+        report = identify_from_evidence(evidence_from_metadata_record(record, path=path))
+
+        assert report.is_ai_generated is None
+        assert report.signals == []
+        assert report.watermarks == []
+
+    def test_external_scanner_raw_bytes_still_create_c2pa_evidence(self, tmp_path: Path):
+        path = tmp_path / "signed.jpg"
+        manifest = b"jumb c2pa OpenAI trainedAlgorithmicMedia"
+        record = {
+            "jpeg": {
+                "segments": [
+                    {
+                        "marker": "APP11",
+                        "kind": "c2pa_or_jumbf",
+                        "base64": base64.b64encode(manifest).decode(),
+                    }
+                ]
+            }
+        }
+
+        report = identify_from_evidence(evidence_from_metadata_record(record, path=path))
+
+        assert report.is_ai_generated is True
+        assert report.platform == "OpenAI (ChatGPT / gpt-image / DALL-E / Sora)"
+        assert [signal.name for signal in report.signals] == ["c2pa"]
 
     @pytest.mark.parametrize(
         "filename",

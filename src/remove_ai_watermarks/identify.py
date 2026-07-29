@@ -169,6 +169,7 @@ def _external_metadata(value: Any) -> tuple[list[tuple[str, Any]], bytes]:
     """Index nested metadata and recover common encoded binary values in one pass."""
     pairs: list[tuple[str, Any]] = []
     parts: list[bytes] = []
+    diagnostic_keys = {"error", "kind"}
 
     def visit(item: Any) -> None:
         if isinstance(item, dict):
@@ -177,6 +178,8 @@ def _external_metadata(value: Any) -> tuple[list[tuple[str, Any]], bytes]:
                 key_text = str(key)
                 pairs.append((key_text, nested))
                 parts.append(key_text.encode("utf-8", "replace"))
+                if key_text.lower() in diagnostic_keys:
+                    continue
                 if isinstance(nested, str) and (key_text == "base64" or key_text.endswith("_base64")):
                     encoded = nested.split("...TRUNCATED", 1)[0]
                     with contextlib.suppress(ValueError, TypeError):
