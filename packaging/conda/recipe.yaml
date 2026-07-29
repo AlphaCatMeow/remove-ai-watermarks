@@ -1,7 +1,7 @@
 schema_version: 1
 
 context:
-  version: "0.20.2"
+  version: "0.21.0"
   python_min: "3.10"
 
 package:
@@ -10,7 +10,7 @@ package:
 
 source:
   url: https://pypi.org/packages/source/r/remove-ai-watermarks/remove_ai_watermarks-${{ version }}.tar.gz
-  sha256: 99a3991d30c80e1719122464a26befd2f372cfa8e3b1b3909f2869fce35e0f24
+  sha256: 69eaa8cbb25eec113916358bad4baf4d067cb41854f92d389d2b5c0f22f94f94
 
 build:
   noarch: python
