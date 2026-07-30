@@ -8,14 +8,13 @@ their payloads.
 
 from __future__ import annotations
 
-import json
-from typing import TYPE_CHECKING, BinaryIO, cast
+from typing import TYPE_CHECKING, BinaryIO
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
 
-from remove_ai_watermarks.metadata import TC260_AIGC_FIELDS
+from remove_ai_watermarks.metadata import MAX_TC260_VALUE_BYTES, parse_tc260_aigc_json
 
 _EBML_MAGIC = b"\x1aE\xdf\xa3"
 _SEGMENT_ID = 0x18538067
@@ -25,7 +24,6 @@ _SIMPLE_TAG_ID = 0x67C8
 _TAG_NAME_ID = 0x45A3
 _TAG_STRING_ID = 0x4487
 _MAX_TAG_NAME_BYTES = 256
-_MAX_TC260_VALUE_BYTES = 1024 * 1024
 
 
 def _vint_length(first: int, *, maximum: int) -> int | None:
@@ -111,17 +109,6 @@ def _read_bounded(
     return value if len(value) == size else None
 
 
-def _is_tc260_aigc_json(value: bytes) -> bool:
-    try:
-        parsed = json.loads(value.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError):
-        return False
-    if not isinstance(parsed, dict):
-        return False
-    fields = cast("dict[object, object]", parsed)
-    return bool(TC260_AIGC_FIELDS & {str(key) for key in fields})
-
-
 def _simple_tag_payloads(
     stream: BinaryIO,
     start: int,
@@ -133,12 +120,12 @@ def _simple_tag_payloads(
         if element_id == _TAG_NAME_ID:
             name = _read_bounded(stream, payload_start, element_end, _MAX_TAG_NAME_BYTES)
         elif element_id == _TAG_STRING_ID:
-            value = _read_bounded(stream, payload_start, element_end, _MAX_TC260_VALUE_BYTES)
+            value = _read_bounded(stream, payload_start, element_end, MAX_TC260_VALUE_BYTES)
             if value is not None:
                 values.append(value)
     if name != b"AIGC":
         return ()
-    return tuple(value for value in values if _is_tc260_aigc_json(value))
+    return tuple(value for value in values if parse_tc260_aigc_json(value) is not None)
 
 
 def tc260_aigc_payloads(path: str | Path) -> tuple[bytes, ...]:

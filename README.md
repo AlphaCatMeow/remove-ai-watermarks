@@ -7,8 +7,8 @@ Remove AI provenance marks from images and video you generated yourself:
 - C2PA, EXIF, XMP, IPTC, and related AI metadata.
 
 Video support covers metadata inspection and removal, visible Sora, Veo,
-Seedance, and Dola mark removal, and experimental VAE regeneration that
-produces a video SynthID candidate for external verification.
+Seedance, Dola, Hailuo, and Kling mark removal, and experimental VAE
+regeneration that produces a video SynthID candidate for external verification.
 
 > Try it online at [raiw.cc](https://raiw.cc) if you do not want to install Python
 > or run diffusion models locally.
@@ -33,7 +33,7 @@ produces a video SynthID candidate for external verification.
 | Erase a region you select | `erase` | No |
 | Strip AI metadata | `metadata` | No |
 | Strip AI metadata from video | `video metadata` | No |
-| Remove a known Sora, Veo, Seedance, or Dola mark from video | `video visible` | No |
+| Remove a registered visible AI mark from video | `video visible` | No |
 | Generate an externally verifiable video SynthID candidate | `video invisible` | Recommended |
 | Regenerate an image to disrupt invisible watermarks | `invisible` | Recommended |
 | Run visible, invisible, and metadata removal | `all` | Recommended |
@@ -65,7 +65,8 @@ Strip metadata without running visible inpainting or diffusion:
 remove-ai-watermarks metadata image.png --remove -o clean.png
 ```
 
-Inspect or remove AI metadata from an MP4, MOV, M4V, WebM, or MKV file:
+Inspect or remove AI metadata from an MP4, MOV, M4V, WebM, MKV, AVI, or FLV
+file:
 
 ```bash
 remove-ai-watermarks video metadata input.mp4 --check
@@ -77,7 +78,9 @@ omitted it writes `<source>_clean` and preserves the original. MP4 and MOV
 inspection includes the native TC260 `AIGC` tag in
 `moov.udta.meta.keys/ilst`, including a `moov` placed after the media payload.
 MKV and WebM inspection reads the normative
-`Segment.Tags.Tag.SimpleTag` placement.
+`Segment.Tags.Tag.SimpleTag` placement. AVI uses `LIST/INFO/AIGC`, while FLV
+uses `script.onMetaData.AIGC`. The non-ISOBMFF formats are remuxed with stream
+copy for removal.
 
 Remove a supported visible video mark:
 
@@ -86,6 +89,8 @@ remove-ai-watermarks video visible input.mp4 -o clean.mp4
 remove-ai-watermarks video visible veo.mp4 --mark veo -o veo_clean.mp4
 remove-ai-watermarks video visible seedance.mp4 --mark seedance -o seedance_clean.mp4
 remove-ai-watermarks video visible dola.mp4 --mark dola -o dola_clean.mp4
+remove-ai-watermarks video visible hailuo.mp4 --mark hailuo -o hailuo_clean.mp4
+remove-ai-watermarks video visible kling.mp4 --mark kling -o kling_clean.mp4
 ```
 
 This path scans the complete sequence before changing pixels. It accepts only a
@@ -94,8 +99,10 @@ same OpenCV, MI-GAN, or LaMa fill backends as image removal. Audio is copied
 without re-encoding; the video stream is transcoded because its pixels change.
 Sora covers the moving Sora 2 mascot and wordmark. Veo covers both the current
 four-point diamond and the legacy `Veo` text. Seedance covers the fixed boxed
-`AI` label, and Dola covers the fixed `Dola AI` text. No output is written when
-no stable mark is found.
+`AI` label, Dola covers the fixed `Dola AI` text, Hailuo covers the composite
+`MINIMAX | hailuo AI` label, and Kling covers the bottom-right `KLING AI`
+label with its version suffix. No output is written when no stable mark is
+found.
 
 Generate a video SynthID candidate:
 
@@ -293,7 +300,8 @@ invisible removal.
   detail.
 - Visible video removal recognizes the moving Sora 2 wordmark, the current Veo
   diamond plus legacy `Veo` text, the Seedance boxed `AI` label, and the fixed
-  `Dola AI` text. It does not recognize the older Sora Turbo corner swirl.
+  Dola, Hailuo, and Kling labels. It does not recognize the older Sora Turbo
+  corner swirl or unregistered layouts from those providers.
   The classical OpenCV backend can smear structured backgrounds; use MI-GAN or
   LaMa when recovery quality matters.
 - Video SynthID regeneration changes resolution, frame rate, and image detail.

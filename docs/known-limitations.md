@@ -207,17 +207,21 @@ strip supported AI provenance metadata without transcoding streams.
 
 `video visible` and `remove_video_visible` additionally support the moving
 Sora 2 mascot and wordmark, the current Veo four-point diamond, the legacy
-`Veo` text, the Seedance boxed `AI` label, and the fixed `Dola AI` text.
-Detection requires a recurring visual candidate across adjacent frames.
-Seedance, Dola, and Veo candidates must remain anchored rather than drifting
-with a scene object. Provider provenance can recover low-contrast runs only
-after visual evidence exists, so metadata alone does not erase a clean API
-export.
+`Veo` text, the Seedance boxed `AI` label, the fixed `Dola AI` text, the Hailuo
+MINIMAX/Hailuo composite label, and the bottom-right Kling label with its
+version suffix. Detection requires a recurring visual candidate across
+adjacent frames. Fixed-mark candidates must remain anchored rather than
+drifting with a scene object. Kling also requires a bright low-saturation
+candidate near the expected frame edge. Provider provenance can recover
+low-contrast runs only after visual evidence exists for the marks that define a
+provenance prior, so metadata alone does not erase a clean API export.
 Historical Sora Turbo exports use a small OpenAI swirl in the corner rather
 than the moving mascot-and-wordmark design; that earlier variant is not
-detected by the `sora` video mark. Other provider video labels are not
-supported yet. Google video SynthID has a candidate-producing VAE path, while
-other proprietary invisible video watermarks have no registered attack.
+detected by the `sora` video mark. Hailuo and Kling coverage is specific to the
+verified lower-edge layouts; a new provider layout needs a separate calibrated
+silhouette. Other provider video labels are not supported yet. Google video
+SynthID has a candidate-producing VAE path, while other proprietary invisible
+video watermarks have no registered attack.
 
 Visible removal transcodes the video stream and copies audio. Its frame-local
 fill is not a motion-aware video inpainting model. OpenCV can leave a visible
@@ -235,7 +239,11 @@ Native TC260 metadata in MP4/MOV is supported at its normative
 `moov.udta.meta.keys/ilst` placement, including non-faststart files whose
 `moov` follows a large media payload. MKV/WebM is supported at the normative
 `Segment.Tags.Tag.SimpleTag` placement and uses ffmpeg for stream-copy removal.
-The corresponding FLV and AVI native tags are not parsed yet.
+AVI is supported at `LIST/INFO/AIGC`, and FLV at
+`script.onMetaData.AIGC`; both use ffmpeg stream-copy removal. Stock ffmpeg can
+write and strip the FLV form, but writing the nonstandard AVI child for fixture
+generation requires dedicated muxer support, so the AVI reader is verified
+against an exact synthetic RIFF structure.
 
 The current ISOBMFF stripper reads an MP4, MOV, or M4V container into memory
 before rewriting its metadata boxes. A streaming box copier is required before

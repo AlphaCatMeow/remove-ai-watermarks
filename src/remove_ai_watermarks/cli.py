@@ -1063,8 +1063,8 @@ def cmd_metadata(
     Strips EXIF AI tags, PNG text chunks, C2PA provenance manifests, and the
     China TC260 AIGC label. Beyond images (PNG/JPEG/WebP/AVIF/HEIF/JXL) it also
     strips provenance metadata from MP4/MOV/M4V/M4A containers and, via ffmpeg,
-    from WebM/MP3/WAV/FLAC/OGG. The coded image, audio, and video data are left
-    untouched.
+    from WebM/MKV/AVI/FLV/MP3/WAV/FLAC/OGG. The coded image, audio, and video
+    data are left untouched.
     """
     from remove_ai_watermarks.metadata import get_ai_metadata, has_ai_metadata, strip_and_verify
 
@@ -1240,7 +1240,7 @@ def cmd_video_invisible(
 )
 @click.option(
     "--mark",
-    type=click.Choice(["sora", "veo", "seedance", "dola"]),
+    type=click.Choice(["sora", "veo", "seedance", "dola", "hailuo", "kling"]),
     default="sora",
     help="Visible AI mark to remove.",
 )

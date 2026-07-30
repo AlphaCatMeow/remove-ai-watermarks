@@ -1,9 +1,10 @@
 """High-level video processing API.
 
 Supported experimental stages are container-level AI metadata inspection and
-removal, temporally stabilized visible Sora, Veo, Seedance, and Dola removal,
-and VAE regeneration that produces an externally verifiable SynthID candidate.
-The visible pixel path reuses the image package's shared fill backends.
+removal, temporally stabilized visible Sora, Veo, Seedance, Dola, Hailuo, and
+Kling removal, and VAE regeneration that produces an externally verifiable
+SynthID candidate. The visible pixel path reuses the image package's shared
+fill backends.
 """
 
 from __future__ import annotations
@@ -22,9 +23,11 @@ from remove_ai_watermarks.video_synthid import (
 if TYPE_CHECKING:
     from remove_ai_watermarks.video_invisible import RegenerationMetrics
 
-VIDEO_EXTENSIONS: frozenset[str] = frozenset({".mp4", ".mov", ".m4v", ".webm", ".mkv"})
+VIDEO_EXTENSIONS: frozenset[str] = frozenset({".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi", ".flv"})
 _ISOBMFF_VIDEO_EXTENSIONS: frozenset[str] = frozenset({".mp4", ".mov", ".m4v"})
 _EBML_VIDEO_EXTENSIONS: frozenset[str] = frozenset({".webm", ".mkv"})
+_RIFF_VIDEO_EXTENSIONS: frozenset[str] = frozenset({".avi"})
+_FLV_VIDEO_EXTENSIONS: frozenset[str] = frozenset({".flv"})
 _REGENERATED_VIDEO_EXTENSIONS: frozenset[str] = _ISOBMFF_VIDEO_EXTENSIONS
 _EBML_MAGIC = b"\x1aE\xdf\xa3"
 
@@ -109,8 +112,11 @@ def _video_source(source: str | Path) -> Path:
     with path.open("rb") as stream:
         head = stream.read(12)
     suffix = path.suffix.lower()
-    matches_container = (suffix in _ISOBMFF_VIDEO_EXTENSIONS and len(head) >= 8 and head[4:8] == b"ftyp") or (
-        suffix in _EBML_VIDEO_EXTENSIONS and head.startswith(_EBML_MAGIC)
+    matches_container = (
+        (suffix in _ISOBMFF_VIDEO_EXTENSIONS and len(head) >= 8 and head[4:8] == b"ftyp")
+        or (suffix in _EBML_VIDEO_EXTENSIONS and head.startswith(_EBML_MAGIC))
+        or (suffix in _RIFF_VIDEO_EXTENSIONS and len(head) >= 12 and head[:4] == b"RIFF" and head[8:12] == b"AVI ")
+        or (suffix in _FLV_VIDEO_EXTENSIONS and head.startswith(b"FLV"))
     )
     if not matches_container:
         raise ValueError(f"Video content does not match its {suffix} extension: {path}")
@@ -182,11 +188,11 @@ def remove_video_visible(
 ) -> VideoVisibleResult:
     """Remove a supported visible AI wordmark from a video.
 
-    Supported marks are ``sora``, ``veo``, ``seedance``, and ``dola``. The full
-    sequence is scanned before pixels change, and only recurring candidates are
-    accepted. Audio is copied without re-encoding; video is transcoded because
-    the pixels change. When no stable mark is found, no output is written and
-    ``output`` in the result is ``None``.
+    Supported marks are ``sora``, ``veo``, ``seedance``, ``dola``, ``hailuo``,
+    and ``kling``. The full sequence is scanned before pixels change, and only
+    recurring candidates are accepted. Audio is copied without re-encoding;
+    video is transcoded because the pixels change. When no stable mark is found,
+    no output is written and ``output`` in the result is ``None``.
     """
     from remove_ai_watermarks.metadata import get_ai_metadata
     from remove_ai_watermarks.video_visible import (
@@ -195,18 +201,22 @@ def remove_video_visible(
         has_sora_provenance,
         has_veo_provenance,
         scan_dola_video,
+        scan_hailuo_video,
+        scan_kling_video,
         scan_seedance_video,
         scan_sora_video,
         scan_veo_video,
         stabilize_dola_localizations,
+        stabilize_hailuo_localizations,
+        stabilize_kling_localizations,
         stabilize_seedance_localizations,
         stabilize_sora_localizations,
         stabilize_veo_localizations,
     )
     from remove_ai_watermarks.watermark_registry import resolve_backend
 
-    if mark not in {"sora", "veo", "seedance", "dola"}:
-        raise ValueError("Unsupported visible video mark; expected sora, veo, seedance, or dola")
+    if mark not in {"sora", "veo", "seedance", "dola", "hailuo", "kling"}:
+        raise ValueError("Unsupported visible video mark; expected sora, veo, seedance, dola, hailuo, or kling")
     if backend not in {"auto", "cv2", "migan", "lama"}:
         raise ValueError("Unsupported fill backend; expected auto, cv2, migan, or lama")
 
@@ -237,13 +247,23 @@ def remove_video_visible(
         )
         padding_fraction = 0.0
         mask_style = "box"
-    else:
+    elif mark == "dola":
         scan = scan_dola_video(source_path)
         regions = stabilize_dola_localizations(
             scan.detections,
             provenance=has_bytedance_video_provenance(markers),
         )
         padding_fraction = 0.20
+        mask_style = "box"
+    elif mark == "hailuo":
+        scan = scan_hailuo_video(source_path)
+        regions = stabilize_hailuo_localizations(scan.detections)
+        padding_fraction = 0.12
+        mask_style = "box"
+    else:
+        scan = scan_kling_video(source_path)
+        regions = stabilize_kling_localizations(scan.detections)
+        padding_fraction = 0.12
         mask_style = "box"
     detected_frames = sum(region is not None for region in regions)
     if detected_frames == 0:

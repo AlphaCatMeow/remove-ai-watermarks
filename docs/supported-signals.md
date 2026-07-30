@@ -37,6 +37,8 @@ when you can select the affected area yourself.
 | `veo` | Current four-point diamond and legacy `Veo` text | Fixed bottom-right corner | Uses separate silhouettes and requires a recurring match; learned fill is preferable on structured backgrounds. |
 | `seedance` | Boxed `AI` label | Fixed bottom-right corner | Requires an anchored recurring match; the full localized box is filled because a thinner synthetic shape mask leaves the real translucent rim behind. |
 | `dola` | `Dola AI` text | Fixed bottom-right corner | Requires an anchored recurring match; ByteDance or BytePlus provenance can relax only an existing visual run. |
+| `hailuo` | `MINIMAX | hailuo AI` composite label | Fixed lower edge | Uses a synthetic waveform, text, separator, and ring silhouette; the complete recurring label box is filled. |
+| `kling` | Kling swirl, `KLING AI`, version, and optional `PRO` suffix | Fixed bottom-right edge | Combines a synthetic logo rescue with font variants, an edge gate, a white-label gate, and anchored temporal recurrence. |
 
 Use `video visible` for this registry. It is separate from the image `visible`
 command because selection is made over a sequence rather than one raster.
@@ -61,8 +63,9 @@ The inspection and stripping code handles signals in these groups:
 - IPTC AI disclosure fields;
 - PNG text chunks and embedded generation parameters;
 - China TC260 AIGC labels in supported image placements and the normative
-  MP4/MOV `moov.udta.meta.keys/ilst` and MKV/WebM
-  `Segment.Tags.Tag.SimpleTag` placements;
+  MP4/MOV `moov.udta.meta.keys/ilst`, MKV/WebM
+  `Segment.Tags.Tag.SimpleTag`, AVI `LIST/INFO/AIGC`, and FLV
+  `script.onMetaData.AIGC` placements;
 - xAI and Grok EXIF signature fields;
 - Samsung AI editing markers;
 - Hugging Face job metadata;
@@ -87,8 +90,8 @@ Metadata inspection and removal additionally have container paths for:
 
 - JPEG XL metadata;
 - MP4, MOV, M4V, and M4A;
-- WebM, MKV, MKA, MP3, WAV, FLAC, OGG, OGA, Opus, and AAC when ffmpeg is
-  available.
+- WebM, MKV, MKA, AVI, FLV, MP3, WAV, FLAC, OGG, OGA, Opus, and AAC when
+  ffmpeg is available.
 
 JPEG image metadata stripping removes targeted metadata segments without
 re-encoding the entropy coded image scan. PNG and WebP removal preserves pixel
@@ -135,7 +138,8 @@ not a universal clean verdict.
 | Midjourney | None registered | No registered pixel decoder | EXIF, XMP, and IPTC signals |
 | ByteDance generators | Doubao and Jimeng marks | No registered pixel decoder | TC260 AIGC and supported C2PA signals |
 | Qwen | Qwen mark | No registered pixel decoder | TC260 AIGC |
-| Kling | Kling mark | No registered pixel decoder | TC260 AIGC |
+| Kling | Kling image and video marks | No registered pixel decoder | TC260 AIGC |
+| Hailuo / MiniMax video | Hailuo composite video label | No registered pixel decoder | TC260 AIGC where present |
 | Baidu | Baidu mark | No registered pixel decoder | TC260 AIGC |
 | LibLibAI | LibLibAI mark | No registered pixel decoder | TC260 AIGC |
 | RunningHub | RunningHub mark | No registered pixel decoder | TC260 AIGC |

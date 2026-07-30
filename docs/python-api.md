@@ -130,7 +130,8 @@ as proof that metadata was removed.
 
 ## Inspect and strip video metadata
 
-The experimental high level video API supports MP4, MOV, M4V, WebM, and MKV:
+The experimental high level video API supports MP4, MOV, M4V, WebM, MKV, AVI,
+and FLV:
 
 ```python
 import remove_ai_watermarks as raiw
@@ -152,7 +153,9 @@ inspection recognizes the native TC260 `AIGC` entry in
 `moov.udta.meta.keys/ilst`; its removal preserves container size and encoded
 stream bytes. MKV/WebM inspection recognizes the corresponding
 `Segment.Tags.Tag.SimpleTag` representation; its removal requires ffmpeg for a
-stream-copy remux.
+stream-copy remux. AVI inspection reads `LIST/INFO/AIGC`, and FLV inspection
+reads `script.onMetaData.AIGC`; both use the same verified ffmpeg stream-copy
+removal path.
 
 ## Generate a video SynthID candidate
 
@@ -211,16 +214,27 @@ dola_result = raiw.remove_video_visible(
     "dola_clean.mp4",
     mark="dola",
 )
+hailuo_result = raiw.remove_video_visible(
+    "hailuo.mp4",
+    "hailuo_clean.mp4",
+    mark="hailuo",
+)
+kling_result = raiw.remove_video_visible(
+    "kling.mp4",
+    "kling_clean.mp4",
+    mark="kling",
+)
 ```
 
 `remove_video_visible` scans the complete video before writing output. It
 combines synthetic multi-scale visual matching with temporal consistency, so an
 isolated lookalike in one frame is not enough to authorize inpainting. The
-supported `mark` values are `sora`, `veo`, `seedance`, and `dola`. The Veo
-detector recognizes the current four-point diamond and the legacy `Veo` text.
-Seedance recognizes the boxed `AI` label, while Dola recognizes its compact
-text label. Each variant has an independent synthetic silhouette and calibrated
-temporal policy.
+supported `mark` values are `sora`, `veo`, `seedance`, `dola`, `hailuo`, and
+`kling`. The Veo detector recognizes the current four-point diamond and the
+legacy `Veo` text. Seedance recognizes the boxed `AI` label, Dola recognizes
+its compact text label, Hailuo recognizes the composite MINIMAX/Hailuo label,
+and Kling recognizes its bottom-right logo, wordmark, and version suffix. Each
+variant has an independent synthetic silhouette and calibrated temporal policy.
 
 The returned `VideoVisibleResult` records the total, detected, and removed frame
 counts plus any AI metadata that survived the output encode. The function

@@ -134,17 +134,20 @@ remove-ai-watermarks video metadata input.mp4 --check
 remove-ai-watermarks video metadata input.mp4 --remove -o clean.mp4
 ```
 
-Supported containers are MP4, MOV, M4V, WebM, and MKV. The operation delegates
-to the same verified metadata scanner and stripper as the generic `metadata`
-command, so detection and removal stay in parity. Video and audio streams are
-not transcoded. For MP4 and MOV, this includes the native TC260 `AIGC` key and
-JSON value stored in `moov.udta.meta.keys/ilst`. The inspector seeks past a
-large `mdat` to find a tail `moov`; removal blanks the key and value in place so
-box sizes and media offsets do not move.
+Supported containers are MP4, MOV, M4V, WebM, MKV, AVI, and FLV. The operation
+delegates to the same verified metadata scanner and stripper as the generic
+`metadata` command, so detection and removal stay in parity. Video and audio
+streams are not transcoded. For MP4 and MOV, this includes the native TC260
+`AIGC` key and JSON value stored in `moov.udta.meta.keys/ilst`. The inspector
+seeks past a large `mdat` to find a tail `moov`; removal blanks the key and
+value in place so box sizes and media offsets do not move.
 
 For MKV and WebM, the inspector reads the native TC260
 `Segment.Tags.Tag.SimpleTag` entry. Removal uses ffmpeg stream copying to
 discard container tags and chapters without transcoding the streams.
+AVI uses the normative `LIST/INFO/AIGC` chunk, while FLV uses the
+`script.onMetaData.AIGC` AMF0 string. Their bounded readers skip media payloads,
+and removal also uses ffmpeg stream copying.
 
 When `-o` is omitted, the command writes `<source>_clean` with the same
 extension. It never overwrites the source, and it rejects an output with a
@@ -192,22 +195,27 @@ remove-ai-watermarks video visible input.mp4 -o clean.mp4
 remove-ai-watermarks video visible veo.mp4 --mark veo -o veo_clean.mp4
 remove-ai-watermarks video visible seedance.mp4 --mark seedance -o seedance_clean.mp4
 remove-ai-watermarks video visible dola.mp4 --mark dola -o dola_clean.mp4
+remove-ai-watermarks video visible hailuo.mp4 --mark hailuo -o hailuo_clean.mp4
+remove-ai-watermarks video visible kling.mp4 --mark kling -o kling_clean.mp4
 ```
 
 The experimental command supports the moving Sora mascot and wordmark, two Veo
-corner variants, the Seedance boxed `AI` label, and the `Dola AI` text label.
-Sora searches the whole frame at multiple scales. The other detectors search
-bounded bottom-right regions with separate synthetic silhouettes. Every mark
+corner variants, the Seedance boxed `AI` label, the `Dola AI` text label, the
+composite `MINIMAX | hailuo AI` label, and the bottom-right Kling label. Sora
+searches the whole frame at multiple scales. The other detectors search bounded
+lower-frame regions with separate synthetic silhouettes. Kling additionally
+requires its bright low-saturation label near the frame edge. Every mark
 requires a spatially recurring candidate across adjacent frames. Fixed marks
 must also remain anchored instead of drifting with a scene object. Matching
-provider provenance may relax the visual score, but metadata alone never
-creates a detection. Clean API exports therefore remain untouched.
+provider provenance may relax the visual score only for registered
+provenance-aware marks; metadata alone never creates a detection.
 
 The video stream is transcoded and the original audio stream is copied.
-Supported input and output containers are MP4, MOV, M4V, WebM, and MKV; the
-output extension must match the input. The default `cv2` backend is fast but can
-smear structured backgrounds. Select `--backend migan` or `--backend lama` for
-a learned fill, or `--backend auto` to choose the best installed backend.
+Supported input and output containers are MP4, MOV, M4V, WebM, MKV, AVI, and
+FLV; the output extension must match the input. The default `cv2` backend is
+fast but can smear structured backgrounds. Select `--backend migan` or
+`--backend lama` for a learned fill, or `--backend auto` to choose the best
+installed backend.
 
 AI metadata is stripped from the encoded output by default. Use
 `--keep-metadata` to retain mapped container metadata. When no temporally stable

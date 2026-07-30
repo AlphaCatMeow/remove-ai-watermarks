@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import json
 import logging
 import re
 import struct
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -125,7 +126,7 @@ _ISOBMFF_EXTS: frozenset[str] = frozenset({".avif", ".heif", ".heic", ".jxl", ".
 # RIFF / Vorbis). remove_ai_metadata strips their container metadata losslessly
 # via ffmpeg (`-c copy`), so it needs ffmpeg on PATH for these.
 _FFMPEG_STRIP_EXTS: frozenset[str] = frozenset(
-    {".webm", ".mkv", ".mka", ".mp3", ".wav", ".flac", ".ogg", ".oga", ".opus", ".aac"}
+    {".webm", ".mkv", ".mka", ".avi", ".flv", ".mp3", ".wav", ".flac", ".ogg", ".oga", ".opus", ".aac"}
 )
 
 # China's mandatory AI-content labeling (TC260, the national cybersecurity
@@ -161,6 +162,22 @@ TC260_AIGC_FIELDS: frozenset[str] = frozenset(
         "ServiceUser",
     }
 )
+MAX_TC260_VALUE_BYTES = 1024 * 1024
+
+
+def parse_tc260_aigc_json(value: bytes) -> dict[str, str] | None:
+    """Parse a bounded JSON object carrying at least one normative TC260 field."""
+    if len(value) > MAX_TC260_VALUE_BYTES:
+        return None
+    try:
+        parsed = json.loads(value.rstrip(b"\x00 ").decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    fields = {str(key): str(item) for key, item in cast("dict[object, object]", parsed).items()}
+    return fields if TC260_AIGC_FIELDS & fields.keys() else None
+
 
 # HuggingFace-hosted GPU jobs (Jobs / Spaces) stamp generated PNGs with this
 # ``tEXt`` chunk key holding the job UUID. It marks the hosting job, not a
@@ -365,6 +382,8 @@ def aigc_label(image_path: Path) -> dict[str, str] | None:
       (as written by Doubao / ByteDance), read via PIL;
     - a native MP4/MOV ``AIGC`` key in ``moov.udta.meta.keys`` whose matching
       ``ilst`` item carries the raw JSON object;
+    - a native AVI ``LIST/INFO/AIGC`` chunk or FLV
+      ``script.onMetaData.AIGC`` string carrying the raw JSON object;
     - an XMP ``<TC260:AIGC>{...}</TC260:AIGC>`` block (HTML-entity encoded text),
       found by a container-agnostic raw-byte scan (PNG/JPEG/WebP alike); and
     - a raw-JSON ``{"AIGC":{...}}`` block with no namespace, as embedded in JPEG
@@ -381,20 +400,17 @@ def aigc_label(image_path: Path) -> dict[str, str] | None:
     namespaced XMP element is unambiguous, so any JSON object is accepted.
     """
     import html
-    import json
-    from typing import cast
 
     def _parse(text: str, *, require_tc260_field: bool) -> dict[str, str] | None:
+        if require_tc260_field:
+            return parse_tc260_aigc_json(text.encode("utf-8"))
         try:
             parsed = json.loads(text)
         except ValueError:
             return None
         if not isinstance(parsed, dict):
             return None
-        fields = {str(k): str(v) for k, v in cast("dict[object, object]", parsed).items()}
-        if require_tc260_field and not (TC260_AIGC_FIELDS & fields.keys()):
-            return None
-        return fields
+        return {str(k): str(v) for k, v in cast("dict[object, object]", parsed).items()}
 
     # PNG tEXt chunk keyed "AIGC" with raw JSON (Doubao and other China gens).
     # The key is generic, so require a TC260 field to avoid a false positive.
@@ -425,6 +441,22 @@ def aigc_label(image_path: Path) -> dict[str, str] | None:
     from remove_ai_watermarks.noai.ebml import tc260_aigc_payloads as ebml_tc260_aigc_payloads
 
     for payload in ebml_tc260_aigc_payloads(image_path):
+        if result := _parse(payload.decode("utf-8", "replace"), require_tc260_field=True):
+            return result
+
+    # Native AVI and FLV TC260 metadata. Both readers walk their container
+    # structures and skip media payloads instead of relying on a raw substring
+    # that could collide inside compressed video.
+    legacy_payloads: tuple[bytes, ...] = ()
+    if image_path.suffix.lower() == ".avi":
+        from remove_ai_watermarks.noai.riff import tc260_aigc_payloads as riff_tc260_aigc_payloads
+
+        legacy_payloads = riff_tc260_aigc_payloads(image_path)
+    elif image_path.suffix.lower() == ".flv":
+        from remove_ai_watermarks.noai.flv import tc260_aigc_payloads as flv_tc260_aigc_payloads
+
+        legacy_payloads = flv_tc260_aigc_payloads(image_path)
+    for payload in legacy_payloads:
         if result := _parse(payload.decode("utf-8", "replace"), require_tc260_field=True):
             return result
 
@@ -1206,7 +1238,8 @@ def remove_ai_metadata(
         )
         return output_path
 
-    # Non-ISOBMFF audio/video (WebM/Matroska EBML, MP3 ID3, WAV/FLAC/OGG): the
+    # Non-ISOBMFF audio/video (WebM/Matroska EBML, AVI/FLV, MP3 ID3,
+    # WAV/FLAC/OGG): the
     # box walker can't reach these, so strip container metadata losslessly via
     # ffmpeg (-c copy -- codec data untouched, only tags/chapters dropped).
     if source_path.suffix.lower() in _FFMPEG_STRIP_EXTS:

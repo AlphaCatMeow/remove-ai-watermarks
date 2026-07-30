@@ -23,11 +23,10 @@ Reference: ISO/IEC 14496-12 (ISOBMFF) and C2PA 2.1 spec §11.
 from __future__ import annotations
 
 import io
-import json
 import logging
 import re
 import struct
-from typing import TYPE_CHECKING, Any, BinaryIO, cast
+from typing import TYPE_CHECKING, Any, BinaryIO
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -38,7 +37,8 @@ from remove_ai_watermarks.metadata import (
     C2PA_UUID,
     IPTC_AI_FIELD_MARKERS,
     IPTC_AI_MARKERS,
-    TC260_AIGC_FIELDS,
+    MAX_TC260_VALUE_BYTES,
+    parse_tc260_aigc_json,
 )
 
 logger = logging.getLogger(__name__)
@@ -61,14 +61,12 @@ _AI_LABEL_MARKERS: tuple[bytes, ...] = AIGC_MARKERS + IPTC_AI_MARKERS + IPTC_AI_
 # blanked in place (see ``blank_ai_xmp_packets``).
 _XMP_PACKET_RE = re.compile(rb"<\?xpacket begin=.*?<\?xpacket end=[^>]*?\?>", re.DOTALL)
 
+
 # TC260-PG-20257A stores an MP4/MOV label as an ``AIGC`` key in
 # ``moov.udta.meta.keys`` and its JSON value in the corresponding
 # ``moov.udta.meta.ilst`` item. The value is intentionally bounded before it is
 # read: the normative object is tiny, and a corrupt size must not allocate an
 # arbitrary amount of memory during an inspection.
-_MAX_TC260_VALUE_BYTES = 1024 * 1024
-
-
 def _iter_top_level_boxes(data: bytes) -> Iterator[tuple[int, int, bytes, int]]:
     """Yield ``(start, end, type, payload_offset)`` for each top-level box.
 
@@ -181,18 +179,6 @@ def _tc260_key_indices(
     return found
 
 
-def _is_tc260_aigc_json(value: bytes) -> bool:
-    """Require a JSON object carrying at least one normative TC260 field."""
-    try:
-        parsed = json.loads(value.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError):
-        return False
-    if not isinstance(parsed, dict):
-        return False
-    fields = cast("dict[object, object]", parsed)
-    return bool(TC260_AIGC_FIELDS & {str(key) for key in fields})
-
-
 def _tc260_aigc_regions(
     stream: BinaryIO,
     file_size: int,
@@ -249,11 +235,11 @@ def _tc260_aigc_regions(
                         ):
                             value_start = data_payload + 8
                             value_size = data_end - value_start
-                            if data_type != b"data" or value_size < 0 or value_size > _MAX_TC260_VALUE_BYTES:
+                            if data_type != b"data" or value_size < 0 or value_size > MAX_TC260_VALUE_BYTES:
                                 continue
                             stream.seek(value_start)
                             value = stream.read(value_size)
-                            if len(value) == value_size and _is_tc260_aigc_json(value):
+                            if len(value) == value_size and parse_tc260_aigc_json(value) is not None:
                                 regions.append((*key_span, value_start, data_end, value))
     return regions
 

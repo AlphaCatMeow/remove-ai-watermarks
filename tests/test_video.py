@@ -14,6 +14,7 @@ from remove_ai_watermarks.cli import main
 from remove_ai_watermarks.metadata import C2PA_UUID
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
 
@@ -79,6 +80,71 @@ def _video_with_tc260_ebml(path: Path, *, value: bytes = _TC260_AIGC) -> Path:
     segment = _ebml_element(b"\x18\x53\x80\x67", tags)
     path.write_bytes(_ebml_element(b"\x1a\x45\xdf\xa3", b"") + segment)
     return path
+
+
+def _riff_chunk(chunk_id: bytes, payload: bytes) -> bytes:
+    return chunk_id + len(payload).to_bytes(4, "little") + payload + (b"\x00" if len(payload) & 1 else b"")
+
+
+def _video_with_tc260_avi(path: Path, *, value: bytes = _TC260_AIGC) -> Path:
+    info = _riff_chunk(b"AIGC", value) + _riff_chunk(b"INAM", b"standard title\x00")
+    body = b"AVI " + _riff_chunk(b"LIST", b"INFO" + info) + _riff_chunk(b"JUNK", _VIDEO_PAYLOAD)
+    path.write_bytes(b"RIFF" + len(body).to_bytes(4, "little") + body)
+    return path
+
+
+def _amf0_string(value: bytes) -> bytes:
+    return b"\x02" + len(value).to_bytes(2, "big") + value
+
+
+def _video_with_tc260_flv(path: Path, *, value: bytes = _TC260_AIGC) -> Path:
+    payload = (
+        _amf0_string(b"onMetaData")
+        + b"\x08\x00\x00\x00\x02"
+        + len(b"AIGC").to_bytes(2, "big")
+        + b"AIGC"
+        + _amf0_string(value)
+        + len(b"duration").to_bytes(2, "big")
+        + b"duration"
+        + b"\x00"
+        + b"\x00\x00\x00\x00\x00\x00\x00\x00"
+        + b"\x00\x00\x09"
+    )
+    tag_header = b"\x12" + len(payload).to_bytes(3, "big") + b"\x00" * 7
+    path.write_bytes(
+        b"FLV\x01\x05\x00\x00\x00\x09"
+        + b"\x00\x00\x00\x00"
+        + tag_header
+        + payload
+        + (11 + len(payload)).to_bytes(4, "big")
+    )
+    return path
+
+
+_LEGACY_VIDEO_CASES = (
+    (".avi", _video_with_tc260_avi),
+    (".flv", _video_with_tc260_flv),
+)
+
+
+def _stamp_gray_mark(
+    frame: np.ndarray,
+    mark: Image.Image | np.ndarray,
+    *,
+    x: int,
+    y: int,
+    opacity: float,
+) -> None:
+    """Alpha-composite a grayscale synthetic mark onto a BGR test frame."""
+    mark_array = np.asarray(mark, dtype=np.float32)
+    height, width = mark_array.shape
+    alpha = mark_array[:, :, None] / 255 * opacity
+    crop = frame[y : y + height, x : x + width].astype(np.float32)
+    frame[y : y + height, x : x + width] = np.clip(
+        crop * (1 - alpha) + 255 * alpha,
+        0,
+        255,
+    ).astype(np.uint8)
 
 
 def _regeneration_metrics(
@@ -216,6 +282,47 @@ class TestVideoMetadataApi:
 
         source = _video_with_tc260_ebml(
             tmp_path / "source.mkv",
+            value=b'{"description":"ordinary application metadata"}',
+        )
+
+        report = inspect_video_metadata(source)
+
+        assert report.has_ai_metadata is False
+        assert report.markers == {}
+
+    @pytest.mark.parametrize(
+        ("suffix", "factory"),
+        _LEGACY_VIDEO_CASES,
+    )
+    def test_inspects_native_tc260_legacy_video_metadata(
+        self,
+        tmp_path: Path,
+        suffix: str,
+        factory: Callable[..., Path],
+    ):
+        from remove_ai_watermarks.video import inspect_video_metadata
+
+        source = factory(tmp_path / f"source{suffix}")
+
+        report = inspect_video_metadata(source)
+
+        assert report.has_ai_metadata is True
+        assert report.markers["aigc_label"].endswith("producer 00119144030008867405X210002")
+
+    @pytest.mark.parametrize(
+        ("suffix", "factory"),
+        _LEGACY_VIDEO_CASES,
+    )
+    def test_ignores_generic_legacy_video_aigc_tag(
+        self,
+        tmp_path: Path,
+        suffix: str,
+        factory: Callable[..., Path],
+    ):
+        from remove_ai_watermarks.video import inspect_video_metadata
+
+        source = factory(
+            tmp_path / f"source{suffix}",
             value=b'{"description":"ordinary application metadata"}',
         )
 
@@ -404,9 +511,7 @@ class TestSoraFrameLocalization:
         draw.text((68, 1), "Sora", font=font, fill=255, stroke_width=1)
         mark_array = cv2.resize(np.asarray(mark), (124, 44), interpolation=cv2.INTER_AREA)
         x, y = 620, 398
-        alpha = mark_array.astype(np.float32)[:, :, None] / 255 * 0.78
-        crop = frame[y : y + 44, x : x + 124].astype(np.float32)
-        frame[y : y + 44, x : x + 124] = np.clip(crop * (1 - alpha) + 255 * alpha, 0, 255).astype(np.uint8)
+        _stamp_gray_mark(frame, mark_array, x=x, y=y, opacity=0.78)
         return frame, (x, y, 124, 44)
 
     def test_localizes_independently_rendered_sora_like_mark(self):
@@ -448,13 +553,7 @@ class TestVeoFrameLocalization:
             (round(size * 0.39), round(size * 0.38)),
         )
         ImageDraw.Draw(mark).polygon(points, fill=255)
-        alpha = np.asarray(mark, dtype=np.float32)[:, :, None] / 255 * 0.72
-        crop = frame[y : y + size, x : x + size].astype(np.float32)
-        frame[y : y + size, x : x + size] = np.clip(
-            crop * (1 - alpha) + 255 * alpha,
-            0,
-            255,
-        ).astype(np.uint8)
+        _stamp_gray_mark(frame, mark, x=x, y=y, opacity=0.72)
 
         detection = detect_veo_frame(frame)
 
@@ -478,13 +577,7 @@ class TestVeoFrameLocalization:
         mark_height, mark_width = mark_array.shape
         x = frame.shape[1] - mark_width - 20
         y = frame.shape[0] - mark_height - 18
-        alpha = mark_array.astype(np.float32)[:, :, None] / 255 * 0.66
-        crop = frame[y : y + mark_height, x : x + mark_width].astype(np.float32)
-        frame[y : y + mark_height, x : x + mark_width] = np.clip(
-            crop * (1 - alpha) + 255 * alpha,
-            0,
-            255,
-        ).astype(np.uint8)
+        _stamp_gray_mark(frame, mark_array, x=x, y=y, opacity=0.66)
 
         detection = detect_veo_frame(frame)
 
@@ -528,15 +621,8 @@ class TestByteDanceFrameLocalization:
         except TypeError:
             font = ImageFont.load_default()
         draw.text((18, 8), "AI", font=font, fill=255)
-        mark_array = np.asarray(mark, dtype=np.float32)
         x, y = 1130, 620
-        alpha = mark_array[:, :, None] / 255 * 0.65
-        crop = frame[y : y + 60, x : x + 80].astype(np.float32)
-        frame[y : y + 60, x : x + 80] = np.clip(
-            crop * (1 - alpha) + 255 * alpha,
-            0,
-            255,
-        ).astype(np.uint8)
+        _stamp_gray_mark(frame, mark, x=x, y=y, opacity=0.65)
 
         detection = detect_seedance_frame(frame)
 
@@ -564,13 +650,7 @@ class TestByteDanceFrameLocalization:
         mark_height, mark_width = mark.shape
         x = frame.shape[1] - mark_width - 18
         y = frame.shape[0] - mark_height - 14
-        alpha = mark.astype(np.float32)[:, :, None] / 255 * 0.75
-        crop = frame[y : y + mark_height, x : x + mark_width].astype(np.float32)
-        frame[y : y + mark_height, x : x + mark_width] = np.clip(
-            crop * (1 - alpha) + 255 * alpha,
-            0,
-            255,
-        ).astype(np.uint8)
+        _stamp_gray_mark(frame, mark, x=x, y=y, opacity=0.75)
 
         detection = detect_dola_frame(frame)
 
@@ -592,6 +672,92 @@ class TestByteDanceFrameLocalization:
         assert mask[16, 16] == 255
         assert mask[83, 103] == 255
         assert mask[84, 104] == 0
+
+
+class TestAdditionalProviderFrameLocalization:
+    def test_localizes_independently_rendered_hailuo_label(self):
+        from remove_ai_watermarks.video_visible import _region_iou, detect_hailuo_frame
+
+        frame = np.full((720, 1280, 3), 32, dtype=np.uint8)
+        mark = Image.new("L", (330, 54), 0)
+        draw = ImageDraw.Draw(mark)
+        try:
+            font = ImageFont.load_default(size=28)
+        except TypeError:
+            font = ImageFont.load_default()
+        for index, height in enumerate((20, 34, 46, 34, 20)):
+            x = 4 + index * 6
+            draw.rounded_rectangle((x, 27 - height // 2, x + 2, 27 + height // 2), radius=1, fill=255)
+        draw.text((39, 8), "MINIMAX", font=font, fill=255)
+        draw.rectangle((164, 7, 166, 47), fill=255)
+        draw.ellipse((178, 8, 224, 50), outline=255, width=5)
+        draw.text((228, 8), "hailuo AI", font=font, fill=255)
+        x, y = 930, 650
+        _stamp_gray_mark(frame, mark, x=x, y=y, opacity=0.75)
+
+        detection = detect_hailuo_frame(frame)
+
+        assert detection.region is not None
+        assert detection.confidence >= 0.24
+        assert _region_iou(detection.region, (x, y, 330, 54)) >= 0.45
+
+    def test_localizes_kling_core_and_covers_version_suffix(self):
+        from remove_ai_watermarks.video_visible import detect_kling_frame
+
+        frame = np.full((720, 1280, 3), 28, dtype=np.uint8)
+        mark = np.zeros((42, 245), dtype=np.uint8)
+        cv2.ellipse(mark, (20, 21), (15, 15), 0, 20, 330, 255, 4, cv2.LINE_AA)
+        cv2.putText(
+            mark,
+            "KLING AI 1.6",
+            (43, 31),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.9,
+            255,
+            2,
+            cv2.LINE_AA,
+        )
+        x, y = 1018, 664
+        _stamp_gray_mark(frame, mark, x=x, y=y, opacity=0.72)
+
+        detection = detect_kling_frame(frame)
+        glyph_ys, glyph_xs = np.where(mark > 0)
+        glyph_box = (
+            x + int(glyph_xs.min()),
+            y + int(glyph_ys.min()),
+            int(glyph_xs.max() - glyph_xs.min() + 1),
+            int(glyph_ys.max() - glyph_ys.min() + 1),
+        )
+
+        assert detection.region is not None
+        assert detection.confidence >= 0.24
+        detected_x, detected_y, detected_width, detected_height = detection.region
+        glyph_x, glyph_y, glyph_width, glyph_height = glyph_box
+        assert detected_x <= glyph_x
+        assert detected_y <= glyph_y
+        assert detected_x + detected_width >= glyph_x + glyph_width
+        assert detected_y + detected_height >= glyph_y + glyph_height
+
+    def test_rejects_a_saturated_fixed_kling_shape(self):
+        from remove_ai_watermarks.video_visible import detect_kling_frame
+
+        frame = np.full((720, 1280, 3), 24, dtype=np.uint8)
+        cv2.circle(frame, (1040, 670), 15, (0, 220, 0), 5, cv2.LINE_AA)
+        cv2.putText(
+            frame,
+            "KLING AI 1.6",
+            (1065, 681),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.9,
+            (0, 220, 0),
+            2,
+            cv2.LINE_AA,
+        )
+
+        detection = detect_kling_frame(frame)
+
+        assert detection.confidence == 0.0
+        assert detection.region is None
 
 
 class TestSoraTemporalArbiter:
@@ -823,6 +989,35 @@ class TestByteDanceTemporalArbiter:
         assert not has_bytedance_video_provenance({"issuer": "BytePlus (ByteDance)"})
 
 
+class TestAdditionalProviderTemporalArbiter:
+    _HAILUO_BOX = (930, 650, 330, 54)
+    _KLING_BOX = (1018, 664, 245, 42)
+
+    @pytest.mark.parametrize(
+        ("stabilizer_name", "box", "weak_score", "strong_score"),
+        [
+            ("stabilize_hailuo_localizations", _HAILUO_BOX, 0.31, 0.35),
+            ("stabilize_kling_localizations", _KLING_BOX, 0.21, 0.25),
+        ],
+    )
+    def test_requires_a_strong_anchored_twelve_frame_run(
+        self,
+        stabilizer_name: str,
+        box: tuple[int, int, int, int],
+        weak_score: float,
+        strong_score: float,
+    ):
+        from remove_ai_watermarks import video_visible
+        from remove_ai_watermarks.video_visible import FrameLocalization
+
+        stabilize = getattr(video_visible, stabilizer_name)
+        weak = [FrameLocalization(index, weak_score, box) for index in range(12)]
+        strong = [FrameLocalization(index, strong_score, box) for index in range(12)]
+
+        assert stabilize(weak) == [None] * 12
+        assert stabilize(strong) == [box] * 12
+
+
 class TestVideoVisibleApi:
     def test_removes_stable_sora_run_and_writes_output(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         from remove_ai_watermarks import video_visible
@@ -932,9 +1127,11 @@ class TestVideoVisibleApi:
         [
             ("seedance", "scan_seedance_video", "box"),
             ("dola", "scan_dola_video", "box"),
+            ("hailuo", "scan_hailuo_video", "box"),
+            ("kling", "scan_kling_video", "box"),
         ],
     )
-    def test_dispatches_bytedance_detectors(
+    def test_dispatches_fixed_mark_detectors(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -985,7 +1182,7 @@ class TestVideoVisibleCli:
 
         assert result.exit_code == 0, result.output
         assert "temporally stable" in result.output
-        assert "sora|veo|seedance|dola" in result.output
+        assert "sora|veo|seedance|dola|hailuo|kling" in result.output
 
     def test_reports_removed_frames(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         from remove_ai_watermarks import video

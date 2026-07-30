@@ -4,10 +4,11 @@ Supported marks use fully synthetic silhouettes made from geometric primitives,
 OpenCV's built-in font, and Pillow's bundled font. Sora detection searches the
 full frame because the wordmark moves. Veo detection covers both the current
 four-point diamond and legacy ``Veo`` text. Seedance detects the boxed ``AI``
-label, while Dola detects its compact text label. A single frame is never enough
-to authorize removal: the temporal arbiter requires the candidate to recur at
-the same location across adjacent frames. This keeps isolated lookalikes in
-clean videos from becoming removal masks.
+label, Dola detects its compact text label, Hailuo detects the composite
+MINIMAX/Hailuo label, and Kling detects its version-independent wordmark core.
+A single frame is never enough to authorize removal: the temporal arbiter
+requires the candidate to recur at the same location across adjacent frames.
+This keeps isolated lookalikes in clean videos from becoming removal masks.
 
 Video pixels are decoded with OpenCV and encoded with the system ``ffmpeg``.
 Audio is stream-copied from the source. The video stream must be transcoded
@@ -64,6 +65,11 @@ _SEEDANCE_STRONG_CONFIDENCE = 0.43
 _DOLA_PROVENANCE_WEAK_CONFIDENCE = 0.48
 _DOLA_STRICT_WEAK_CONFIDENCE = 0.50
 _DOLA_STRONG_CONFIDENCE = 0.52
+_HAILUO_WEAK_CONFIDENCE = 0.30
+_HAILUO_STRONG_CONFIDENCE = 0.34
+_KLING_WEAK_CONFIDENCE = 0.20
+_KLING_STRONG_CONFIDENCE = 0.24
+_KLING_MIN_WHITE_FRACTION = 0.02
 _MIN_STABLE_FRAMES = 5
 _MIN_VEO_STABLE_FRAMES = 12
 _MIN_FIXED_MARK_STABLE_FRAMES = 12
@@ -76,6 +82,8 @@ _VEO_DIAMOND_PROFILES = (
     (44, 29, 40),
 )
 _DOLA_RELATIVE_HEIGHTS = tuple(value / 1000 for value in range(22, 41))
+_HAILUO_RELATIVE_HEIGHTS = tuple(value / 1000 for value in range(28, 56, 3))
+_KLING_RELATIVE_HEIGHTS = tuple(value / 1000 for value in range(24, 49, 3))
 
 
 @dataclass(frozen=True)
@@ -106,6 +114,14 @@ def _scalable_default_font(size: int) -> ImageFont.ImageFont | ImageFont.FreeTyp
         # package's supported dependency range. Resize that bundled bitmap font
         # before compositing it into the synthetic template.
         return ImageFont.load_default()
+
+
+def _crop_nonzero(image: NDArray[Any]) -> NDArray[Any]:
+    """Crop a synthetic template to its nonzero footprint."""
+    ys, xs = np.where(image > 0)
+    if len(xs) == 0:
+        return image
+    return image[ys.min() : ys.max() + 1, xs.min() : xs.max() + 1]
 
 
 @lru_cache(maxsize=1)
@@ -162,9 +178,7 @@ def _veo_templates() -> tuple[NDArray[Any], NDArray[Any]]:
     text_canvas = Image.new("L", (140, 60), 0)
     text_draw = ImageDraw.Draw(text_canvas)
     text_draw.text((2, 0), "Veo", font=_scalable_default_font(48), fill=255)
-    text = np.asarray(text_canvas, dtype=np.uint8)
-    ys, xs = np.where(text > 0)
-    text = text[ys.min() : ys.max() + 1, xs.min() : xs.max() + 1]
+    text = _crop_nonzero(np.asarray(text_canvas, dtype=np.uint8))
     return np.asarray(diamond_canvas, dtype=np.uint8), text
 
 
@@ -201,8 +215,75 @@ def _dola_template() -> NDArray[Any]:
         3,
         cv2.LINE_AA,
     )
-    ys, xs = np.where(canvas > 0)
-    return canvas[ys.min() : ys.max() + 1, xs.min() : xs.max() + 1]
+    return _crop_nonzero(canvas)
+
+
+@lru_cache(maxsize=1)
+def _hailuo_template() -> NDArray[Any]:
+    """Return a synthetic MINIMAX/Hailuo composite-label silhouette."""
+    canvas = Image.new("L", (680, 112), 0)
+    draw = ImageDraw.Draw(canvas)
+
+    # Five symmetric waveform strokes approximate the provider-independent
+    # geometry at the left edge without copying pixels from an export.
+    waveform_heights = (42, 70, 96, 70, 42)
+    center_y = 56
+    for index, height in enumerate(waveform_heights):
+        x = 10 + index * 13
+        draw.rounded_rectangle(
+            (x, center_y - height // 2, x + 5, center_y + height // 2),
+            radius=2,
+            fill=255,
+        )
+
+    font = _scalable_default_font(58)
+    draw.text((84, 18), "MINIMAX", font=font, fill=255, stroke_width=1, stroke_fill=255)
+    draw.rectangle((342, 18, 347, 92), fill=255)
+
+    # The Hailuo symbol is a ring with a small offset highlight.
+    draw.ellipse((370, 20, 446, 96), outline=255, width=12)
+    draw.ellipse((397, 38, 434, 76), fill=255)
+    draw.ellipse((397, 29, 420, 52), fill=0)
+    draw.text((456, 18), "hailuo AI", font=font, fill=255, stroke_width=1, stroke_fill=255)
+    return np.asarray(canvas, dtype=np.uint8)
+
+
+@lru_cache(maxsize=1)
+def _kling_templates() -> tuple[NDArray[Any], ...]:
+    """Return synthetic font variants for the Kling wordmark core."""
+    canvas = Image.new("L", (430, 104), 0)
+    draw = ImageDraw.Draw(canvas)
+    draw.text(
+        (2, 12),
+        "KLING AI",
+        font=_scalable_default_font(64),
+        fill=255,
+        stroke_width=1,
+        stroke_fill=255,
+    )
+    templates = [_crop_nonzero(np.asarray(canvas, dtype=np.uint8))]
+    for font in (cv2.FONT_HERSHEY_SIMPLEX, cv2.FONT_HERSHEY_DUPLEX):
+        cv_template = np.zeros((100, 500), dtype=np.uint8)
+        cv2.putText(
+            cv_template,
+            "KLING AI",
+            (2, 72),
+            font,
+            2.2,
+            255,
+            3,
+            cv2.LINE_AA,
+        )
+        templates.append(_crop_nonzero(cv_template))
+    return tuple(templates)
+
+
+@lru_cache(maxsize=1)
+def _kling_logo_template() -> NDArray[Any]:
+    """Return a synthetic ring approximation of the Kling swirl."""
+    template = np.zeros((100, 100), dtype=np.uint8)
+    cv2.circle(template, (50, 50), 34, 255, 14, cv2.LINE_AA)
+    return _crop_nonzero(template)
 
 
 def _top_hat(gray: NDArray[Any]) -> NDArray[Any]:
@@ -338,21 +419,43 @@ def _restore_region(
     return source_x, source_y, source_width, source_height
 
 
-def _detect_fixed_bottom_right_mark(
+def _bounded_region(
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+    *,
+    frame_width: int,
+    frame_height: int,
+) -> Region:
+    """Clip an expanded region to the frame without changing its anchor."""
+    bounded_x = max(0, x)
+    bounded_y = max(0, y)
+    return (
+        bounded_x,
+        bounded_y,
+        min(frame_width - bounded_x, width + x - bounded_x),
+        min(frame_height - bounded_y, height + y - bounded_y),
+    )
+
+
+def _detect_fixed_mark(
     image_bgr: NDArray[Any],
     template: NDArray[Any],
     *,
     relative_heights: tuple[float, ...],
     search_origin: tuple[float, float],
     kernel_fraction: float,
+    prefer_larger_within: float = 0.0,
+    normalized: tuple[NDArray[Any], float] | None = None,
     frame_index: int,
 ) -> FrameLocalization:
-    """Match one fixed bottom-right synthetic mark on a normalized frame."""
+    """Match one fixed synthetic mark inside a normalized-frame search region."""
     if image_bgr.size == 0:
         return FrameLocalization(frame_index, 0.0, None)
 
     frame_height, frame_width = image_bgr.shape[:2]
-    gray, scale = _normalized_gray(image_bgr)
+    gray, scale = normalized if normalized is not None else _normalized_gray(image_bgr)
     normalized_height, normalized_width = gray.shape[:2]
     short_side = min(normalized_height, normalized_width)
     search_x = round(normalized_width * search_origin[0])
@@ -363,8 +466,7 @@ def _detect_fixed_bottom_right_mark(
         normalized_width - search_x,
         normalized_height - search_y,
     )
-    best_confidence = 0.0
-    best_region: Region | None = None
+    matches: list[tuple[float, Region]] = []
     for relative_height in relative_heights:
         template_height = max(6, round(short_side * relative_height))
         template_width = max(1, round(template.shape[1] * template_height / template.shape[0]))
@@ -379,9 +481,21 @@ def _detect_fixed_bottom_right_mark(
             region=search_region,
             kernel_size=max(3, round(template_height * kernel_fraction) | 1),
         )
-        if confidence > best_confidence:
-            best_confidence = confidence
-            best_region = candidate
+        if candidate is not None and confidence > 0:
+            matches.append((confidence, candidate))
+    if not matches:
+        return FrameLocalization(frame_index, 0.0, None)
+    best_confidence, best_region = max(matches, key=lambda match: match[0])
+    if prefer_larger_within > 0:
+        eligible = [
+            (confidence, candidate)
+            for confidence, candidate in matches
+            if confidence >= best_confidence - prefer_larger_within
+        ]
+        best_confidence, best_region = max(
+            eligible,
+            key=lambda match: (match[1][2] * match[1][3], match[0]),
+        )
 
     return FrameLocalization(
         frame_index,
@@ -397,7 +511,7 @@ def _detect_fixed_bottom_right_mark(
 
 def detect_seedance_frame(image_bgr: NDArray[Any], *, frame_index: int = 0) -> FrameLocalization:
     """Locate the strongest fixed Seedance boxed-AI candidate."""
-    return _detect_fixed_bottom_right_mark(
+    return _detect_fixed_mark(
         image_bgr,
         _seedance_template(),
         relative_heights=(0.065, 0.075, 0.085, 0.095, 0.105),
@@ -409,7 +523,7 @@ def detect_seedance_frame(image_bgr: NDArray[Any], *, frame_index: int = 0) -> F
 
 def detect_dola_frame(image_bgr: NDArray[Any], *, frame_index: int = 0) -> FrameLocalization:
     """Locate the strongest fixed Dola AI text candidate."""
-    return _detect_fixed_bottom_right_mark(
+    return _detect_fixed_mark(
         image_bgr,
         _dola_template(),
         relative_heights=_DOLA_RELATIVE_HEIGHTS,
@@ -417,6 +531,137 @@ def detect_dola_frame(image_bgr: NDArray[Any], *, frame_index: int = 0) -> Frame
         kernel_fraction=0.50,
         frame_index=frame_index,
     )
+
+
+def detect_hailuo_frame(image_bgr: NDArray[Any], *, frame_index: int = 0) -> FrameLocalization:
+    """Locate the strongest fixed MINIMAX/Hailuo composite-label candidate."""
+    detection = _detect_fixed_mark(
+        image_bgr,
+        _hailuo_template(),
+        relative_heights=_HAILUO_RELATIVE_HEIGHTS,
+        search_origin=(0.28, 0.76),
+        kernel_fraction=0.18,
+        frame_index=frame_index,
+    )
+    if detection.region is None:
+        return detection
+    frame_width = image_bgr.shape[1]
+    x, y, width, height = detection.region
+    horizontal_padding = round(height * 1.25)
+    region = _bounded_region(
+        x - horizontal_padding,
+        y,
+        width + horizontal_padding * 2,
+        height,
+        frame_width=frame_width,
+        frame_height=image_bgr.shape[0],
+    )
+    return FrameLocalization(
+        frame_index,
+        detection.confidence,
+        region,
+    )
+
+
+def detect_kling_frame(image_bgr: NDArray[Any], *, frame_index: int = 0) -> FrameLocalization:
+    """Locate the fixed Kling wordmark core and include its version suffix."""
+    if image_bgr.size == 0:
+        return FrameLocalization(frame_index, 0.0, None)
+    frame_height, frame_width = image_bgr.shape[:2]
+    normalized = _normalized_gray(image_bgr)
+    expanded: list[FrameLocalization] = []
+    for template in _kling_templates():
+        detection = _detect_fixed_mark(
+            image_bgr,
+            template,
+            relative_heights=_KLING_RELATIVE_HEIGHTS,
+            search_origin=(0.64, 0.84),
+            kernel_fraction=0.18,
+            prefer_larger_within=0.06,
+            normalized=normalized,
+            frame_index=frame_index,
+        )
+        if detection.region is None:
+            continue
+        x, y, width, height = detection.region
+        left_padding = round(height * 1.8)
+        right_padding = round(height * 4.0)
+        vertical_padding = round(height * 0.4)
+        region = _bounded_region(
+            x - left_padding,
+            y - vertical_padding,
+            width + left_padding + right_padding,
+            height + vertical_padding * 2,
+            frame_width=frame_width,
+            frame_height=frame_height,
+        )
+        expanded.append(
+            FrameLocalization(
+                frame_index,
+                detection.confidence,
+                region,
+            )
+        )
+    if not expanded:
+        return FrameLocalization(frame_index, 0.0, None)
+    edge_candidates = [
+        candidate
+        for candidate in expanded
+        if candidate.region is not None
+        and candidate.region[0] + candidate.region[2] >= frame_width * 0.96
+        and candidate.region[1] + candidate.region[3] >= frame_height * 0.94
+    ]
+    font_candidate = None if not edge_candidates else max(edge_candidates, key=lambda candidate: candidate.confidence)
+
+    logo = _detect_fixed_mark(
+        image_bgr,
+        _kling_logo_template(),
+        relative_heights=tuple(value / 1000 for value in range(20, 61, 3)),
+        search_origin=(0.62, 0.90),
+        kernel_fraction=0.18,
+        prefer_larger_within=0.03,
+        normalized=normalized,
+        frame_index=frame_index,
+    )
+    logo_candidate: FrameLocalization | None = None
+    logo_x: int | None = None
+    if logo.region is not None and logo.confidence >= 0.44:
+        logo_x, logo_y, _, logo_height = logo.region
+        logo_candidate = FrameLocalization(
+            frame_index,
+            logo.confidence,
+            _bounded_region(
+                logo_x - round(logo_height * 0.2),
+                logo_y - round(logo_height * 0.25),
+                round(logo_height * 7.8),
+                round(logo_height * 1.5),
+                frame_width=frame_width,
+                frame_height=frame_height,
+            ),
+        )
+
+    best = font_candidate or logo_candidate
+    if (
+        font_candidate is not None
+        and font_candidate.region is not None
+        and logo_candidate is not None
+        and logo_x is not None
+    ):
+        font_x, _, font_width, _ = font_candidate.region
+        if logo_x <= font_x + round(font_width * 0.50):
+            best = logo_candidate
+    if best is None or best.region is None:
+        return FrameLocalization(frame_index, 0.0, None)
+    x, y, width, height = best.region
+    roi = image_bgr[y : y + height, x : x + width]
+    if roi.ndim == 2:
+        white_fraction = float(np.mean(roi >= 180))
+    else:
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        white_fraction = float(np.mean((hsv[:, :, 1] <= 55) & (hsv[:, :, 2] >= 180)))
+    if white_fraction < _KLING_MIN_WHITE_FRACTION:
+        return FrameLocalization(frame_index, 0.0, None)
+    return best
 
 
 def detect_veo_frame(image_bgr: NDArray[Any], *, frame_index: int = 0) -> FrameLocalization:
@@ -599,6 +844,38 @@ def stabilize_dola_localizations(
     )
 
 
+def stabilize_hailuo_localizations(
+    detections: tuple[FrameLocalization, ...] | list[FrameLocalization],
+) -> list[Region | None]:
+    """Accept a recurring MINIMAX/Hailuo label at a fixed position."""
+    return _stabilize_localizations(
+        detections,
+        provenance=False,
+        weak_floor=_HAILUO_WEAK_CONFIDENCE,
+        strong_floor=_HAILUO_STRONG_CONFIDENCE,
+        transition_floor=0.28,
+        min_stable_frames=_MIN_FIXED_MARK_STABLE_FRAMES,
+        cover_after_confirmation=True,
+        anchor_iou=0.80,
+    )
+
+
+def stabilize_kling_localizations(
+    detections: tuple[FrameLocalization, ...] | list[FrameLocalization],
+) -> list[Region | None]:
+    """Accept a recurring versioned Kling label at a fixed position."""
+    return _stabilize_localizations(
+        detections,
+        provenance=False,
+        weak_floor=_KLING_WEAK_CONFIDENCE,
+        strong_floor=_KLING_STRONG_CONFIDENCE,
+        transition_floor=0.30,
+        min_stable_frames=_MIN_FIXED_MARK_STABLE_FRAMES,
+        cover_after_confirmation=True,
+        anchor_iou=0.80,
+    )
+
+
 def _stabilize_localizations(
     detections: tuple[FrameLocalization, ...] | list[FrameLocalization],
     *,
@@ -732,6 +1009,16 @@ def scan_seedance_video(source: Path) -> VideoScan:
 def scan_dola_video(source: Path) -> VideoScan:
     """Decode a video once and collect one untrusted Dola candidate per frame."""
     return _scan_video(source, detect_dola_frame)
+
+
+def scan_hailuo_video(source: Path) -> VideoScan:
+    """Decode a video once and collect one untrusted Hailuo candidate per frame."""
+    return _scan_video(source, detect_hailuo_frame)
+
+
+def scan_kling_video(source: Path) -> VideoScan:
+    """Decode a video once and collect one untrusted Kling candidate per frame."""
+    return _scan_video(source, detect_kling_frame)
 
 
 def _mask_for_region(

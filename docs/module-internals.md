@@ -115,6 +115,13 @@ only a `Segment.Tags.Tag.SimpleTag` pairing `TagName=AIGC` with a JSON
 `TagString` carrying a TC260 field. The existing ffmpeg stream-copy path removes
 those container tags without transcoding the encoded streams.
 
+[`noai/riff.py`](../src/remove_ai_watermarks/noai/riff.py) and
+[`noai/flv.py`](../src/remove_ai_watermarks/noai/flv.py) implement the remaining
+normative TC260 video placements. The RIFF walker reads only AVI
+`LIST/INFO/AIGC` children. The FLV walker skips media tags and parses the AMF0
+`script.onMetaData.AIGC` string. Both require a recognized TC260 JSON field and
+use the verified ffmpeg stream-copy path for removal.
+
 [`video_encoding.py`](../src/remove_ai_watermarks/video_encoding.py) owns the
 raw-BGR ffmpeg command and pipe lifecycle shared by visible removal and
 invisible regeneration. It centralizes container codecs, optional audio stream
@@ -140,34 +147,44 @@ helpers to build a matched control and candidate grid, preventing research and
 shipped regeneration paths from drifting.
 
 [`video_visible.py`](../src/remove_ai_watermarks/video_visible.py) implements
-the first pixel stages for Sora, Veo, Seedance, and Dola. The Sora detector
-searches a normalized frame with a fully synthetic mascot-and-text silhouette
-at several scales. The Veo detector uses separate synthetic silhouettes for the
-current four-point diamond and legacy `Veo` text. Seedance uses a synthetic
-rounded boxed-`AI` silhouette, while Dola uses an OpenCV-font `Dola AI`
-silhouette. All fixed-mark searches are bounded to the bottom-right area and
-calibrated independently. A strong relocated Veo diamond may bypass the known
-layout anchors, but weak free-corner matches never enter the temporal arbiter.
+the first pixel stages for Sora, Veo, Seedance, Dola, Hailuo, and Kling. The
+Sora detector searches a normalized frame with a fully synthetic
+mascot-and-text silhouette at several scales. The Veo detector uses separate
+synthetic silhouettes for the current four-point diamond and legacy `Veo`
+text. Seedance uses a synthetic rounded boxed-`AI` silhouette, while Dola uses
+an OpenCV-font `Dola AI` silhouette. Hailuo uses a synthetic waveform,
+MINIMAX/Hailuo text, separator, and ring. Kling combines synthetic font
+variants with a ring approximation of its swirl; the logo path rescues
+wordmarks whose version or font differs, while the edge and white-label gates
+reject recurring scene texture. All fixed-mark searches are bounded to the
+expected lower-frame area and calibrated independently. A strong relocated Veo
+diamond may bypass the known layout anchors, but weak free-corner matches never
+enter the temporal arbiter.
 
 Every per-frame result is untrusted. The provider-specific stabilization
 wrappers share one recurrence implementation, while retaining separate visual
 floors and minimum-run policy. Provenance can relax a low-contrast run only
 after recurring visual evidence exists. Sora transition frames follow the
 nearest confirmed moving position only with Sora provenance. Veo, Seedance,
-and Dola additionally require candidates to remain anchored to the start of a
-run. This rejects slowly drifting scene details that still have high
-frame-to-frame overlap.
+Dola, Hailuo, and Kling additionally require candidates to remain anchored to
+the start of a run. This rejects slowly drifting scene details that still have
+high frame-to-frame overlap. Hailuo and Kling do not infer provenance from
+technical encoder tags; their confirmed public samples carried no provider
+metadata.
 
-Removal runs in a second decode pass. Sora, legacy Veo text, Dola text, and the
-Seedance box use box masks. Seedance deliberately fills the complete localized
-box: a synthetic outline mask passed repeat detection but left part of the real
-translucent border visible during visual end-to-end review. The square Veo
-diamond uses a synthetic shape mask so transparent corners do not erase
-unrelated pixels. Every mask goes through the shared `watermark_registry.fill`
-backends. ffmpeg encodes the changed video stream and copies optional audio.
-The default OpenCV fill is the speed floor; structured backgrounds need MI-GAN
-or LaMa for better reconstruction. Invisible video stages must continue to
-reuse the image and metadata implementations rather than copying their logic.
+Removal runs in a second decode pass. Sora, legacy Veo text, Dola text,
+Seedance, Hailuo, and Kling use box masks. Seedance deliberately fills the
+complete localized box: a synthetic outline mask passed repeat detection but
+left part of the real translucent border visible during visual end-to-end
+review. Hailuo expands beyond the matched core to cover both provider icons.
+Kling expands around the wordmark or swirl to include the version and optional
+`PRO` suffix. The square Veo diamond uses a synthetic shape mask so transparent
+corners do not erase unrelated pixels. Every mask goes through the shared
+`watermark_registry.fill` backends. ffmpeg encodes the changed video stream and
+copies optional audio. The default OpenCV fill is the speed floor; structured
+backgrounds need MI-GAN or LaMa for better reconstruction. Invisible video
+stages must continue to reuse the image and metadata implementations rather
+than copying their logic.
 
 The inherited ISOBMFF metadata path currently reads the complete container into
 memory; replacing that with a streaming box copier is a prerequisite for large
@@ -205,6 +222,9 @@ Key contracts:
   `moov.udta.meta.keys/ilst` and blanked without changing box sizes.
 - Native MKV/WebM TC260 `AIGC` entries are read from
   `Segment.Tags.Tag.SimpleTag` and removed through the ffmpeg stream-copy path.
+- Native AVI and FLV TC260 entries are read from `LIST/INFO/AIGC` and
+  `script.onMetaData.AIGC`, respectively, then removed through ffmpeg stream
+  copying.
 - Supported non-ISOBMFF audio and video containers use ffmpeg stream copying.
 - The low-level remover is fail-safe and can copy an undecodable file through
   unchanged.

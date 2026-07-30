@@ -45,6 +45,12 @@ Native MKV/WebM is a sixth serialization. TC260-PG-20257A stores
 `Segment.Tags.Tag.SimpleTag`. The bounded EBML reader skips cluster payloads;
 the existing ffmpeg stream-copy path removes the tags without transcoding.
 
+The same [TC260 video guide](https://www.tc260.org.cn/portal/article/303/4061772dcf684d8a96f395a4298e9e53)
+defines two more native serializations. AVI stores an `AIGC` child in
+`LIST/INFO`; FLV stores an AMF0 `AIGC` string under `script.onMetaData`. The
+bounded RIFF and FLV readers validate the JSON field set and skip media
+payloads. Removal remuxes either container through ffmpeg with stream copy.
+
 - **HuggingFace-hosted job (caught by `metadata.huggingface_job`, surfaced by `identify` as the `hf_job` signal, MEDIUM confidence):** HuggingFace Jobs / Spaces can stamp generated PNGs with an `hf-job-id` tEXt chunk holding the job UUID. It marks the *hosting job*, not a model, so it lifts an Unknown verdict to a tentative AI via `hf_only` but never overrides a hard metadata signal. `_HF_JOB_CAVEAT` states the limit. Removal drops the chunk through the PNG metadata whitelist.
 - **No detectable signal on some downloads:** Recraft exports and some hosted
   FLUX surfaces can arrive without a supported local signal. Midjourney samples
@@ -56,8 +62,9 @@ the existing ffmpeg stream-copy path removes the tags without transcoding.
 - **Built in the dated batch:** soft-binding vendor detection, IPTC Photo
   Metadata AI-disclosure fields, C2PA detection and stripping for supported
   ISOBMFF video, the optional Adobe TrustMark decoder, and temporally stabilized
-  visible Sora, Veo, Seedance, and Dola removal. Other visible video logos and
-  proprietary audio-watermark detection remain outside the package.
+  visible Sora, Veo, Seedance, Dola, Hailuo, and Kling removal. Other visible
+  video logos and proprietary audio-watermark detection remain outside the
+  package.
   Metadata stripping for supported audio containers is a separate implemented
   path.
 
@@ -100,6 +107,21 @@ implementation instead matches provider-specific synthetic silhouettes on
 every frame, then requires an anchored temporal run. This extra anchor check
 was necessary because a moving clean scene detail could retain enough adjacent
 overlap to pass a recurrence-only gate.
+
+**Hailuo and Kling use larger fixed composite labels.** Verified Hailuo exports
+carry a lower-edge waveform, `MINIMAX`, separator, Hailuo ring, and
+`hailuo AI` text. Verified Kling exports carry a bottom-right swirl,
+`KLING AI`, a changing version suffix, and sometimes `PRO`. The detectors use
+only synthetic primitives and fonts. Hailuo expands the matched core to cover
+the complete composite. Kling combines a version-independent text core with a
+synthetic ring rescue, then requires the recurring candidate to reach the
+expected frame edge and contain enough bright low-saturation pixels. Those
+extra gates were added after clean Luma and PixVerse scene details passed shape
+and temporal recurrence alone. The generic
+[WatermarkRemover-AI](https://github.com/D-Ogi/WatermarkRemover-AI) project
+instead uses Florence-2 to identify arbitrary watermarks before LaMa
+inpainting. That is broader, but it carries a much heavier model and a less
+auditable detection boundary than the provider-specific synthetic path here.
 
 **The faint-visible-mark precision/recall wall is fundamental, not a heuristic artifact.** The visible-watermark-detection literature has moved to LEARNED segmentation / object-detection (WDNet WACV'21 arXiv:2012.07616; SLBR ACM MM'21, open code+weights; the PRCV'18 large-scale detector; Su et al. survey 2025), but three verified findings bound what a learned detector actually buys: (1) a claim that a confidence threshold "cleanly separates" true from false matches even with a learned CNN front-end was **REFUTED** in verification (arXiv:1705.08593) -- the precision/recall wall persists even with learned features. (2) Learned detectors need a LARGE, pattern-diverse labeled dataset trained on synthetic composites (PRCV'18: 60k images / 80 watermark classes; CLWD: 60k / 160 marks), and off-distribution degradation is a documented real axis (models trained on limited-pattern LVW transfer worse; diversity of training patterns drives generalization). (3) Inference is cheap (WDNet ~8 ms at 256x256) -- the cost is the data pipeline, not runtime. Net: a learned detector shifts the frontier but does NOT remove the wall; for a SINGLE mark the cheapest next step is a small patch classifier (real-sparkle vs false-positive) on top of the existing NCC localizer, not a full segmentation model. SLBR is a ready baseline. The current NCC + false-positive gate (core-ring brightness margin + gradient-NCC crispness + white-core saturation) is a sound operating point, and the residual miss is the information-theoretic wall the literature confirms.
 
