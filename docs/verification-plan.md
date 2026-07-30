@@ -216,6 +216,22 @@ for the wrong reason reads exactly like success.
 the control passes -- but that is Google's claim about their own decoder, not our
 measurement, so it is a hypothesis to test, not a reason to skip the control.
 
+### D4. Video candidates require a matched transcode control
+
+Video experiments add frame sampling, resizing, frame-rate conversion, and a
+final video codec around the actual attack. `scripts/video_synthid_sweep.py`
+therefore emits `control.mp4` from the same selected frames and encoder settings
+as every VAE candidate.
+
+Verify the control first. Continue only when the provider oracle still detects
+SynthID in it. A generic Gemini response that discusses visual clues, metadata,
+or says the chat model lacks a decoder is not an oracle result. Record only the
+explicit SynthID verification verdict in the generated CSV.
+
+The harness shares one latent-noise field across the sequence to avoid adding
+independent frame noise. Its temporal-residual metric is a fidelity check, not a
+watermark detector.
+
 ## Tier E -- robustness and adversarial inputs
 
 Malformed and hostile inputs, including truncated files:

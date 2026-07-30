@@ -79,6 +79,18 @@ For important outputs:
 Provider systems can change, so a result verified on one file, seed, or version
 is not a permanent certification.
 
+### Video regeneration is research only
+
+The package does not expose a `video invisible` command. The separate
+`scripts/video_synthid_sweep.py` harness generates a matched transcode control
+and VAE-regenerated candidates for external verification. It deliberately
+leaves verdicts empty because neither the metadata proxy nor a visual quality
+metric can prove that the pixel watermark is gone.
+
+The control must use the same clip, frame rate, dimensions, and final codec as
+the candidates. If the control is not detected by the matching provider oracle,
+the experiment cannot attribute a quiet candidate to regeneration.
+
 ### Strength is content and seed dependent
 
 For SDXL and ControlNet, the CLI resolves an unset strength from the detected

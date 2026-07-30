@@ -288,6 +288,17 @@ invisible removal.
 - Provider watermark systems can change. Validate important outputs with the
   provider's own verifier when one is available.
 
+Video SynthID work is currently oracle-gated research, not a removal command.
+`scripts/video_synthid_sweep.py` builds a matched re-encode control plus
+VAE-regenerated candidates and leaves the verifier verdict blank:
+
+```bash
+uv run --extra gpu python scripts/video_synthid_sweep.py input.mp4 -o sweep/
+```
+
+The control must still be SynthID-positive before a negative candidate can
+count as removal evidence.
+
 ## Documentation
 
 Start with the [documentation index](docs/index.md).
