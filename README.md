@@ -7,8 +7,8 @@ Remove AI provenance marks from images and video you generated yourself:
 - C2PA, EXIF, XMP, IPTC, and related AI metadata.
 
 Video support covers metadata inspection and removal plus experimental visible
-Sora-wordmark removal. Invisible video-watermark removal remains a follow-up
-stage.
+Sora, Veo, Seedance, and Dola mark removal. Invisible video-watermark removal
+remains a follow-up stage.
 
 > Try it online at [raiw.cc](https://raiw.cc) if you do not want to install Python
 > or run diffusion models locally.
@@ -33,7 +33,7 @@ stage.
 | Erase a region you select | `erase` | No |
 | Strip AI metadata | `metadata` | No |
 | Strip AI metadata from video | `video metadata` | No |
-| Remove a known Sora or Veo mark from video | `video visible` | No |
+| Remove a known Sora, Veo, Seedance, or Dola mark from video | `video visible` | No |
 | Regenerate an image to disrupt invisible watermarks | `invisible` | Recommended |
 | Run visible, invisible, and metadata removal | `all` | Recommended |
 | Process a directory | `batch` | Depends on mode |
@@ -78,11 +78,13 @@ inspection includes the native TC260 `AIGC` tag in
 MKV and WebM inspection reads the normative
 `Segment.Tags.Tag.SimpleTag` placement.
 
-Remove a moving Sora wordmark or a Veo corner mark:
+Remove a supported visible video mark:
 
 ```bash
 remove-ai-watermarks video visible input.mp4 -o clean.mp4
 remove-ai-watermarks video visible veo.mp4 --mark veo -o veo_clean.mp4
+remove-ai-watermarks video visible seedance.mp4 --mark seedance -o seedance_clean.mp4
+remove-ai-watermarks video visible dola.mp4 --mark dola -o dola_clean.mp4
 ```
 
 This path scans the complete sequence before changing pixels. It accepts only a
@@ -90,8 +92,9 @@ mark that repeats at a stable position across adjacent frames, then reuses the
 same OpenCV, MI-GAN, or LaMa fill backends as image removal. Audio is copied
 without re-encoding; the video stream is transcoded because its pixels change.
 Sora covers the moving Sora 2 mascot and wordmark. Veo covers both the current
-four-point diamond and the legacy `Veo` text in the bottom-right corner. No
-output is written when no stable mark is found.
+four-point diamond and the legacy `Veo` text. Seedance covers the fixed boxed
+`AI` label, and Dola covers the fixed `Dola AI` text. No output is written when
+no stable mark is found.
 
 For invisible watermark removal, install the diffusion dependencies:
 
@@ -243,6 +246,12 @@ report = raiw.inspect_video_metadata("input.mp4")
 cleaned = raiw.remove_video_metadata("input.mp4")
 visible = raiw.remove_video_visible("sora.mp4", "sora_clean.mp4")
 veo = raiw.remove_video_visible("veo.mp4", "veo_clean.mp4", mark="veo")
+seedance = raiw.remove_video_visible(
+    "seedance.mp4",
+    "seedance_clean.mp4",
+    mark="seedance",
+)
+dola = raiw.remove_video_visible("dola.mp4", "dola_clean.mp4", mark="dola")
 ```
 
 The high level API accepts a file path or a BGR NumPy array. For path inputs it
@@ -267,9 +276,9 @@ invisible removal.
   and selected fill backend.
 - Invisible removal changes the whole image and may alter faces, text, or fine
   detail.
-- Visible video removal recognizes the moving Sora 2 wordmark and the current
-  Veo diamond plus legacy `Veo` text. It does not recognize the older Sora Turbo
-  corner swirl.
+- Visible video removal recognizes the moving Sora 2 wordmark, the current Veo
+  diamond plus legacy `Veo` text, the Seedance boxed `AI` label, and the fixed
+  `Dola AI` text. It does not recognize the older Sora Turbo corner swirl.
   The classical OpenCV backend can smear structured backgrounds; use MI-GAN or
   LaMa when recovery quality matters. Video SynthID is not removed yet.
   MP4/MOV/M4V metadata stripping currently reads the full container into

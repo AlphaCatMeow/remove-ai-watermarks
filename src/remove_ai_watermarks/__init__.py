@@ -8,7 +8,7 @@ High-level API (lazy, so ``import remove_ai_watermarks`` stays cheap)::
     raiw.visible_provenance("in.png")                   # -> frozenset of confirmed vendors
     raiw.inspect_video_metadata("in.mp4")               # -> VideoMetadataReport
     raiw.remove_video_metadata("in.mp4", "out.mp4")     # verified metadata strip
-    raiw.remove_video_visible("in.mp4", "out.mp4")      # stable Sora or Veo mark removal
+    raiw.remove_video_visible("in.mp4", "out.mp4")      # stable visible video-mark removal
 
 For a provenance verdict use the ``identify`` submodule::
 

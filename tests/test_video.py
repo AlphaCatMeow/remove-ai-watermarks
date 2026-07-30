@@ -392,6 +392,85 @@ class TestVeoFrameLocalization:
         assert mask[67, 67] == 0
 
 
+class TestByteDanceFrameLocalization:
+    def test_localizes_independently_rendered_seedance_box(self):
+        from remove_ai_watermarks.video_visible import _region_iou, detect_seedance_frame
+
+        frame = np.full((720, 1280, 3), 30, dtype=np.uint8)
+        mark = Image.new("L", (80, 60), 0)
+        draw = ImageDraw.Draw(mark)
+        draw.rounded_rectangle((2, 2, 70, 53), radius=14, outline=255, width=4)
+        try:
+            font = ImageFont.load_default(size=35)
+        except TypeError:
+            font = ImageFont.load_default()
+        draw.text((18, 8), "AI", font=font, fill=255)
+        mark_array = np.asarray(mark, dtype=np.float32)
+        x, y = 1130, 620
+        alpha = mark_array[:, :, None] / 255 * 0.65
+        crop = frame[y : y + 60, x : x + 80].astype(np.float32)
+        frame[y : y + 60, x : x + 80] = np.clip(
+            crop * (1 - alpha) + 255 * alpha,
+            0,
+            255,
+        ).astype(np.uint8)
+
+        detection = detect_seedance_frame(frame)
+
+        assert detection.region is not None
+        assert detection.confidence >= 0.43
+        assert _region_iou(detection.region, (x, y, 80, 60)) >= 0.75
+
+    def test_localizes_independently_rendered_dola_text(self):
+        from remove_ai_watermarks.video_visible import _region_iou, detect_dola_frame
+
+        frame = np.full((720, 1280, 3), 35, dtype=np.uint8)
+        mark = np.zeros((40, 150), dtype=np.uint8)
+        cv2.putText(
+            mark,
+            "Dola AI",
+            (2, 28),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.9,
+            255,
+            2,
+            cv2.LINE_AA,
+        )
+        ys, xs = np.where(mark > 0)
+        mark = mark[ys.min() : ys.max() + 1, xs.min() : xs.max() + 1]
+        mark_height, mark_width = mark.shape
+        x = frame.shape[1] - mark_width - 18
+        y = frame.shape[0] - mark_height - 14
+        alpha = mark.astype(np.float32)[:, :, None] / 255 * 0.75
+        crop = frame[y : y + mark_height, x : x + mark_width].astype(np.float32)
+        frame[y : y + mark_height, x : x + mark_width] = np.clip(
+            crop * (1 - alpha) + 255 * alpha,
+            0,
+            255,
+        ).astype(np.uint8)
+
+        detection = detect_dola_frame(frame)
+
+        assert detection.region is not None
+        assert detection.confidence >= 0.52
+        assert _region_iou(detection.region, (x, y, mark_width, mark_height)) >= 0.75
+
+    def test_seedance_box_mask_covers_the_full_localized_mark(self):
+        from remove_ai_watermarks.video_visible import _mask_for_region
+
+        mask = _mask_for_region(
+            np.zeros((120, 160, 3), dtype=np.uint8),
+            (20, 20, 80, 60),
+            padding_fraction=0.0,
+            mask_style="box",
+        )
+
+        assert mask[15, 15] == 0
+        assert mask[16, 16] == 255
+        assert mask[83, 103] == 255
+        assert mask[84, 104] == 0
+
+
 class TestSoraTemporalArbiter:
     _BOX = (40, 60, 150, 54)
 
@@ -562,6 +641,65 @@ class TestVeoTemporalArbiter:
         assert stabilize_veo_localizations(detections, provenance=False) == [None] * 12
 
 
+class TestByteDanceTemporalArbiter:
+    _SEEDANCE_BOX = (1110, 610, 90, 66)
+    _DOLA_BOX = (1160, 680, 96, 22)
+
+    def test_seedance_requires_twelve_recurring_frames(self):
+        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_seedance_localizations
+
+        detections = [FrameLocalization(index, 0.50, self._SEEDANCE_BOX) for index in range(11)]
+
+        assert stabilize_seedance_localizations(detections, provenance=False) == [None] * 11
+
+    def test_seedance_strong_run_covers_low_contrast_frames(self):
+        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_seedance_localizations
+
+        detections = [FrameLocalization(index, 0.45, self._SEEDANCE_BOX) for index in range(12)]
+        detections.extend(FrameLocalization(index, 0.20, (200, 100, 80, 60)) for index in range(12, 15))
+
+        assert stabilize_seedance_localizations(detections, provenance=False) == [self._SEEDANCE_BOX] * 15
+
+    def test_seedance_rejects_a_slowly_drifting_scene_detail(self):
+        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_seedance_localizations
+
+        detections = [FrameLocalization(index, 0.46, (1110 - index * 3, 610, 90, 66)) for index in range(14)]
+
+        assert stabilize_seedance_localizations(detections, provenance=False) == [None] * 14
+
+    def test_dola_requires_twelve_recurring_frames(self):
+        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_dola_localizations
+
+        detections = [FrameLocalization(index, 0.60, self._DOLA_BOX) for index in range(11)]
+
+        assert stabilize_dola_localizations(detections, provenance=True) == [None] * 11
+
+    def test_dola_provenance_accepts_recurring_low_contrast_text(self):
+        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_dola_localizations
+
+        detections = [FrameLocalization(index, 0.49, self._DOLA_BOX) for index in range(12)]
+
+        assert stabilize_dola_localizations(detections, provenance=True) == [self._DOLA_BOX] * 12
+
+    def test_dola_without_provenance_needs_a_strong_frame(self):
+        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_dola_localizations
+
+        detections = [FrameLocalization(index, 0.51, self._DOLA_BOX) for index in range(12)]
+
+        assert stabilize_dola_localizations(detections, provenance=False) == [None] * 12
+
+    def test_bytedance_provenance_requires_ai_source_type(self):
+        from remove_ai_watermarks.video_visible import has_bytedance_video_provenance
+
+        assert has_bytedance_video_provenance(
+            {
+                "issuer": "BytePlus (ByteDance)",
+                "source_type": "trainedAlgorithmicMedia (AI-generated)",
+            }
+        )
+        assert not has_bytedance_video_provenance({"issuer": "BytePlus (ByteDance)"})
+
+
 class TestVideoVisibleApi:
     def test_removes_stable_sora_run_and_writes_output(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         from remove_ai_watermarks import video_visible
@@ -666,6 +804,57 @@ class TestVideoVisibleApi:
         assert result.detected_frames == 12
         assert result.removed_frames == 12
 
+    @pytest.mark.parametrize(
+        ("mark", "scan_name", "mask_style"),
+        [
+            ("seedance", "scan_seedance_video", "box"),
+            ("dola", "scan_dola_video", "box"),
+        ],
+    )
+    def test_dispatches_bytedance_detectors(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        mark: str,
+        scan_name: str,
+        mask_style: str,
+    ):
+        from remove_ai_watermarks import video_visible
+        from remove_ai_watermarks.video import remove_video_visible
+        from remove_ai_watermarks.video_visible import FrameLocalization, VideoScan
+
+        source = _video_with_c2pa(tmp_path / "source.mp4")
+        output = tmp_path / "clean.mp4"
+        box = (40, 40, 20, 12)
+        scan = VideoScan(
+            width=64,
+            height=64,
+            fps=24.0,
+            detections=tuple(FrameLocalization(index, 0.60, box) for index in range(12)),
+        )
+        monkeypatch.setattr(video_visible, scan_name, lambda _source: scan)
+
+        def fake_encode(
+            _source: Path,
+            target: Path,
+            _scan: VideoScan,
+            regions: list[tuple[int, int, int, int] | None],
+            **kwargs: object,
+        ) -> int:
+            assert regions == [box] * 12
+            assert kwargs["mask_style"] == mask_style
+            target.write_bytes(_MP4_FTYP + _box(b"mdat", _VIDEO_PAYLOAD))
+            return 12
+
+        monkeypatch.setattr(video_visible, "encode_clean_video", fake_encode)
+
+        result = remove_video_visible(source, output, mark=mark)
+
+        assert result.output == output
+        assert result.mark == mark
+        assert result.detected_frames == 12
+        assert result.removed_frames == 12
+
 
 class TestVideoVisibleCli:
     def test_help(self):
@@ -673,7 +862,7 @@ class TestVideoVisibleCli:
 
         assert result.exit_code == 0, result.output
         assert "temporally stable" in result.output
-        assert "sora|veo" in result.output
+        assert "sora|veo|seedance|dola" in result.output
 
     def test_reports_removed_frames(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         from remove_ai_watermarks import video

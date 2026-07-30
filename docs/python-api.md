@@ -154,7 +154,7 @@ stream bytes. MKV/WebM inspection recognizes the corresponding
 `Segment.Tags.Tag.SimpleTag` representation; its removal requires ffmpeg for a
 stream-copy remux.
 
-## Remove a visible Sora or Veo video mark
+## Remove a supported visible video mark
 
 ```python
 import remove_ai_watermarks as raiw
@@ -173,14 +173,26 @@ veo_result = raiw.remove_video_visible(
     "veo_clean.mp4",
     mark="veo",
 )
+seedance_result = raiw.remove_video_visible(
+    "seedance.mp4",
+    "seedance_clean.mp4",
+    mark="seedance",
+)
+dola_result = raiw.remove_video_visible(
+    "dola.mp4",
+    "dola_clean.mp4",
+    mark="dola",
+)
 ```
 
 `remove_video_visible` scans the complete video before writing output. It
 combines synthetic multi-scale visual matching with temporal consistency, so an
 isolated lookalike in one frame is not enough to authorize inpainting. The
-supported `mark` values are `sora` and `veo`. The Veo detector recognizes the
-current four-point diamond and the legacy `Veo` text with separate synthetic
-silhouettes.
+supported `mark` values are `sora`, `veo`, `seedance`, and `dola`. The Veo
+detector recognizes the current four-point diamond and the legacy `Veo` text.
+Seedance recognizes the boxed `AI` label, while Dola recognizes its compact
+text label. Each variant has an independent synthetic silhouette and calibrated
+temporal policy.
 
 The returned `VideoVisibleResult` records the total, detected, and removed frame
 counts plus any AI metadata that survived the output encode. The function

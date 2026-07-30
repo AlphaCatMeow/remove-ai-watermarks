@@ -1,8 +1,8 @@
 """High-level video processing API.
 
 Supported experimental stages are container-level AI metadata inspection and
-removal plus temporally stabilized visible Sora and Veo removal. The pixel path
-reuses the image package's shared fill backends.
+removal plus temporally stabilized visible Sora, Veo, Seedance, and Dola
+removal. The pixel path reuses the image package's shared fill backends.
 """
 
 from __future__ import annotations
@@ -133,26 +133,31 @@ def remove_video_visible(
 ) -> VideoVisibleResult:
     """Remove a supported visible AI wordmark from a video.
 
-    Supported marks are ``sora`` and ``veo``. The full sequence is scanned before
-    pixels change, and only recurring candidates are accepted. Audio is copied
-    without re-encoding; video is transcoded because the pixels change. When no
-    stable mark is found, no output is written and ``output`` in the result is
-    ``None``.
+    Supported marks are ``sora``, ``veo``, ``seedance``, and ``dola``. The full
+    sequence is scanned before pixels change, and only recurring candidates are
+    accepted. Audio is copied without re-encoding; video is transcoded because
+    the pixels change. When no stable mark is found, no output is written and
+    ``output`` in the result is ``None``.
     """
     from remove_ai_watermarks.metadata import get_ai_metadata
     from remove_ai_watermarks.video_visible import (
         encode_clean_video,
+        has_bytedance_video_provenance,
         has_sora_provenance,
         has_veo_provenance,
+        scan_dola_video,
+        scan_seedance_video,
         scan_sora_video,
         scan_veo_video,
+        stabilize_dola_localizations,
+        stabilize_seedance_localizations,
         stabilize_sora_localizations,
         stabilize_veo_localizations,
     )
     from remove_ai_watermarks.watermark_registry import resolve_backend
 
-    if mark not in {"sora", "veo"}:
-        raise ValueError("Unsupported visible video mark; expected 'sora' or 'veo'")
+    if mark not in {"sora", "veo", "seedance", "dola"}:
+        raise ValueError("Unsupported visible video mark; expected sora, veo, seedance, or dola")
     if backend not in {"auto", "cv2", "migan", "lama"}:
         raise ValueError("Unsupported fill backend; expected auto, cv2, migan, or lama")
 
@@ -167,7 +172,7 @@ def remove_video_visible(
         )
         padding_fraction = 0.28
         mask_style = "box"
-    else:
+    elif mark == "veo":
         scan = scan_veo_video(source_path)
         regions = stabilize_veo_localizations(
             scan.detections,
@@ -175,6 +180,22 @@ def remove_video_visible(
         )
         padding_fraction = 0.18
         mask_style = "veo"
+    elif mark == "seedance":
+        scan = scan_seedance_video(source_path)
+        regions = stabilize_seedance_localizations(
+            scan.detections,
+            provenance=has_bytedance_video_provenance(markers),
+        )
+        padding_fraction = 0.0
+        mask_style = "box"
+    else:
+        scan = scan_dola_video(source_path)
+        regions = stabilize_dola_localizations(
+            scan.detections,
+            provenance=has_bytedance_video_provenance(markers),
+        )
+        padding_fraction = 0.20
+        mask_style = "box"
     detected_frames = sum(region is not None for region in regions)
     if detected_frames == 0:
         return VideoVisibleResult(

@@ -115,32 +115,34 @@ only a `Segment.Tags.Tag.SimpleTag` pairing `TagName=AIGC` with a JSON
 those container tags without transcoding the encoded streams.
 
 [`video_visible.py`](../src/remove_ai_watermarks/video_visible.py) implements
-the first pixel stages for Sora and Veo. The Sora detector searches a normalized
-frame with a fully synthetic mascot-and-text silhouette at several scales. The
-Veo detector uses separate synthetic silhouettes for the current four-point
-diamond and legacy `Veo` text, with bounded bottom-right searches calibrated
-independently from Sora. A strong relocated-diamond match may bypass the known
+the first pixel stages for Sora, Veo, Seedance, and Dola. The Sora detector
+searches a normalized frame with a fully synthetic mascot-and-text silhouette
+at several scales. The Veo detector uses separate synthetic silhouettes for the
+current four-point diamond and legacy `Veo` text. Seedance uses a synthetic
+rounded boxed-`AI` silhouette, while Dola uses an OpenCV-font `Dola AI`
+silhouette. All fixed-mark searches are bounded to the bottom-right area and
+calibrated independently. A strong relocated Veo diamond may bypass the known
 layout anchors, but weak free-corner matches never enter the temporal arbiter.
-This prevents recurring scene details in clean API exports from being promoted
-to a watermark.
 
 Every per-frame result is untrusted. The provider-specific stabilization
 wrappers share one recurrence implementation, while retaining separate visual
 floors and minimum-run policy. Provenance can relax a low-contrast run only
 after recurring visual evidence exists. Sora transition frames follow the
-nearest confirmed moving position only with Sora provenance. A confirmed Veo
-run can cover low-contrast frames at its fixed position. This separation keeps
-clean API exports from being modified merely because metadata names the same
-generator.
+nearest confirmed moving position only with Sora provenance. Veo, Seedance,
+and Dola additionally require candidates to remain anchored to the start of a
+run. This rejects slowly drifting scene details that still have high
+frame-to-frame overlap.
 
-Removal runs in a second decode pass. Sora and legacy Veo text use padded box
-masks. The square Veo diamond uses a synthetic shape mask so transparent box
-corners do not erase unrelated pixels. Every mask goes through the shared
-`watermark_registry.fill` backends. ffmpeg encodes the changed video stream and
-copies optional audio. The default OpenCV fill is the speed floor; structured
-backgrounds need MI-GAN or LaMa for better reconstruction. Invisible video
-stages must continue to reuse the image and metadata implementations rather
-than copying their logic.
+Removal runs in a second decode pass. Sora, legacy Veo text, Dola text, and the
+Seedance box use box masks. Seedance deliberately fills the complete localized
+box: a synthetic outline mask passed repeat detection but left part of the real
+translucent border visible during visual end-to-end review. The square Veo
+diamond uses a synthetic shape mask so transparent corners do not erase
+unrelated pixels. Every mask goes through the shared `watermark_registry.fill`
+backends. ffmpeg encodes the changed video stream and copies optional audio.
+The default OpenCV fill is the speed floor; structured backgrounds need MI-GAN
+or LaMa for better reconstruction. Invisible video stages must continue to
+reuse the image and metadata implementations rather than copying their logic.
 
 The inherited ISOBMFF metadata path currently reads the complete container into
 memory; replacing that with a streaming box copier is a prerequisite for large

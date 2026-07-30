@@ -1152,7 +1152,7 @@ def cmd_video_metadata(
 )
 @click.option(
     "--mark",
-    type=click.Choice(["sora", "veo"]),
+    type=click.Choice(["sora", "veo", "seedance", "dola"]),
     default="sora",
     help="Visible AI mark to remove.",
 )

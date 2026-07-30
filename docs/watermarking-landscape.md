@@ -56,8 +56,8 @@ the existing ffmpeg stream-copy path removes the tags without transcoding.
 - **Built in the dated batch:** soft-binding vendor detection, IPTC Photo
   Metadata AI-disclosure fields, C2PA detection and stripping for supported
   ISOBMFF video, the optional Adobe TrustMark decoder, and temporally stabilized
-  visible Sora and Veo removal. Other visible video logos and proprietary
-  audio-watermark detection remain outside the package.
+  visible Sora, Veo, Seedance, and Dola removal. Other visible video logos and
+  proprietary audio-watermark detection remain outside the package.
   Metadata stripping for supported audio containers is a separate implemented
   path.
 
@@ -89,6 +89,17 @@ need for cross-frame position agreement. Our implementation copies no logo
 pixels or alpha maps from that project: it uses two synthetic silhouettes,
 known-layout searches plus a strong relocated-diamond fallback, and a separate
 temporal arbiter calibrated against raw watermarked clips and clean API exports.
+
+**ByteDance video surfaces use distinct visible labels.** Public Seedance
+showcase clips contain a fixed rounded box with `AI`, while the Dola sample in
+[issue #16](https://github.com/wiltodelta/remove-ai-watermarks/issues/16) uses
+fixed `Dola AI` text. The independent
+[Seedance remover](https://github.com/SamurAIGPT/seedance-2.0-watermark-remover)
+estimates a static corner from a temporal mean frame and edge density. Our
+implementation instead matches provider-specific synthetic silhouettes on
+every frame, then requires an anchored temporal run. This extra anchor check
+was necessary because a moving clean scene detail could retain enough adjacent
+overlap to pass a recurrence-only gate.
 
 **The faint-visible-mark precision/recall wall is fundamental, not a heuristic artifact.** The visible-watermark-detection literature has moved to LEARNED segmentation / object-detection (WDNet WACV'21 arXiv:2012.07616; SLBR ACM MM'21, open code+weights; the PRCV'18 large-scale detector; Su et al. survey 2025), but three verified findings bound what a learned detector actually buys: (1) a claim that a confidence threshold "cleanly separates" true from false matches even with a learned CNN front-end was **REFUTED** in verification (arXiv:1705.08593) -- the precision/recall wall persists even with learned features. (2) Learned detectors need a LARGE, pattern-diverse labeled dataset trained on synthetic composites (PRCV'18: 60k images / 80 watermark classes; CLWD: 60k / 160 marks), and off-distribution degradation is a documented real axis (models trained on limited-pattern LVW transfer worse; diversity of training patterns drives generalization). (3) Inference is cheap (WDNet ~8 ms at 256x256) -- the cost is the data pipeline, not runtime. Net: a learned detector shifts the frontier but does NOT remove the wall; for a SINGLE mark the cheapest next step is a small patch classifier (real-sparkle vs false-positive) on top of the existing NCC localizer, not a full segmentation model. SLBR is a ready baseline. The current NCC + false-positive gate (core-ring brightness margin + gradient-NCC crispness + white-core saturation) is a sound operating point, and the residual miss is the information-theoretic wall the literature confirms.
 

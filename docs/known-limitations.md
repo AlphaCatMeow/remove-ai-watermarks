@@ -174,16 +174,19 @@ WebM, Matroska, MP3, WAV, FLAC, OGG, Opus, and AAC container metadata is strippe
 through ffmpeg with stream copying. The operation fails if ffmpeg is absent or
 cannot parse the input.
 
-### Visible video removal supports Sora and Veo and is still experimental
+### Visible video removal is provider-specific and still experimental
 
 The experimental `video metadata` command and high level video API inspect and
 strip supported AI provenance metadata without transcoding streams.
 
 `video visible` and `remove_video_visible` additionally support the moving
-Sora 2 mascot and wordmark, the current Veo four-point diamond, and the legacy
-`Veo` text. Detection requires a recurring visual candidate across adjacent
-frames. Provider provenance can recover low-contrast runs only after visual
-evidence exists, so metadata alone does not erase a clean API export.
+Sora 2 mascot and wordmark, the current Veo four-point diamond, the legacy
+`Veo` text, the Seedance boxed `AI` label, and the fixed `Dola AI` text.
+Detection requires a recurring visual candidate across adjacent frames.
+Seedance, Dola, and Veo candidates must remain anchored rather than drifting
+with a scene object. Provider provenance can recover low-contrast runs only
+after visual evidence exists, so metadata alone does not erase a clean API
+export.
 Historical Sora Turbo exports use a small OpenAI swirl in the corner rather
 than the moving mascot-and-wordmark design; that earlier variant is not
 detected by the `sora` video mark. Other provider video labels and proprietary
@@ -194,9 +197,12 @@ fill is not a motion-aware video inpainting model. OpenCV can leave a visible
 smear where the mark overlaps a hard edge or structured texture, and the smear
 can vary over time. MI-GAN and LaMa improve individual frames but do not
 guarantee temporal coherence. The Veo diamond uses a shape mask to limit damage
-outside the symbol, but OpenCV may still soften texture inside it. The current
-encoder also emits a constant-frame-rate output at the decoded stream rate, so
-variable-frame-rate preservation is not yet guaranteed.
+outside the symbol. Seedance fills the full localized box because a synthetic
+outline mask left part of the real translucent border visible in an end-to-end
+check. OpenCV may therefore soften texture inside that small box; use MI-GAN or
+LaMa when reconstruction quality matters. The current encoder also emits a
+constant-frame-rate output at the decoded stream rate, so variable-frame-rate
+preservation is not yet guaranteed.
 
 Native TC260 metadata in MP4/MOV is supported at its normative
 `moov.udta.meta.keys/ilst` placement, including non-faststart files whose

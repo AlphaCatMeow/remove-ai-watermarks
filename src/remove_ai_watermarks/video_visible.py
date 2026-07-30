@@ -1,9 +1,10 @@
 """Visible AI-watermark localization and removal for video.
 
-Supported marks use fully synthetic silhouettes made from geometric primitives
-and Pillow's bundled font. Sora detection searches the full frame because the
-wordmark moves. Veo detection covers both the current four-point diamond and the
-legacy ``Veo`` text in the bottom-right corner. A single frame is never enough
+Supported marks use fully synthetic silhouettes made from geometric primitives,
+OpenCV's built-in font, and Pillow's bundled font. Sora detection searches the
+full frame because the wordmark moves. Veo detection covers both the current
+four-point diamond and legacy ``Veo`` text. Seedance detects the boxed ``AI``
+label, while Dola detects its compact text label. A single frame is never enough
 to authorize removal: the temporal arbiter requires the candidate to recur at
 the same location across adjacent frames. This keeps isolated lookalikes in
 clean videos from becoming removal masks.
@@ -53,8 +54,14 @@ _SORA_STRONG_CONFIDENCE = 0.65
 _VEO_PROVENANCE_WEAK_CONFIDENCE = 0.45
 _VEO_STRICT_WEAK_CONFIDENCE = 0.50
 _VEO_STRONG_CONFIDENCE = 0.55
+_SEEDANCE_WEAK_CONFIDENCE = 0.38
+_SEEDANCE_STRONG_CONFIDENCE = 0.43
+_DOLA_PROVENANCE_WEAK_CONFIDENCE = 0.48
+_DOLA_STRICT_WEAK_CONFIDENCE = 0.50
+_DOLA_STRONG_CONFIDENCE = 0.52
 _MIN_STABLE_FRAMES = 5
 _MIN_VEO_STABLE_FRAMES = 12
+_MIN_FIXED_MARK_STABLE_FRAMES = 12
 _MAX_STABLE_GAP = 2
 _STABLE_IOU = 0.55
 _VEO_REFERENCE_SHORT_SIDE = 720
@@ -63,6 +70,7 @@ _VEO_DIAMOND_PROFILES = (
     (48, 72, 72),
     (44, 29, 40),
 )
+_DOLA_RELATIVE_HEIGHTS = tuple(value / 1000 for value in range(22, 41))
 
 
 @dataclass(frozen=True)
@@ -153,6 +161,43 @@ def _veo_templates() -> tuple[NDArray[Any], NDArray[Any]]:
     ys, xs = np.where(text > 0)
     text = text[ys.min() : ys.max() + 1, xs.min() : xs.max() + 1]
     return np.asarray(diamond_canvas, dtype=np.uint8), text
+
+
+@lru_cache(maxsize=1)
+def _seedance_template() -> NDArray[Any]:
+    """Return a synthetic boxed-AI silhouette for Seedance exports."""
+    canvas = Image.new("L", (160, 120), 0)
+    draw = ImageDraw.Draw(canvas)
+    draw.rounded_rectangle((8, 8, 142, 105), radius=28, outline=255, width=7)
+    draw.text(
+        (35, 17),
+        "AI",
+        font=_scalable_default_font(70),
+        fill=255,
+        stroke_width=1,
+        stroke_fill=255,
+    )
+    draw.rounded_rectangle((142, 94, 157, 109), radius=3, outline=255, width=2)
+    draw.text((145, 94), "AI", font=_scalable_default_font(8), fill=255)
+    return np.asarray(canvas, dtype=np.uint8)
+
+
+@lru_cache(maxsize=1)
+def _dola_template() -> NDArray[Any]:
+    """Return a synthetic Dola AI text silhouette using OpenCV's font."""
+    canvas = np.zeros((100, 400), dtype=np.uint8)
+    cv2.putText(
+        canvas,
+        "Dola AI",
+        (2, 72),
+        cv2.FONT_HERSHEY_DUPLEX,
+        2.2,
+        255,
+        3,
+        cv2.LINE_AA,
+    )
+    ys, xs = np.where(canvas > 0)
+    return canvas[ys.min() : ys.max() + 1, xs.min() : xs.max() + 1]
 
 
 def _top_hat(gray: NDArray[Any]) -> NDArray[Any]:
@@ -267,6 +312,105 @@ def _match_template(
         y + location[1],
         template_width,
         template_height,
+    )
+
+
+def _restore_region(
+    region: Region | None,
+    *,
+    scale: float,
+    frame_width: int,
+    frame_height: int,
+) -> Region | None:
+    """Map a localization from normalized pixels back to the source frame."""
+    if region is None:
+        return None
+    x, y, width, height = region
+    source_x = round(x / scale)
+    source_y = round(y / scale)
+    source_width = min(frame_width - source_x, max(1, round(width / scale)))
+    source_height = min(frame_height - source_y, max(1, round(height / scale)))
+    return source_x, source_y, source_width, source_height
+
+
+def _detect_fixed_bottom_right_mark(
+    image_bgr: NDArray[Any],
+    template: NDArray[Any],
+    *,
+    relative_heights: tuple[float, ...],
+    search_origin: tuple[float, float],
+    kernel_fraction: float,
+    frame_index: int,
+) -> FrameLocalization:
+    """Match one fixed bottom-right synthetic mark on a normalized frame."""
+    if image_bgr.size == 0:
+        return FrameLocalization(frame_index, 0.0, None)
+
+    frame_height, frame_width = image_bgr.shape[:2]
+    gray, scale = _normalized_gray(image_bgr)
+    normalized_height, normalized_width = gray.shape[:2]
+    short_side = min(normalized_height, normalized_width)
+    search_x = round(normalized_width * search_origin[0])
+    search_y = round(normalized_height * search_origin[1])
+    search_region = (
+        search_x,
+        search_y,
+        normalized_width - search_x,
+        normalized_height - search_y,
+    )
+    best_confidence = 0.0
+    best_region: Region | None = None
+    for relative_height in relative_heights:
+        template_height = max(6, round(short_side * relative_height))
+        template_width = max(1, round(template.shape[1] * template_height / template.shape[0]))
+        resized = cv2.resize(
+            template,
+            (template_width, template_height),
+            interpolation=cv2.INTER_AREA,
+        )
+        confidence, candidate = _match_template(
+            gray,
+            resized,
+            region=search_region,
+            kernel_size=max(3, round(template_height * kernel_fraction) | 1),
+        )
+        if confidence > best_confidence:
+            best_confidence = confidence
+            best_region = candidate
+
+    return FrameLocalization(
+        frame_index,
+        best_confidence,
+        _restore_region(
+            best_region,
+            scale=scale,
+            frame_width=frame_width,
+            frame_height=frame_height,
+        ),
+    )
+
+
+def detect_seedance_frame(image_bgr: NDArray[Any], *, frame_index: int = 0) -> FrameLocalization:
+    """Locate the strongest fixed Seedance boxed-AI candidate."""
+    return _detect_fixed_bottom_right_mark(
+        image_bgr,
+        _seedance_template(),
+        relative_heights=(0.065, 0.075, 0.085, 0.095, 0.105),
+        search_origin=(0.68, 0.72),
+        kernel_fraction=0.12,
+        frame_index=frame_index,
+    )
+
+
+def detect_dola_frame(image_bgr: NDArray[Any], *, frame_index: int = 0) -> FrameLocalization:
+    """Locate the strongest fixed Dola AI text candidate."""
+    return _detect_fixed_bottom_right_mark(
+        image_bgr,
+        _dola_template(),
+        relative_heights=_DOLA_RELATIVE_HEIGHTS,
+        search_origin=(0.65, 0.85),
+        kernel_fraction=0.50,
+        frame_index=frame_index,
     )
 
 
@@ -413,6 +557,43 @@ def stabilize_veo_localizations(
     )
 
 
+def stabilize_seedance_localizations(
+    detections: tuple[FrameLocalization, ...] | list[FrameLocalization],
+    *,
+    provenance: bool,
+) -> list[Region | None]:
+    """Accept a recurring Seedance boxed-AI mark at a fixed position."""
+    return _stabilize_localizations(
+        detections,
+        provenance=provenance,
+        weak_floor=_SEEDANCE_WEAK_CONFIDENCE,
+        strong_floor=_SEEDANCE_STRONG_CONFIDENCE,
+        transition_floor=0.30,
+        min_stable_frames=_MIN_FIXED_MARK_STABLE_FRAMES,
+        cover_after_confirmation=True,
+        anchor_iou=0.80,
+    )
+
+
+def stabilize_dola_localizations(
+    detections: tuple[FrameLocalization, ...] | list[FrameLocalization],
+    *,
+    provenance: bool,
+) -> list[Region | None]:
+    """Accept a recurring Dola AI text mark at a fixed position."""
+    weak_floor = _DOLA_PROVENANCE_WEAK_CONFIDENCE if provenance else _DOLA_STRICT_WEAK_CONFIDENCE
+    return _stabilize_localizations(
+        detections,
+        provenance=provenance,
+        weak_floor=weak_floor,
+        strong_floor=_DOLA_STRONG_CONFIDENCE,
+        transition_floor=0.40,
+        min_stable_frames=_MIN_FIXED_MARK_STABLE_FRAMES,
+        cover_after_confirmation=True,
+        anchor_iou=0.80,
+    )
+
+
 def _stabilize_localizations(
     detections: tuple[FrameLocalization, ...] | list[FrameLocalization],
     *,
@@ -422,6 +603,7 @@ def _stabilize_localizations(
     transition_floor: float,
     min_stable_frames: int,
     cover_after_confirmation: bool,
+    anchor_iou: float | None = None,
 ) -> list[Region | None]:
     """Apply the shared recurrence policy to provider-specific candidates."""
     accepted: list[Region | None] = [None] * len(detections)
@@ -433,11 +615,14 @@ def _stabilize_localizations(
             continue
         if current:
             previous = detections[current[-1]]
+            anchor = detections[current[0]]
             frame_gap = detection.frame_index - previous.frame_index
             if (
                 previous.region is None
+                or anchor.region is None
                 or frame_gap > _MAX_STABLE_GAP + 1
                 or _region_iou(previous.region, detection.region) < _STABLE_IOU
+                or (anchor_iou is not None and _region_iou(anchor.region, detection.region) < anchor_iou)
             ):
                 runs.append(current)
                 current = []
@@ -532,6 +717,16 @@ def scan_sora_video(source: Path) -> VideoScan:
 def scan_veo_video(source: Path) -> VideoScan:
     """Decode a video once and collect one untrusted Veo candidate per frame."""
     return _scan_video(source, detect_veo_frame)
+
+
+def scan_seedance_video(source: Path) -> VideoScan:
+    """Decode a video once and collect one untrusted Seedance candidate per frame."""
+    return _scan_video(source, detect_seedance_frame)
+
+
+def scan_dola_video(source: Path) -> VideoScan:
+    """Decode a video once and collect one untrusted Dola candidate per frame."""
+    return _scan_video(source, detect_dola_frame)
 
 
 def _ffmpeg_video_args(suffix: str) -> list[str]:
@@ -704,3 +899,15 @@ def has_veo_provenance(markers: dict[str, str]) -> bool:
         )
     ).lower()
     return "google" in identity and "trainedalgorithmicmedia" in markers.get("source_type", "").lower()
+
+
+def has_bytedance_video_provenance(markers: dict[str, str]) -> bool:
+    """Whether container provenance names ByteDance or BytePlus AI video."""
+    identity = " ".join(
+        (
+            markers.get("claim_generator", ""),
+            markers.get("issuer", ""),
+        )
+    ).lower()
+    source_type = markers.get("source_type", "").lower()
+    return ("bytedance" in identity or "byteplus" in identity) and "trainedalgorithmicmedia" in source_type

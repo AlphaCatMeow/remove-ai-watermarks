@@ -153,18 +153,21 @@ different container extension.
 Visible video labels and invisible video watermarks are not handled by this
 command.
 
-## Remove a visible Sora or Veo video mark
+## Remove a supported visible video mark
 
 ```bash
 remove-ai-watermarks video visible input.mp4 -o clean.mp4
 remove-ai-watermarks video visible veo.mp4 --mark veo -o veo_clean.mp4
+remove-ai-watermarks video visible seedance.mp4 --mark seedance -o seedance_clean.mp4
+remove-ai-watermarks video visible dola.mp4 --mark dola -o dola_clean.mp4
 ```
 
-The experimental command supports the moving Sora mascot and wordmark plus two
-Veo corner variants: the current four-point diamond and the legacy `Veo` text.
-Sora searches the whole frame at multiple scales. Veo searches the
-bottom-right corner using separate synthetic silhouettes for the two variants.
-Both require a spatially recurring candidate across adjacent frames. Matching
+The experimental command supports the moving Sora mascot and wordmark, two Veo
+corner variants, the Seedance boxed `AI` label, and the `Dola AI` text label.
+Sora searches the whole frame at multiple scales. The other detectors search
+bounded bottom-right regions with separate synthetic silhouettes. Every mark
+requires a spatially recurring candidate across adjacent frames. Fixed marks
+must also remain anchored instead of drifting with a scene object. Matching
 provider provenance may relax the visual score, but metadata alone never
 creates a detection. Clean API exports therefore remain untouched.
 
