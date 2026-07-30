@@ -1,18 +1,31 @@
 """High-level video processing API.
 
 Supported experimental stages are container-level AI metadata inspection and
-removal plus temporally stabilized visible Sora, Veo, Seedance, and Dola
-removal. The pixel path reuses the image package's shared fill backends.
+removal, temporally stabilized visible Sora, Veo, Seedance, and Dola removal,
+and VAE regeneration that produces an externally verifiable SynthID candidate.
+The visible pixel path reuses the image package's shared fill backends.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING, ClassVar, Literal
+
+from remove_ai_watermarks.video_synthid import (
+    DEFAULT_VIDEO_SYNTHID_FPS,
+    DEFAULT_VIDEO_SYNTHID_LONG_SIDE,
+    DEFAULT_VIDEO_SYNTHID_NOISE_STD,
+    DEFAULT_VIDEO_SYNTHID_VAE,
+)
+
+if TYPE_CHECKING:
+    from remove_ai_watermarks.video_invisible import RegenerationMetrics
 
 VIDEO_EXTENSIONS: frozenset[str] = frozenset({".mp4", ".mov", ".m4v", ".webm", ".mkv"})
 _ISOBMFF_VIDEO_EXTENSIONS: frozenset[str] = frozenset({".mp4", ".mov", ".m4v"})
 _EBML_VIDEO_EXTENSIONS: frozenset[str] = frozenset({".webm", ".mkv"})
+_REGENERATED_VIDEO_EXTENSIONS: frozenset[str] = _ISOBMFF_VIDEO_EXTENSIONS
 _EBML_MAGIC = b"\x1aE\xdf\xa3"
 
 
@@ -46,6 +59,42 @@ class VideoVisibleResult:
     detected_frames: int
     removed_frames: int
     remaining_metadata: dict[str, str]
+
+
+@dataclass(frozen=True)
+class VideoInvisibleResult:
+    """Result of generating an externally verifiable SynthID candidate."""
+
+    source: Path
+    output: Path
+    noise_std: float
+    metrics: RegenerationMetrics
+    remaining_metadata: dict[str, str]
+    requires_external_verification: ClassVar[Literal[True]] = True
+
+    @property
+    def total_frames(self) -> int:
+        return self.metrics.frames
+
+    @property
+    def fps(self) -> float:
+        return self.metrics.fps
+
+    @property
+    def width(self) -> int:
+        return self.metrics.width
+
+    @property
+    def height(self) -> int:
+        return self.metrics.height
+
+    @property
+    def psnr_db(self) -> float:
+        return self.metrics.psnr_db
+
+    @property
+    def temporal_residual_ratio(self) -> float:
+        return self.metrics.temporal_residual_ratio
 
 
 def _video_source(source: str | Path) -> Path:
@@ -230,4 +279,58 @@ def remove_video_visible(
         detected_frames=detected_frames,
         removed_frames=removed_frames,
         remaining_metadata=remaining_metadata,
+    )
+
+
+def remove_video_invisible(
+    source: str | Path,
+    output: str | Path | None = None,
+    *,
+    noise_std: float = DEFAULT_VIDEO_SYNTHID_NOISE_STD,
+    long_side: int = DEFAULT_VIDEO_SYNTHID_LONG_SIDE,
+    fps: float = DEFAULT_VIDEO_SYNTHID_FPS,
+    batch_size: int = 4,
+    seed: int = 0,
+    model: str = DEFAULT_VIDEO_SYNTHID_VAE,
+    device: str = "auto",
+) -> VideoInvisibleResult:
+    """Generate a video SynthID-removal candidate through VAE regeneration.
+
+    The function strips source metadata during the transcode, but cannot verify
+    the proprietary pixel watermark locally. ``requires_external_verification``
+    therefore remains true for every result. Verify important output with
+    Google's matching content-verification flow.
+    """
+    from remove_ai_watermarks.metadata import get_ai_metadata
+    from remove_ai_watermarks.video_invisible import regenerate_video_candidate
+
+    source_path = _video_source(source)
+    if source_path.suffix.lower() not in _REGENERATED_VIDEO_EXTENSIONS:
+        supported = ", ".join(sorted(_REGENERATED_VIDEO_EXTENSIONS))
+        raise ValueError(f"Video SynthID regeneration requires one of: {supported}")
+    candidate_output = (
+        Path(output) if output is not None else source_path.with_stem(source_path.stem + "_synthid_candidate")
+    )
+    output_path = _video_output(
+        source_path,
+        candidate_output,
+        operation="SynthID candidate generation",
+    )
+    metrics = regenerate_video_candidate(
+        source_path,
+        output_path,
+        noise_std=noise_std,
+        long_side=long_side,
+        fps=fps,
+        batch_size=batch_size,
+        seed=seed,
+        model=model,
+        device=device,
+    )
+    return VideoInvisibleResult(
+        source=source_path,
+        output=output_path,
+        noise_std=noise_std,
+        metrics=metrics,
+        remaining_metadata=get_ai_metadata(output_path),
     )

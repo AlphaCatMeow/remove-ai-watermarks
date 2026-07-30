@@ -113,6 +113,10 @@ SynthID does not have a public local pixel decoder in this project. The tool can
 infer likely presence from supported provenance metadata, but after that
 metadata is removed a local negative result is inconclusive.
 
+For MP4, MOV, and M4V, `video invisible` can regenerate the video through a VAE
+and strip source metadata. This is a candidate-producing attack, not a local
+decoder. Every result still requires Gemini Flash's built-in verification.
+
 The optional `detect` extra is different: it provides a local decoder for the
 open DWT-DCT watermark used by some Stable Diffusion, SDXL, and FLUX workflows.
 That signal is carrier and transformation sensitive, so a negative is still
@@ -123,6 +127,7 @@ not a universal clean verdict.
 | Provider or family | Visible | Invisible path | Metadata or provenance |
 | --- | --- | --- | --- |
 | Google Gemini | Sparkle | Diffusion regeneration for SynthID | C2PA and related source signals |
+| Google Veo video | Veo diamond and legacy text | VAE regeneration candidate for SynthID | C2PA and related source signals |
 | OpenAI image generators | None registered | Diffusion regeneration for supported invisible signals | C2PA and generator provenance |
 | Stable Diffusion and SDXL | None registered | Diffusion regeneration; optional open decoder | Embedded parameters and text metadata |
 | FLUX | None registered | Diffusion regeneration; optional open decoder | C2PA for supported sources |

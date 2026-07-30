@@ -28,6 +28,13 @@ from remove_ai_watermarks.noai.watermark_profiles import (
     strength_default_help,
     vendor_for_strength,
 )
+from remove_ai_watermarks.video_synthid import (
+    DEFAULT_VIDEO_SYNTHID_FPS,
+    DEFAULT_VIDEO_SYNTHID_LONG_SIDE,
+    DEFAULT_VIDEO_SYNTHID_NOISE_STD,
+    VIDEO_SYNTHID_LATENT_MULTIPLE,
+    VIDEO_SYNTHID_VERIFICATION_PROMPT,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -1139,6 +1146,87 @@ def cmd_video_metadata(
         console.print(f"    still present: {', '.join(sorted(result.remaining))}")
         raise SystemExit(1)
     console.print(f"  AI metadata stripped -> {result.output}")
+
+
+@cmd_video.command("invisible")
+@click.argument("source", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Candidate path (default: <source>_synthid_candidate with the same container).",
+)
+@click.option(
+    "--noise-std",
+    type=click.FloatRange(min=0.0, max=1.0),
+    default=DEFAULT_VIDEO_SYNTHID_NOISE_STD,
+    show_default=True,
+    help="Shared latent-noise strength. Higher values change more detail.",
+)
+@click.option(
+    "--long-side",
+    type=click.IntRange(min=VIDEO_SYNTHID_LATENT_MULTIPLE),
+    default=DEFAULT_VIDEO_SYNTHID_LONG_SIDE,
+    show_default=True,
+    help="Regenerated video long side in pixels.",
+)
+@click.option(
+    "--fps",
+    type=click.FloatRange(min=1.0),
+    default=DEFAULT_VIDEO_SYNTHID_FPS,
+    show_default=True,
+    help="Output frame rate, capped at the source frame rate.",
+)
+@click.option("--batch-size", type=click.IntRange(min=1), default=4, show_default=True)
+@click.option("--seed", type=int, default=0, show_default=True)
+@click.option(
+    "--device",
+    type=click.Choice(["auto", "cuda", "mps", "cpu"]),
+    default="auto",
+    show_default=True,
+    help="VAE inference device.",
+)
+def cmd_video_invisible(
+    source: Path,
+    output: Path | None,
+    noise_std: float,
+    long_side: int,
+    fps: float,
+    batch_size: int,
+    seed: int,
+    device: str,
+) -> None:
+    """Generate an externally verifiable video SynthID candidate."""
+    from remove_ai_watermarks.video import remove_video_invisible
+
+    _banner()
+    console.print(f"  Regenerating {source.name} with temporally shared VAE noise...")
+    try:
+        result = remove_video_invisible(
+            source,
+            output,
+            noise_std=noise_std,
+            long_side=long_side,
+            fps=fps,
+            batch_size=batch_size,
+            seed=seed,
+            device=device,
+        )
+    except (OSError, RuntimeError, ValueError) as e:
+        raise click.ClickException(str(e)) from e
+
+    if result.remaining_metadata:
+        console.print(f"  FAILED: {len(result.remaining_metadata)} AI metadata marker(s) survived in {result.output}")
+        raise SystemExit(1)
+    console.print(
+        f"  Candidate generated: {result.width}x{result.height}, "
+        f"{result.total_frames} frames at {result.fps:.4g} fps -> {result.output}"
+    )
+    console.print(
+        "  UNVERIFIED: no local video SynthID decoder exists. Upload this output to Gemini Flash and ask: "
+        f'"{VIDEO_SYNTHID_VERIFICATION_PROMPT}"'
+    )
 
 
 @cmd_video.command("visible")

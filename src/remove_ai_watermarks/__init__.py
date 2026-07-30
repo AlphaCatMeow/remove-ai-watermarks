@@ -8,6 +8,7 @@ High-level API (lazy, so ``import remove_ai_watermarks`` stays cheap)::
     raiw.visible_provenance("in.png")                   # -> frozenset of confirmed vendors
     raiw.inspect_video_metadata("in.mp4")               # -> VideoMetadataReport
     raiw.remove_video_metadata("in.mp4", "out.mp4")     # verified metadata strip
+    raiw.remove_video_invisible("in.mp4", "out.mp4")    # unverified SynthID candidate
     raiw.remove_video_visible("in.mp4", "out.mp4")      # stable visible video-mark removal
 
 For a provenance verdict use the ``identify`` submodule::
@@ -33,6 +34,7 @@ __version__ = "0.20.2"
 __all__ = [
     "__version__",
     "inspect_video_metadata",
+    "remove_video_invisible",
     "remove_video_metadata",
     "remove_video_visible",
     "remove_visible",
@@ -41,7 +43,12 @@ __all__ = [
 
 if TYPE_CHECKING:
     from remove_ai_watermarks.api import remove_visible, visible_provenance
-    from remove_ai_watermarks.video import inspect_video_metadata, remove_video_metadata, remove_video_visible
+    from remove_ai_watermarks.video import (
+        inspect_video_metadata,
+        remove_video_invisible,
+        remove_video_metadata,
+        remove_video_visible,
+    )
 
 
 def __getattr__(name: str) -> object:
@@ -51,7 +58,7 @@ def __getattr__(name: str) -> object:
         from remove_ai_watermarks import api
 
         return getattr(api, name)
-    if name in ("inspect_video_metadata", "remove_video_metadata", "remove_video_visible"):
+    if name in ("inspect_video_metadata", "remove_video_invisible", "remove_video_metadata", "remove_video_visible"):
         from remove_ai_watermarks import video
 
         return getattr(video, name)

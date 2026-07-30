@@ -154,6 +154,34 @@ stream bytes. MKV/WebM inspection recognizes the corresponding
 `Segment.Tags.Tag.SimpleTag` representation; its removal requires ffmpeg for a
 stream-copy remux.
 
+## Generate a video SynthID candidate
+
+```python
+import remove_ai_watermarks as raiw
+
+result = raiw.remove_video_invisible(
+    "input.mp4",
+    "candidate.mp4",
+    device="auto",
+)
+assert result.requires_external_verification
+if result.remaining_metadata:
+    raise RuntimeError(f"AI metadata remains: {result.remaining_metadata}")
+```
+
+`remove_video_invisible` supports MP4, MOV, and M4V. It regenerates the complete
+video through a VAE in bounded batches, shares one seeded latent-noise field
+across all frames, streams pixels to ffmpeg, copies audio, and strips source
+metadata. The default output is
+`input_synthid_candidate.mp4`; a distinct same-container output is required.
+
+The returned `VideoInvisibleResult` includes output geometry, frame rate, frame
+count, paired PSNR, and the motion-compensated temporal-residual ratio. Those
+fields measure fidelity and flicker only. They are not a SynthID detector.
+`requires_external_verification` is always true because Google does not publish
+a local decoder for this video payload. Verify the candidate with Gemini
+Flash's built-in content verification before treating it as watermark-negative.
+
 ## Remove a supported visible video mark
 
 ```python

@@ -90,6 +90,7 @@ Regression coverage:
 video entry point:
 
 - `inspect_video_metadata`
+- `remove_video_invisible`
 - `remove_video_metadata`
 - `remove_video_visible`
 
@@ -97,7 +98,7 @@ The video API validates both the supported extension and container signature,
 then delegates all metadata detection and stripping to `metadata.py`. It
 requires a separate same-container output, defaulting to `<source>_clean`, so
 the experimental path does not overwrite an original. The package root exposes
-both functions lazily.
+all four functions lazily.
 
 Native MP4/MOV TC260 labels follow TC260-PG-20257A:
 `moov.udta.meta.keys` maps an `AIGC` key to a raw JSON value in `ilst`.
@@ -113,6 +114,30 @@ corresponding bounded Matroska/WebM reader. It seeks over clusters and accepts
 only a `Segment.Tags.Tag.SimpleTag` pairing `TagName=AIGC` with a JSON
 `TagString` carrying a TC260 field. The existing ffmpeg stream-copy path removes
 those container tags without transcoding the encoded streams.
+
+[`video_encoding.py`](../src/remove_ai_watermarks/video_encoding.py) owns the
+raw-BGR ffmpeg command and pipe lifecycle shared by visible removal and
+invisible regeneration. It centralizes container codecs, optional audio stream
+copying, metadata/chapter policy, and encode-failure reporting.
+
+[`video_invisible.py`](../src/remove_ai_watermarks/video_invisible.py)
+implements the oracle-gated video SynthID candidate engine. It samples frames
+uniformly, resizes to a VAE-aligned geometry, encodes each frame to latent
+space, applies one seeded spatial-noise field across the entire sequence, and
+decodes fresh pixels. Reusing a single noise field avoids independent
+frame-to-frame noise. The shipped path retains only one configured frame batch,
+updates PSNR and temporal residuals incrementally, and streams BGR frames
+directly to ffmpeg. ffmpeg encodes H.264 video, maps optional source audio, and
+drops all source metadata. The result is written through a same-directory
+temporary file and atomically replaced only after a successful encode.
+
+The engine returns PSNR and a motion-compensated temporal-residual ratio as
+quality measurements. Neither is a watermark detector. The high-level
+`VideoInvisibleResult.requires_external_verification` flag is always true, and
+the CLI prints an `UNVERIFIED` warning plus the Gemini Flash verification
+prompt. The companion `scripts/video_synthid_sweep.py` imports the same engine
+helpers to build a matched control and candidate grid, preventing research and
+shipped regeneration paths from drifting.
 
 [`video_visible.py`](../src/remove_ai_watermarks/video_visible.py) implements
 the first pixel stages for Sora, Veo, Seedance, and Dola. The Sora detector

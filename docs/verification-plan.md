@@ -232,6 +232,14 @@ The harness shares one latent-noise field across the sequence to avoid adding
 independent frame noise. Its temporal-residual metric is a fidelity check, not a
 watermark detector.
 
+The 2026-07-29 run completed the first two-carrier calibration through Gemini
+Flash's built-in content verification. Both matched Veo controls were positive.
+The stronger default VAE candidate was negative on both carriers; a weaker
+candidate was negative on only one. The implementation is exposed as
+`video invisible` and `remove_video_invisible`, but every result remains
+explicitly oracle-required because the small calibration does not establish
+full-corpus or future-verifier coverage.
+
 ## Tier E -- robustness and adversarial inputs
 
 Malformed and hostile inputs, including truncated files:

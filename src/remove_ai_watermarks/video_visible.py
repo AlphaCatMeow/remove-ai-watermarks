@@ -22,8 +22,6 @@ because visible-mark removal changes pixels.
 from __future__ import annotations
 
 import logging
-import shutil
-import subprocess
 from dataclasses import dataclass
 from functools import lru_cache
 from itertools import pairwise
@@ -32,6 +30,13 @@ from typing import TYPE_CHECKING, Any, Literal
 import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+
+from remove_ai_watermarks.video_encoding import (
+    abort_raw_video_encoder,
+    finish_raw_video_encoder,
+    raw_video_command,
+    start_raw_video_encoder,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -729,12 +734,6 @@ def scan_dola_video(source: Path) -> VideoScan:
     return _scan_video(source, detect_dola_frame)
 
 
-def _ffmpeg_video_args(suffix: str) -> list[str]:
-    if suffix == ".webm":
-        return ["-c:v", "libvpx-vp9", "-crf", "18", "-b:v", "0"]
-    return ["-c:v", "libx264", "-preset", "medium", "-crf", "14"]
-
-
 def _mask_for_region(
     frame_bgr: NDArray[Any],
     region: Region,
@@ -792,61 +791,29 @@ def encode_clean_video(
     """Decode again, fill accepted regions, and encode video while copying audio."""
     from remove_ai_watermarks.watermark_registry import fill, resolve_backend
 
-    ffmpeg = shutil.which("ffmpeg")
-    if ffmpeg is None:
-        raise RuntimeError("Visible video removal requires ffmpeg on PATH")
     if len(regions) != len(scan.detections):
         raise ValueError("Temporal localization count does not match the scanned frame count")
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    command = [
-        ffmpeg,
-        "-y",
-        "-loglevel",
-        "error",
-        "-f",
-        "rawvideo",
-        "-pix_fmt",
-        "bgr24",
-        "-s:v",
-        f"{scan.width}x{scan.height}",
-        "-r",
-        f"{scan.fps:.12g}",
-        "-i",
-        "pipe:0",
-        "-i",
-        str(source),
-        "-map",
-        "0:v:0",
-        "-map",
-        "1:a?",
-        *_ffmpeg_video_args(output.suffix.lower()),
-        "-c:a",
-        "copy",
-        "-map_metadata",
-        "-1" if strip_metadata else "1",
-        "-map_chapters",
-        "-1" if strip_metadata else "1",
-        "-shortest",
-    ]
-    if output.suffix.lower() in {".mp4", ".mov", ".m4v"}:
-        command.extend(["-movflags", "+faststart"])
-    command.append(str(output))
-    log.info("Encoding visible-watermark removal with ffmpeg: command=%s", command)
-
-    process = subprocess.Popen(  # noqa: S603
-        command,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
+    process = start_raw_video_encoder(
+        raw_video_command(
+            source,
+            output,
+            width=scan.width,
+            height=scan.height,
+            fps=scan.fps,
+            strip_metadata=strip_metadata,
+            crf=14,
+        )
     )
-    if process.stdin is None or process.stderr is None:
-        process.kill()
-        raise RuntimeError("Could not open ffmpeg pipes")
+    frame_pipe = process.stdin
+    if frame_pipe is None:
+        abort_raw_video_encoder(process)
+        raise RuntimeError("Could not open ffmpeg input pipe")
 
     capture = cv2.VideoCapture(str(source))
     if not capture.isOpened():
-        process.kill()
+        abort_raw_video_encoder(process)
         raise RuntimeError(f"OpenCV could not reopen video for removal: {source}")
 
     removed_frames = 0
@@ -868,20 +835,19 @@ def encode_clean_video(
                     backend=resolved_backend,
                 )
                 removed_frames += 1
-            process.stdin.write(frame.tobytes())
-        process.stdin.close()
-        stderr = process.stderr.read().decode("utf-8", errors="replace")
-        return_code = process.wait()
+            frame_pipe.write(frame.tobytes())
+        finish_raw_video_encoder(
+            process,
+            output,
+            operation="visible-watermark encode",
+        )
     except Exception:
-        process.kill()
-        process.wait()
+        if process.poll() is None:
+            abort_raw_video_encoder(process)
         raise
     finally:
         capture.release()
 
-    log.info("ffmpeg visible-watermark encode finished: status=%s stderr=%s", return_code, stderr)
-    if return_code != 0:
-        raise RuntimeError(f"ffmpeg failed to encode {output}: {stderr.strip()[:500]}")
     return removed_frames
 
 

@@ -79,17 +79,31 @@ For important outputs:
 Provider systems can change, so a result verified on one file, seed, or version
 is not a permanent certification.
 
-### Video regeneration is research only
+### Video regeneration produces an unverified candidate
 
-The package does not expose a `video invisible` command. The separate
-`scripts/video_synthid_sweep.py` harness generates a matched transcode control
-and VAE-regenerated candidates for external verification. It deliberately
-leaves verdicts empty because neither the metadata proxy nor a visual quality
-metric can prove that the pixel watermark is gone.
+The `video invisible` command and `remove_video_invisible` API regenerate video
+pixels through a VAE, but cannot verify the proprietary SynthID payload locally.
+Every successful result remains explicitly unverified and requires Google's
+matching content-verification flow. A quiet metadata scan, paired PSNR, and the
+temporal-residual metric are not substitutes for that oracle.
 
 The control must use the same clip, frame rate, dimensions, and final codec as
-the candidates. If the control is not detected by the matching provider oracle,
-the experiment cannot attribute a quiet candidate to regeneration.
+the candidates. The separate `scripts/video_synthid_sweep.py` harness produces
+that matched control. If the control is not detected by the matching provider
+oracle, the experiment cannot attribute a quiet candidate to regeneration.
+
+The 2026-07-29 calibration used two public Veo clips. Both matched controls were
+SynthID-positive. The default stronger VAE candidate was negative on both, while
+a weaker candidate remained positive on one. This small calibration validates
+the mechanism and exposes its content dependence; it does not certify all
+videos, full-length sequences, alternate settings, or future verifier versions.
+
+The shipped engine streams sampled frames in bounded batches, computes its
+fidelity metrics incrementally, and pipes regenerated pixels directly to
+ffmpeg. Its frame and latent memory is therefore bounded by `--batch-size`
+rather than clip duration. Runtime still grows linearly with duration, and the
+separate multi-candidate research sweep deliberately retains its short sampled
+prefix so it can reuse identical latents across candidate strengths.
 
 ### Strength is content and seed dependent
 
@@ -186,7 +200,7 @@ WebM, Matroska, MP3, WAV, FLAC, OGG, Opus, and AAC container metadata is strippe
 through ffmpeg with stream copying. The operation fails if ffmpeg is absent or
 cannot parse the input.
 
-### Visible video removal is provider-specific and still experimental
+### Video pixel removal is provider-specific and still experimental
 
 The experimental `video metadata` command and high level video API inspect and
 strip supported AI provenance metadata without transcoding streams.
@@ -201,8 +215,9 @@ after visual evidence exists, so metadata alone does not erase a clean API
 export.
 Historical Sora Turbo exports use a small OpenAI swirl in the corner rather
 than the moving mascot-and-wordmark design; that earlier variant is not
-detected by the `sora` video mark. Other provider video labels and proprietary
-invisible video watermarks are not supported yet.
+detected by the `sora` video mark. Other provider video labels are not
+supported yet. Google video SynthID has a candidate-producing VAE path, while
+other proprietary invisible video watermarks have no registered attack.
 
 Visible removal transcodes the video stream and copies audio. Its frame-local
 fill is not a motion-aware video inpainting model. OpenCV can leave a visible

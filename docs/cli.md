@@ -153,6 +153,38 @@ different container extension.
 Visible video labels and invisible video watermarks are not handled by this
 command.
 
+## Generate a video SynthID candidate
+
+```bash
+uv tool install --force "remove-ai-watermarks[gpu]"
+remove-ai-watermarks video invisible input.mp4 -o candidate.mp4
+```
+
+The experimental command supports MP4, MOV, and M4V. It samples the complete
+sequence at the configured frame rate, resizes frames to the configured long
+side, regenerates them through a VAE, and applies one deterministic latent-noise
+field to every frame. Reusing one spatial field avoids the unnecessary flicker
+caused by independent per-frame noise. Frames are regenerated in bounded
+batches and streamed directly to ffmpeg, which encodes the result, copies
+audio, and drops source metadata.
+
+The output is always an unverified candidate. The project has no local video
+SynthID decoder, and PSNR or temporal-residual metrics cannot prove watermark
+absence. After generation, upload the candidate to Gemini Flash and ask:
+
+> Was this uploaded video created or edited by Google AI? Use the built-in
+> content verification result.
+
+Only an explicit built-in verification result is an oracle verdict. A response
+based on the visible logo, content appearance, or metadata is not. The command
+prints `UNVERIFIED` even when generation succeeds.
+
+The default output is `<source>_synthid_candidate` in the same container. The
+source is never overwritten. Use `--noise-std`, `--long-side`, `--fps`,
+`--batch-size`, `--seed`, and `--device` to control the regeneration. The
+defaults are calibrated operating points, not a guarantee for every carrier or
+future verifier version.
+
 ## Remove a supported visible video mark
 
 ```bash

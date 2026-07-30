@@ -331,8 +331,11 @@ framework.
 Gemini's verification flow can report the portions of a video where it detects
 Google SynthID. This is still a proprietary oracle: a normal Gemini answer that
 describes visual clues, metadata, or an unavailable decoder is not a pixel
-verdict. Use the dedicated verification flow offered to an eligible signed-in
-account; some versions expose an explicit `@synthid` trigger.
+verdict. Google's current support flow is to upload the file to an eligible
+signed-in Gemini account and ask whether it was created or edited by Google AI.
+In the 2026-07-29 calibration, Flash invoked the built-in verifier while Pro
+first answered from the visible Veo logo; the model mode is therefore part of
+the recorded procedure, not an interchangeable chat preference.
 
 The research harness `scripts/video_synthid_sweep.py` tests a VAE regeneration
 attack without pretending to detect success locally. It emits:
@@ -349,6 +352,14 @@ the surrounding transcode already changed the verifier result. Only a
 control-positive, candidate-negative pair is evidence about the regeneration
 attack. PSNR and temporal residual measure fidelity and flicker, never watermark
 presence.
+
+The shipped `video invisible` command and `remove_video_invisible` API reuse the
+same VAE regeneration mechanism for a complete input sequence. They always
+label the output as requiring external verification. Calibration on 2026-07-29
+used two public Veo clips: both matched controls were positive, the stronger
+default candidate was negative on both, and a weaker candidate was negative on
+only one. This establishes a content-dependent operating point, not a universal
+clean verdict.
 
 The VAE perturbation follows the general regeneration-attack construction from
 Zhao et al. The video-specific control and temporal metric are local additions.

@@ -81,11 +81,33 @@ def _video_with_tc260_ebml(path: Path, *, value: bytes = _TC260_AIGC) -> Path:
     return path
 
 
+def _regeneration_metrics(
+    *,
+    frames: int = 24,
+    fps: float = 12.0,
+    width: int = 512,
+    height: int = 288,
+    psnr_db: float = 22.0,
+    temporal_residual_ratio: float = 1.2,
+):
+    from remove_ai_watermarks.video_invisible import RegenerationMetrics
+
+    return RegenerationMetrics(
+        frames=frames,
+        fps=fps,
+        width=width,
+        height=height,
+        psnr_db=psnr_db,
+        temporal_residual_ratio=temporal_residual_ratio,
+    )
+
+
 class TestVideoMetadataApi:
     def test_top_level_api_is_lazy_exported(self):
         import remove_ai_watermarks as raiw
 
         assert raiw.inspect_video_metadata is not None
+        assert raiw.remove_video_invisible is not None
         assert raiw.remove_video_metadata is not None
         assert raiw.remove_video_visible is not None
 
@@ -262,6 +284,107 @@ class TestVideoMetadataCli:
 
         assert result.exit_code != 0
         assert "Unsupported video format" in result.output
+
+
+class TestVideoInvisibleApi:
+    def test_generates_unverified_candidate_and_strips_metadata(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from remove_ai_watermarks import video_invisible
+        from remove_ai_watermarks.video import remove_video_invisible
+
+        source = _video_with_c2pa(tmp_path / "source.mp4")
+        output = tmp_path / "candidate.mp4"
+
+        def fake_regenerate(_source: Path, target: Path, **_kwargs: object):
+            target.write_bytes(_MP4_FTYP + _box(b"mdat", _VIDEO_PAYLOAD))
+            return _regeneration_metrics()
+
+        monkeypatch.setattr(video_invisible, "regenerate_video_candidate", fake_regenerate)
+
+        result = remove_video_invisible(source, output)
+
+        assert result.output == output
+        assert result.requires_external_verification is True
+        assert result.total_frames == 24
+        assert result.remaining_metadata == {}
+
+    def test_default_output_is_named_as_candidate(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from remove_ai_watermarks import video_invisible
+        from remove_ai_watermarks.video import remove_video_invisible
+
+        source = _video_with_c2pa(tmp_path / "source.mp4")
+
+        def fake_regenerate(_source: Path, target: Path, **_kwargs: object):
+            target.write_bytes(_MP4_FTYP + _box(b"mdat", _VIDEO_PAYLOAD))
+            return _regeneration_metrics(
+                frames=2,
+                fps=2.0,
+                width=16,
+                height=16,
+                psnr_db=20.0,
+                temporal_residual_ratio=1.0,
+            )
+
+        monkeypatch.setattr(video_invisible, "regenerate_video_candidate", fake_regenerate)
+
+        result = remove_video_invisible(source)
+
+        assert result.output == tmp_path / "source_synthid_candidate.mp4"
+
+    def test_rejects_webm_regeneration(self, tmp_path: Path):
+        from remove_ai_watermarks.video import remove_video_invisible
+
+        source = _video_with_tc260_ebml(tmp_path / "source.webm")
+
+        with pytest.raises(ValueError, match="requires one of"):
+            remove_video_invisible(source)
+
+
+class TestVideoInvisibleCli:
+    def test_help_describes_external_verification(self):
+        runner = CliRunner()
+
+        result = runner.invoke(main, ["video", "invisible", "--help"])
+
+        assert result.exit_code == 0, result.output
+        assert "externally verifiable" in result.output
+
+    def test_reports_unverified_candidate(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from remove_ai_watermarks import video
+
+        runner = CliRunner()
+        source = _video_with_c2pa(tmp_path / "source.mp4")
+        output = tmp_path / "candidate.mp4"
+
+        def fake_remove(_source: Path, target: Path, **_kwargs: object):
+            target.write_bytes(_MP4_FTYP + _box(b"mdat", _VIDEO_PAYLOAD))
+            return video.VideoInvisibleResult(
+                source=_source,
+                output=target,
+                noise_std=0.1,
+                metrics=_regeneration_metrics(),
+                remaining_metadata={},
+            )
+
+        monkeypatch.setattr(video, "remove_video_invisible", fake_remove)
+
+        result = runner.invoke(main, ["video", "invisible", str(source), "-o", str(output)])
+
+        assert result.exit_code == 0, result.output
+        assert "Candidate generated" in result.output
+        assert "UNVERIFIED" in result.output
+        assert "Gemini Flash" in result.output
 
 
 class TestSoraFrameLocalization:

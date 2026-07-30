@@ -55,7 +55,7 @@ def test_shared_latent_noise_is_seeded(sweep: ModuleType) -> None:
 
 def test_psnr_is_infinite_for_identical_frames(sweep: ModuleType) -> None:
     frame = np.full((2, 8, 8, 3), 120, dtype=np.uint8)
-    assert sweep._psnr(frame, frame.copy()) == pytest.approx(float("inf"))
+    assert sweep.paired_psnr(frame, frame.copy()) == pytest.approx(float("inf"))
 
 
 def test_temporal_residual_ratio_is_one_for_identical_sequences(sweep: ModuleType) -> None:
@@ -63,5 +63,5 @@ def test_temporal_residual_ratio_is_one_for_identical_sequences(sweep: ModuleTyp
     second = first.copy()
     second[:, 8:16] = 80
     sequence = [first, second]
-    maps, baseline = sweep._temporal_reference(sequence)
-    assert sweep._temporal_residual_ratio([frame.copy() for frame in sequence], maps, baseline) == pytest.approx(1.0)
+    maps, baseline = sweep.build_temporal_reference(sequence)
+    assert sweep.temporal_residual_ratio([frame.copy() for frame in sequence], maps, baseline) == pytest.approx(1.0)

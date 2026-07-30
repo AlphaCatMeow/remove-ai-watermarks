@@ -6,9 +6,9 @@ Remove AI provenance marks from images and video you generated yourself:
 - invisible pixel watermarks through diffusion regeneration;
 - C2PA, EXIF, XMP, IPTC, and related AI metadata.
 
-Video support covers metadata inspection and removal plus experimental visible
-Sora, Veo, Seedance, and Dola mark removal. Invisible video-watermark removal
-remains a follow-up stage.
+Video support covers metadata inspection and removal, visible Sora, Veo,
+Seedance, and Dola mark removal, and experimental VAE regeneration that
+produces a video SynthID candidate for external verification.
 
 > Try it online at [raiw.cc](https://raiw.cc) if you do not want to install Python
 > or run diffusion models locally.
@@ -34,6 +34,7 @@ remains a follow-up stage.
 | Strip AI metadata | `metadata` | No |
 | Strip AI metadata from video | `video metadata` | No |
 | Remove a known Sora, Veo, Seedance, or Dola mark from video | `video visible` | No |
+| Generate an externally verifiable video SynthID candidate | `video invisible` | Recommended |
 | Regenerate an image to disrupt invisible watermarks | `invisible` | Recommended |
 | Run visible, invisible, and metadata removal | `all` | Recommended |
 | Process a directory | `batch` | Depends on mode |
@@ -95,6 +96,19 @@ Sora covers the moving Sora 2 mascot and wordmark. Veo covers both the current
 four-point diamond and the legacy `Veo` text. Seedance covers the fixed boxed
 `AI` label, and Dola covers the fixed `Dola AI` text. No output is written when
 no stable mark is found.
+
+Generate a video SynthID candidate:
+
+```bash
+uv tool install --force "remove-ai-watermarks[gpu]"
+remove-ai-watermarks video invisible input.mp4 -o candidate.mp4
+```
+
+This path regenerates the complete sequence with one latent-noise field shared
+across time, copies audio, and strips source metadata. It cannot verify
+Google's proprietary pixel watermark locally. The command therefore labels
+every output `UNVERIFIED` and prints the exact Gemini Flash verification
+prompt.
 
 For invisible watermark removal, install the diffusion dependencies:
 
@@ -244,6 +258,7 @@ print(removed)
 
 report = raiw.inspect_video_metadata("input.mp4")
 cleaned = raiw.remove_video_metadata("input.mp4")
+candidate = raiw.remove_video_invisible("input.mp4", "candidate.mp4")
 visible = raiw.remove_video_visible("sora.mp4", "sora_clean.mp4")
 veo = raiw.remove_video_visible("veo.mp4", "veo_clean.mp4", mark="veo")
 seedance = raiw.remove_video_visible(
@@ -280,24 +295,32 @@ invisible removal.
   diamond plus legacy `Veo` text, the Seedance boxed `AI` label, and the fixed
   `Dola AI` text. It does not recognize the older Sora Turbo corner swirl.
   The classical OpenCV backend can smear structured backgrounds; use MI-GAN or
-  LaMa when recovery quality matters. Video SynthID is not removed yet.
-  MP4/MOV/M4V metadata stripping currently reads the full container into
+  LaMa when recovery quality matters.
+- Video SynthID regeneration changes resolution, frame rate, and image detail.
+  It produces a candidate, not a locally verified clean video. The matching
+  Google verifier is still required for every important output.
+- MP4/MOV/M4V metadata stripping currently reads the full container into
   memory, so very large videos are not an intended metadata input yet.
 - `qwen-zimage` requires CUDA. The other diffusion profiles also support the
   devices listed by `remove-ai-watermarks invisible --help`.
 - Provider watermark systems can change. Validate important outputs with the
   provider's own verifier when one is available.
 
-Video SynthID work is currently oracle-gated research, not a removal command.
-`scripts/video_synthid_sweep.py` builds a matched re-encode control plus
-VAE-regenerated candidates and leaves the verifier verdict blank:
+The shipped `video invisible` command uses the candidate-producing side of the
+oracle-gated workflow. The companion `scripts/video_synthid_sweep.py` harness
+builds a matched re-encode control plus VAE-regenerated candidates and leaves
+the verifier verdict blank:
 
 ```bash
 uv run --extra gpu python scripts/video_synthid_sweep.py input.mp4 -o sweep/
 ```
 
 The control must still be SynthID-positive before a negative candidate can
-count as removal evidence.
+count as removal evidence. In the 2026-07-29 calibration, matched controls from
+two public Veo videos remained positive and the default stronger candidate was
+negative on both. A weaker candidate was negative on only one, demonstrating
+that the removal threshold is content dependent. This is calibration evidence,
+not a universal guarantee for new videos or future verifier versions.
 
 ## Documentation
 
