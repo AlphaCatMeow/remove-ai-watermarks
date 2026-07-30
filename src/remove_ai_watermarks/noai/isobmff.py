@@ -1,4 +1,4 @@
-"""Minimal ISOBMFF box walker for stripping C2PA from AVIF / HEIF / MP4 / JPEG-XL.
+"""Minimal ISOBMFF box walker for AI provenance in AVIF / HEIF / MP4 / JPEG-XL.
 
 The ISO Base Media File Format wraps content in nested ``[size:4][type:4][...]``
 boxes. C2PA stores its manifest in a top-level ``uuid`` box keyed by the
@@ -7,6 +7,11 @@ without re-encoding the image, we walk the top-level box list, drop boxes that
 carry C2PA, and emit the rest verbatim. The codestream (``mdat`` for ISOBMFF,
 ``jxlc`` / ``jxlp`` for JPEG-XL) is untouched, so pixel data is preserved
 bit-for-bit.
+
+TC260-PG-20257A video metadata is nested instead:
+``moov.udta.meta.keys/ilst``. Its detector seeks through those boxes without
+reading media payloads, and its stripper blanks the validated key/value in
+place so fast-start media offsets remain valid.
 
 This file intentionally avoids dependencies on format-specific libraries
 (pillow-heif, pillow-jxl, pymp4) so it works on systems where they aren't
@@ -17,10 +22,12 @@ Reference: ISO/IEC 14496-12 (ISOBMFF) and C2PA 2.1 spec §11.
 
 from __future__ import annotations
 
+import io
+import json
 import logging
 import re
 import struct
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, BinaryIO, cast
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -31,6 +38,7 @@ from remove_ai_watermarks.metadata import (
     C2PA_UUID,
     IPTC_AI_FIELD_MARKERS,
     IPTC_AI_MARKERS,
+    TC260_AIGC_FIELDS,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,6 +60,13 @@ _AI_LABEL_MARKERS: tuple[bytes, ...] = AIGC_MARKERS + IPTC_AI_MARKERS + IPTC_AI_
 # out of reach of the top-level box stripper, so an AI-label packet there is
 # blanked in place (see ``blank_ai_xmp_packets``).
 _XMP_PACKET_RE = re.compile(rb"<\?xpacket begin=.*?<\?xpacket end=[^>]*?\?>", re.DOTALL)
+
+# TC260-PG-20257A stores an MP4/MOV label as an ``AIGC`` key in
+# ``moov.udta.meta.keys`` and its JSON value in the corresponding
+# ``moov.udta.meta.ilst`` item. The value is intentionally bounded before it is
+# read: the normative object is tiny, and a corrupt size must not allocate an
+# arbitrary amount of memory during an inspection.
+_MAX_TC260_VALUE_BYTES = 1024 * 1024
 
 
 def _iter_top_level_boxes(data: bytes) -> Iterator[tuple[int, int, bytes, int]]:
@@ -82,6 +97,199 @@ def _iter_top_level_boxes(data: bytes) -> Iterator[tuple[int, int, bytes, int]]:
             return
         yield pos, pos + size, box_type, payload_off
         pos += size
+
+
+def _read_box_header(
+    stream: BinaryIO,
+    pos: int,
+    limit: int,
+) -> tuple[int, bytes, int] | None:
+    """Return ``(end, type, payload_offset)`` for one box inside ``limit``."""
+    if pos < 0 or pos + 8 > limit:
+        return None
+    stream.seek(pos)
+    header = stream.read(8)
+    if len(header) != 8:
+        return None
+    size32 = struct.unpack(">I", header[:4])[0]
+    box_type = header[4:8]
+    payload_off = pos + 8
+    if size32 == 1:
+        extended = stream.read(8)
+        if len(extended) != 8:
+            return None
+        size = struct.unpack(">Q", extended)[0]
+        payload_off = pos + 16
+    elif size32 == 0:
+        size = limit - pos
+    else:
+        size = size32
+    end = pos + size
+    if size < payload_off - pos or end > limit:
+        return None
+    return end, box_type, payload_off
+
+
+def _iter_file_boxes(
+    stream: BinaryIO,
+    start: int,
+    end: int,
+) -> Iterator[tuple[int, int, bytes, int]]:
+    """Yield valid boxes from one bounded container region."""
+    pos = start
+    while pos + 8 <= end:
+        header = _read_box_header(stream, pos, end)
+        if header is None:
+            return
+        box_end, box_type, payload_off = header
+        yield pos, box_end, box_type, payload_off
+        pos = box_end
+
+
+def _tc260_key_indices(
+    stream: BinaryIO,
+    payload_off: int,
+    box_end: int,
+) -> dict[int, tuple[int, int]]:
+    """Map every exact ``AIGC`` key index to its byte span."""
+    if payload_off + 8 > box_end:
+        return {}
+    stream.seek(payload_off)
+    prefix = stream.read(8)
+    if len(prefix) != 8:
+        return {}
+    entry_count = struct.unpack(">I", prefix[4:8])[0]
+    pos = payload_off + 8
+    found: dict[int, tuple[int, int]] = {}
+    for index in range(1, entry_count + 1):
+        if pos + 8 > box_end:
+            return {}
+        stream.seek(pos)
+        header = stream.read(8)
+        if len(header) != 8:
+            return {}
+        entry_size = struct.unpack(">I", header[:4])[0]
+        entry_end = pos + entry_size
+        if entry_size < 8 or entry_end > box_end:
+            return {}
+        name_start = pos + 8
+        if entry_end - name_start == 4:
+            stream.seek(name_start)
+            if stream.read(4) == b"AIGC":
+                found[index] = (name_start, entry_end)
+        pos = entry_end
+    return found
+
+
+def _is_tc260_aigc_json(value: bytes) -> bool:
+    """Require a JSON object carrying at least one normative TC260 field."""
+    try:
+        parsed = json.loads(value.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return False
+    if not isinstance(parsed, dict):
+        return False
+    fields = cast("dict[object, object]", parsed)
+    return bool(TC260_AIGC_FIELDS & {str(key) for key in fields})
+
+
+def _tc260_aigc_regions(
+    stream: BinaryIO,
+    file_size: int,
+) -> list[tuple[int, int, int, int, bytes]]:
+    """Locate validated native TC260 entries without reading media payloads.
+
+    Each tuple is ``(key_start, key_end, value_start, value_end, value)``.
+    """
+    regions: list[tuple[int, int, int, int, bytes]] = []
+    for _moov_start, moov_end, moov_type, moov_payload in _iter_file_boxes(stream, 0, file_size):
+        if moov_type != b"moov":
+            continue
+        for _udta_start, udta_end, udta_type, udta_payload in _iter_file_boxes(
+            stream,
+            moov_payload,
+            moov_end,
+        ):
+            if udta_type != b"udta":
+                continue
+            for _meta_start, meta_end, meta_type, meta_payload in _iter_file_boxes(
+                stream,
+                udta_payload,
+                udta_end,
+            ):
+                if meta_type != b"meta" or meta_payload + 4 > meta_end:
+                    continue
+                keys: dict[int, tuple[int, int]] = {}
+                ilst_boxes: list[tuple[int, int]] = []
+                for _child_start, child_end, child_type, child_payload in _iter_file_boxes(
+                    stream,
+                    meta_payload + 4,
+                    meta_end,
+                ):
+                    if child_type == b"keys":
+                        keys.update(_tc260_key_indices(stream, child_payload, child_end))
+                    elif child_type == b"ilst":
+                        ilst_boxes.append((child_payload, child_end))
+                if not keys:
+                    continue
+                for ilst_payload, ilst_end in ilst_boxes:
+                    for _item_start, item_end, item_type, item_payload in _iter_file_boxes(
+                        stream,
+                        ilst_payload,
+                        ilst_end,
+                    ):
+                        index = int.from_bytes(item_type, "big")
+                        key_span = keys.get(index)
+                        if key_span is None:
+                            continue
+                        for _data_start, data_end, data_type, data_payload in _iter_file_boxes(
+                            stream,
+                            item_payload,
+                            item_end,
+                        ):
+                            value_start = data_payload + 8
+                            value_size = data_end - value_start
+                            if data_type != b"data" or value_size < 0 or value_size > _MAX_TC260_VALUE_BYTES:
+                                continue
+                            stream.seek(value_start)
+                            value = stream.read(value_size)
+                            if len(value) == value_size and _is_tc260_aigc_json(value):
+                                regions.append((*key_span, value_start, data_end, value))
+    return regions
+
+
+def tc260_aigc_payloads(path: str | Path) -> tuple[bytes, ...]:
+    """Read native TC260 ``AIGC`` JSON values from an MP4/MOV container."""
+    try:
+        with open(path, "rb") as stream:
+            if not is_isobmff(stream.read(8)):
+                return ()
+            stream.seek(0, 2)
+            file_size = stream.tell()
+            return tuple(region[4] for region in _tc260_aigc_regions(stream, file_size))
+    except OSError:
+        return ()
+
+
+def blank_tc260_aigc_tags(data: bytes) -> tuple[bytes, int]:
+    """Blank native TC260 values in place while preserving every box offset.
+
+    Removing a nested ``ilst`` item would shift ``mdat`` in a fast-start MP4 and
+    invalidate its chunk offsets. Replacing the four-byte key with ``free`` and
+    the JSON value with spaces keeps every box size and media offset unchanged.
+    """
+    if not is_isobmff(data):
+        return data, 0
+    regions = _tc260_aigc_regions(io.BytesIO(data), len(data))
+    if not regions:
+        return data, 0
+    out = bytearray(data)
+    key_spans: set[tuple[int, int]] = set()
+    for key_start, key_end, value_start, value_end, _value in regions:
+        key_spans.add((key_start, key_end))
+        out[key_start:key_end] = b"free"
+        out[value_start:value_end] = b" " * (value_end - value_start)
+    return bytes(out), len(key_spans)
 
 
 def is_isobmff(data: bytes) -> bool:

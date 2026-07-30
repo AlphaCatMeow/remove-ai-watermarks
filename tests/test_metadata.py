@@ -1103,7 +1103,7 @@ class TestAIGCLabel:
         """Tencent Cloud's AIGC variant uses a service-provider schema
         (``ServiceProvider`` / ``ServiceUser`` / ``Time`` / ``ContentId``) rather
         than the producer schema, embedded in EXIF ``ImageDescription`` -- none of
-        its fields overlap the producer-side ``_TC260_FIELDS``, so the generic
+        its fields overlap the producer-side ``TC260_AIGC_FIELDS``, so the generic
         ``"AIGC":{...}`` gate must recognize them too."""
         import json
 

@@ -174,6 +174,40 @@ WebM, Matroska, MP3, WAV, FLAC, OGG, Opus, and AAC container metadata is strippe
 through ffmpeg with stream copying. The operation fails if ffmpeg is absent or
 cannot parse the input.
 
+### Visible video removal supports Sora and Veo and is still experimental
+
+The experimental `video metadata` command and high level video API inspect and
+strip supported AI provenance metadata without transcoding streams.
+
+`video visible` and `remove_video_visible` additionally support the moving
+Sora 2 mascot and wordmark, the current Veo four-point diamond, and the legacy
+`Veo` text. Detection requires a recurring visual candidate across adjacent
+frames. Provider provenance can recover low-contrast runs only after visual
+evidence exists, so metadata alone does not erase a clean API export.
+Historical Sora Turbo exports use a small OpenAI swirl in the corner rather
+than the moving mascot-and-wordmark design; that earlier variant is not
+detected by the `sora` video mark. Other provider video labels and proprietary
+invisible video watermarks are not supported yet.
+
+Visible removal transcodes the video stream and copies audio. Its frame-local
+fill is not a motion-aware video inpainting model. OpenCV can leave a visible
+smear where the mark overlaps a hard edge or structured texture, and the smear
+can vary over time. MI-GAN and LaMa improve individual frames but do not
+guarantee temporal coherence. The Veo diamond uses a shape mask to limit damage
+outside the symbol, but OpenCV may still soften texture inside it. The current
+encoder also emits a constant-frame-rate output at the decoded stream rate, so
+variable-frame-rate preservation is not yet guaranteed.
+
+Native TC260 metadata in MP4/MOV is supported at its normative
+`moov.udta.meta.keys/ilst` placement, including non-faststart files whose
+`moov` follows a large media payload. MKV/WebM is supported at the normative
+`Segment.Tags.Tag.SimpleTag` placement and uses ffmpeg for stream-copy removal.
+The corresponding FLV and AVI native tags are not parsed yet.
+
+The current ISOBMFF stripper reads an MP4, MOV, or M4V container into memory
+before rewriting its metadata boxes. A streaming box copier is required before
+the experimental command is appropriate for very large video files.
+
 ### Metadata transformation is fail safe
 
 `remove_ai_metadata` may copy an undecodable file through unchanged instead of

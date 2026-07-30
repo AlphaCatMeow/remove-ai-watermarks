@@ -1,10 +1,14 @@
 # Remove AI Watermarks
 
-Remove AI provenance marks from images you generated yourself:
+Remove AI provenance marks from images and video you generated yourself:
 
 - known visible labels such as the Gemini sparkle and vendor text marks;
 - invisible pixel watermarks through diffusion regeneration;
 - C2PA, EXIF, XMP, IPTC, and related AI metadata.
+
+Video support covers metadata inspection and removal plus experimental visible
+Sora-wordmark removal. Invisible video-watermark removal remains a follow-up
+stage.
 
 > Try it online at [raiw.cc](https://raiw.cc) if you do not want to install Python
 > or run diffusion models locally.
@@ -28,6 +32,8 @@ Remove AI provenance marks from images you generated yourself:
 | Remove known visible AI marks | `visible` | No |
 | Erase a region you select | `erase` | No |
 | Strip AI metadata | `metadata` | No |
+| Strip AI metadata from video | `video metadata` | No |
+| Remove a known Sora or Veo mark from video | `video visible` | No |
 | Regenerate an image to disrupt invisible watermarks | `invisible` | Recommended |
 | Run visible, invisible, and metadata removal | `all` | Recommended |
 | Process a directory | `batch` | Depends on mode |
@@ -57,6 +63,35 @@ Strip metadata without running visible inpainting or diffusion:
 ```bash
 remove-ai-watermarks metadata image.png --remove -o clean.png
 ```
+
+Inspect or remove AI metadata from an MP4, MOV, M4V, WebM, or MKV file:
+
+```bash
+remove-ai-watermarks video metadata input.mp4 --check
+remove-ai-watermarks video metadata input.mp4 --remove -o clean.mp4
+```
+
+The metadata command does not transcode video or audio streams. When `-o` is
+omitted it writes `<source>_clean` and preserves the original. MP4 and MOV
+inspection includes the native TC260 `AIGC` tag in
+`moov.udta.meta.keys/ilst`, including a `moov` placed after the media payload.
+MKV and WebM inspection reads the normative
+`Segment.Tags.Tag.SimpleTag` placement.
+
+Remove a moving Sora wordmark or a Veo corner mark:
+
+```bash
+remove-ai-watermarks video visible input.mp4 -o clean.mp4
+remove-ai-watermarks video visible veo.mp4 --mark veo -o veo_clean.mp4
+```
+
+This path scans the complete sequence before changing pixels. It accepts only a
+mark that repeats at a stable position across adjacent frames, then reuses the
+same OpenCV, MI-GAN, or LaMa fill backends as image removal. Audio is copied
+without re-encoding; the video stream is transcoded because its pixels change.
+Sora covers the moving Sora 2 mascot and wordmark. Veo covers both the current
+four-point diamond and the legacy `Veo` text in the bottom-right corner. No
+output is written when no stable mark is found.
 
 For invisible watermark removal, install the diffusion dependencies:
 
@@ -184,8 +219,9 @@ Visible removal follows three steps:
 3. Fill only the masked region with OpenCV, MI-GAN, or LaMa.
 
 Metadata removal uses format aware stripping. JPEG metadata removal preserves
-the encoded image scan instead of recompressing it. Other supported containers
-use their corresponding metadata path.
+the encoded image scan instead of recompressing it. Native MP4/MOV TC260 values
+are blanked without changing box sizes or media offsets. Other supported
+containers use their corresponding metadata path.
 
 Invisible removal is different. It regenerates the image through a diffusion
 pipeline to disrupt pixel and frequency domain watermarks. This changes the
@@ -202,6 +238,11 @@ import remove_ai_watermarks as raiw
 
 result, removed = raiw.remove_visible("watermarked.png", "clean.png")
 print(removed)
+
+report = raiw.inspect_video_metadata("input.mp4")
+cleaned = raiw.remove_video_metadata("input.mp4")
+visible = raiw.remove_video_visible("sora.mp4", "sora_clean.mp4")
+veo = raiw.remove_video_visible("veo.mp4", "veo_clean.mp4", mark="veo")
 ```
 
 The high level API accepts a file path or a BGR NumPy array. For path inputs it
@@ -226,6 +267,13 @@ invisible removal.
   and selected fill backend.
 - Invisible removal changes the whole image and may alter faces, text, or fine
   detail.
+- Visible video removal recognizes the moving Sora 2 wordmark and the current
+  Veo diamond plus legacy `Veo` text. It does not recognize the older Sora Turbo
+  corner swirl.
+  The classical OpenCV backend can smear structured backgrounds; use MI-GAN or
+  LaMa when recovery quality matters. Video SynthID is not removed yet.
+  MP4/MOV/M4V metadata stripping currently reads the full container into
+  memory, so very large videos are not an intended metadata input yet.
 - `qwen-zimage` requires CUDA. The other diffusion profiles also support the
   devices listed by `remove-ai-watermarks invisible --help`.
 - Provider watermark systems can change. Validate important outputs with the

@@ -4,6 +4,7 @@ Provides commands for:
   - Visible watermark removal (Gemini sparkle) - works offline, fast
   - Invisible watermark removal (SynthID etc.) - requires GPU/diffusion models
   - AI metadata stripping - lightweight, no ML deps needed
+  - Experimental video metadata and visible-wordmark removal
 """
 
 from __future__ import annotations
@@ -586,7 +587,7 @@ def _should_skip_invisible_scrub(force: bool, image_path: Path) -> bool:
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose logging.")
 @click.pass_context
 def main(ctx: click.Context, verbose: bool) -> None:
-    """Remove visible and invisible AI watermarks from images."""
+    """Remove visible and invisible AI watermarks from images, plus provenance metadata from video."""
     from dotenv import load_dotenv
 
     load_dotenv()  # Load .env (e.g. HF_TOKEN)
@@ -1016,6 +1017,23 @@ def cmd_invisible(
 
 
 # ── Metadata operations ──
+def _print_metadata_report(source: Path, has_ai: bool, metadata: dict[str, str]) -> None:
+    """Render one metadata inspection result for the generic and video commands."""
+    if not has_ai:
+        console.print(f"  No AI metadata found in {source.name}")
+        return
+
+    console.print(f"  Warning: AI metadata detected in {source.name}:")
+    if synthid := metadata.get("synthid_watermark"):
+        console.print(f"  Warning: SynthID watermark (inferred from C2PA metadata) {synthid}")
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Key", style="cyan")
+    table.add_column("Value")
+    for key, value in metadata.items():
+        table.add_row(key, str(value)[:80])
+    console.print(table)
+
+
 @main.command("metadata")
 @click.argument("source", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--check", is_flag=True, help="Check for AI metadata (don't modify).")
@@ -1050,19 +1068,8 @@ def cmd_metadata(
 
     if check or (not remove):
         has_ai = has_ai_metadata(source)
-        if has_ai:
-            console.print(f"  Warning: AI metadata detected in {source.name}:")
-            meta = get_ai_metadata(source)
-            if synthid := meta.get("synthid_watermark"):
-                console.print(f"  Warning: SynthID watermark (inferred from C2PA metadata) {synthid}")
-            table = Table(show_header=True, header_style="bold")
-            table.add_column("Key", style="cyan")
-            table.add_column("Value")
-            for k, v in meta.items():
-                table.add_row(k, str(v)[:80])
-            console.print(table)
-        else:
-            console.print(f"  No AI metadata found in {source.name}")
+        metadata = get_ai_metadata(source) if has_ai else {}
+        _print_metadata_report(source, has_ai, metadata)
 
         if not remove:
             return
@@ -1080,6 +1087,114 @@ def cmd_metadata(
         console.print("    the file could not be decoded, so it was copied through unchanged")
         raise SystemExit(1)
     console.print(f"  AI metadata stripped -> {out}")
+
+
+# ── Experimental video pipeline ──
+@main.group("video")
+def cmd_video() -> None:
+    """Process AI watermarks in video files."""
+
+
+@cmd_video.command("metadata")
+@click.argument("source", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--check", is_flag=True, help="Check for AI metadata (don't modify).")
+@click.option("--remove", is_flag=True, help="Remove AI metadata.")
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Output path (default: <source>_clean with the same container).",
+)
+@click.option("--keep-standard/--remove-all", default=True, help="Keep standard metadata.")
+def cmd_video_metadata(
+    source: Path,
+    check: bool,
+    remove: bool,
+    output: Path | None,
+    keep_standard: bool,
+) -> None:
+    """Check or remove AI metadata without transcoding video streams."""
+    from remove_ai_watermarks.video import inspect_video_metadata, remove_video_metadata
+
+    _banner()
+    try:
+        report = inspect_video_metadata(source)
+    except (OSError, ValueError) as e:
+        raise click.ClickException(str(e)) from e
+
+    if check or not remove:
+        _print_metadata_report(source, report.has_ai_metadata, report.markers)
+
+        if not remove:
+            return
+
+    try:
+        result = remove_video_metadata(source, output, keep_standard=keep_standard)
+    except (OSError, RuntimeError, ValueError) as e:
+        raise click.ClickException(str(e)) from e
+
+    if result.remaining:
+        console.print(f"  FAILED: {len(result.remaining)} AI metadata marker(s) survived in {result.output}")
+        console.print(f"    still present: {', '.join(sorted(result.remaining))}")
+        raise SystemExit(1)
+    console.print(f"  AI metadata stripped -> {result.output}")
+
+
+@cmd_video.command("visible")
+@click.argument("source", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Output path (default: <source>_clean with the same container).",
+)
+@click.option(
+    "--mark",
+    type=click.Choice(["sora", "veo"]),
+    default="sora",
+    help="Visible AI mark to remove.",
+)
+@click.option(
+    "--backend",
+    type=click.Choice(["auto", "cv2", "migan", "lama"]),
+    default="cv2",
+    help="Per-frame fill backend. cv2 is the fast default; learned backends improve difficult backgrounds.",
+)
+@click.option("--strip-metadata/--keep-metadata", default=True, help="Strip AI metadata from the transcoded output.")
+def cmd_video_visible(
+    source: Path,
+    output: Path | None,
+    mark: str,
+    backend: str,
+    strip_metadata: bool,
+) -> None:
+    """Remove a temporally stable visible AI wordmark from video."""
+    from remove_ai_watermarks.video import remove_video_visible
+
+    _banner()
+    console.print(f"  Scanning {source.name} for a temporally stable {mark} mark...")
+    try:
+        result = remove_video_visible(
+            source,
+            output,
+            mark=mark,
+            backend=backend,
+            strip_metadata=strip_metadata,
+        )
+    except (OSError, RuntimeError, ValueError) as e:
+        raise click.ClickException(str(e)) from e
+
+    if result.output is None:
+        console.print(f"  No stable {mark} watermark detected; no output written")
+        raise SystemExit(EXIT_NO_VISIBLE_MARK)
+    if result.remaining_metadata:
+        console.print(f"  FAILED: {len(result.remaining_metadata)} AI metadata marker(s) survived in {result.output}")
+        raise SystemExit(1)
+    console.print(
+        f"  Removed {mark} watermark from {result.removed_frames}/{result.total_frames} frames -> {result.output}"
+    )
 
 
 # ── Provenance identification ──

@@ -86,6 +86,70 @@ Regression coverage:
 - [`test_api.py`](../tests/test_api.py)
 - [`test_image_io.py`](../tests/test_image_io.py)
 
+[`video.py`](../src/remove_ai_watermarks/video.py) provides the experimental
+video entry point:
+
+- `inspect_video_metadata`
+- `remove_video_metadata`
+- `remove_video_visible`
+
+The video API validates both the supported extension and container signature,
+then delegates all metadata detection and stripping to `metadata.py`. It
+requires a separate same-container output, defaulting to `<source>_clean`, so
+the experimental path does not overwrite an original. The package root exposes
+both functions lazily.
+
+Native MP4/MOV TC260 labels follow TC260-PG-20257A:
+`moov.udta.meta.keys` maps an `AIGC` key to a raw JSON value in `ilst`.
+[`noai/isobmff.py`](../src/remove_ai_watermarks/noai/isobmff.py) walks those
+nested boxes by seeking, so detection reaches a tail `moov` without reading the
+preceding `mdat`. Removal changes the four-byte key to `free` and blanks only
+the validated JSON value with same-length spaces. This preserves every box
+size, `stco`/`co64` offset, and encoded stream byte. A generic `AIGC` key whose
+value has no TC260 field is ignored.
+
+[`noai/ebml.py`](../src/remove_ai_watermarks/noai/ebml.py) provides the
+corresponding bounded Matroska/WebM reader. It seeks over clusters and accepts
+only a `Segment.Tags.Tag.SimpleTag` pairing `TagName=AIGC` with a JSON
+`TagString` carrying a TC260 field. The existing ffmpeg stream-copy path removes
+those container tags without transcoding the encoded streams.
+
+[`video_visible.py`](../src/remove_ai_watermarks/video_visible.py) implements
+the first pixel stages for Sora and Veo. The Sora detector searches a normalized
+frame with a fully synthetic mascot-and-text silhouette at several scales. The
+Veo detector uses separate synthetic silhouettes for the current four-point
+diamond and legacy `Veo` text, with bounded bottom-right searches calibrated
+independently from Sora. A strong relocated-diamond match may bypass the known
+layout anchors, but weak free-corner matches never enter the temporal arbiter.
+This prevents recurring scene details in clean API exports from being promoted
+to a watermark.
+
+Every per-frame result is untrusted. The provider-specific stabilization
+wrappers share one recurrence implementation, while retaining separate visual
+floors and minimum-run policy. Provenance can relax a low-contrast run only
+after recurring visual evidence exists. Sora transition frames follow the
+nearest confirmed moving position only with Sora provenance. A confirmed Veo
+run can cover low-contrast frames at its fixed position. This separation keeps
+clean API exports from being modified merely because metadata names the same
+generator.
+
+Removal runs in a second decode pass. Sora and legacy Veo text use padded box
+masks. The square Veo diamond uses a synthetic shape mask so transparent box
+corners do not erase unrelated pixels. Every mask goes through the shared
+`watermark_registry.fill` backends. ffmpeg encodes the changed video stream and
+copies optional audio. The default OpenCV fill is the speed floor; structured
+backgrounds need MI-GAN or LaMa for better reconstruction. Invisible video
+stages must continue to reuse the image and metadata implementations rather
+than copying their logic.
+
+The inherited ISOBMFF metadata path currently reads the complete container into
+memory; replacing that with a streaming box copier is a prerequisite for large
+video inputs.
+
+Regression coverage:
+
+- [`test_video.py`](../tests/test_video.py)
+
 ## Metadata and provenance
 
 ### C2PA
@@ -110,6 +174,10 @@ Key contracts:
   scan.
 - ISOBMFF containers use
   [`noai/isobmff.py`](../src/remove_ai_watermarks/noai/isobmff.py).
+- Native MP4/MOV TC260 `AIGC` entries are read from
+  `moov.udta.meta.keys/ilst` and blanked without changing box sizes.
+- Native MKV/WebM TC260 `AIGC` entries are read from
+  `Segment.Tags.Tag.SimpleTag` and removed through the ffmpeg stream-copy path.
 - Supported non-ISOBMFF audio and video containers use ffmpeg stream copying.
 - The low-level remover is fail-safe and can copy an undecodable file through
   unchanged.

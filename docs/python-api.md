@@ -128,6 +128,65 @@ path preserves the pixels but drops standard metadata. Treat a nonempty
 undecodable input through unchanged, so its return alone must not be presented
 as proof that metadata was removed.
 
+## Inspect and strip video metadata
+
+The experimental high level video API supports MP4, MOV, M4V, WebM, and MKV:
+
+```python
+import remove_ai_watermarks as raiw
+
+report = raiw.inspect_video_metadata("input.mp4")
+if report.has_ai_metadata:
+    result = raiw.remove_video_metadata("input.mp4")
+    if result.remaining:
+        raise RuntimeError(f"AI metadata remains: {result.remaining}")
+```
+
+`remove_video_metadata` does not transcode video or audio streams. Its default
+output is `input_clean.mp4`, leaving the source untouched. An explicit output
+must use the same container extension as the source.
+
+The returned `VideoMetadataResult` records the source, output, metadata detected
+before removal, and any markers remaining after the verified strip. MP4/MOV
+inspection recognizes the native TC260 `AIGC` entry in
+`moov.udta.meta.keys/ilst`; its removal preserves container size and encoded
+stream bytes. MKV/WebM inspection recognizes the corresponding
+`Segment.Tags.Tag.SimpleTag` representation; its removal requires ffmpeg for a
+stream-copy remux.
+
+## Remove a visible Sora or Veo video mark
+
+```python
+import remove_ai_watermarks as raiw
+
+result = raiw.remove_video_visible(
+    "sora.mp4",
+    "sora_clean.mp4",
+    backend="cv2",
+    strip_metadata=True,
+)
+if result.output is None:
+    print("No temporally stable Sora mark was found")
+
+veo_result = raiw.remove_video_visible(
+    "veo.mp4",
+    "veo_clean.mp4",
+    mark="veo",
+)
+```
+
+`remove_video_visible` scans the complete video before writing output. It
+combines synthetic multi-scale visual matching with temporal consistency, so an
+isolated lookalike in one frame is not enough to authorize inpainting. The
+supported `mark` values are `sora` and `veo`. The Veo detector recognizes the
+current four-point diamond and the legacy `Veo` text with separate synthetic
+silhouettes.
+
+The returned `VideoVisibleResult` records the total, detected, and removed frame
+counts plus any AI metadata that survived the output encode. The function
+returns `output=None` and writes no file when no stable mark is selected. Video
+pixels are transcoded through ffmpeg while the source audio stream is copied.
+
 ## Remove invisible watermarks
 
 ```python

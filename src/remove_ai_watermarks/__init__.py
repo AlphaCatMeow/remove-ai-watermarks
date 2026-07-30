@@ -6,6 +6,9 @@ High-level API (lazy, so ``import remove_ai_watermarks`` stays cheap)::
     raiw.remove_visible("in.png", "out.png")            # clean a file (provenance auto)
     result, removed = raiw.remove_visible(bgr_array)    # array -> array
     raiw.visible_provenance("in.png")                   # -> frozenset of confirmed vendors
+    raiw.inspect_video_metadata("in.mp4")               # -> VideoMetadataReport
+    raiw.remove_video_metadata("in.mp4", "out.mp4")     # verified metadata strip
+    raiw.remove_video_visible("in.mp4", "out.mp4")      # stable Sora or Veo mark removal
 
 For a provenance verdict use the ``identify`` submodule::
 
@@ -27,10 +30,18 @@ _warnings.filterwarnings("ignore", message=r".*ImageProcessorFast.*")
 
 __version__ = "0.20.2"
 
-__all__ = ["__version__", "remove_visible", "visible_provenance"]
+__all__ = [
+    "__version__",
+    "inspect_video_metadata",
+    "remove_video_metadata",
+    "remove_video_visible",
+    "remove_visible",
+    "visible_provenance",
+]
 
 if TYPE_CHECKING:
     from remove_ai_watermarks.api import remove_visible, visible_provenance
+    from remove_ai_watermarks.video import inspect_video_metadata, remove_video_metadata, remove_video_visible
 
 
 def __getattr__(name: str) -> object:
@@ -40,4 +51,8 @@ def __getattr__(name: str) -> object:
         from remove_ai_watermarks import api
 
         return getattr(api, name)
+    if name in ("inspect_video_metadata", "remove_video_metadata", "remove_video_visible"):
+        from remove_ai_watermarks import video
+
+        return getattr(video, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

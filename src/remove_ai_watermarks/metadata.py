@@ -143,7 +143,7 @@ AIGC_MARKERS: tuple[bytes, ...] = (
 # the same object as a PNG ``tEXt`` chunk keyed ``AIGC`` (raw JSON, not XMP), so
 # a JSON object carrying at least one of these is accepted as a valid TC260
 # label even when the namespaced XMP element is absent.
-_TC260_FIELDS: frozenset[str] = frozenset(
+TC260_AIGC_FIELDS: frozenset[str] = frozenset(
     {
         # Producer-side schema (Doubao and most China-served generators).
         "Label",
@@ -359,10 +359,12 @@ def has_ai_metadata(image_path: Path) -> bool:
 def aigc_label(image_path: Path) -> dict[str, str] | None:
     """Parse a China TC260 AI-labeling block, if present.
 
-    Three serializations are recognized:
+    Supported serializations are:
 
     - a PNG ``tEXt``/``iTXt`` chunk keyed ``AIGC`` carrying the raw JSON object
       (as written by Doubao / ByteDance), read via PIL;
+    - a native MP4/MOV ``AIGC`` key in ``moov.udta.meta.keys`` whose matching
+      ``ilst`` item carries the raw JSON object;
     - an XMP ``<TC260:AIGC>{...}</TC260:AIGC>`` block (HTML-entity encoded text),
       found by a container-agnostic raw-byte scan (PNG/JPEG/WebP alike); and
     - a raw-JSON ``{"AIGC":{...}}`` block with no namespace, as embedded in JPEG
@@ -375,7 +377,7 @@ def aigc_label(image_path: Path) -> dict[str, str] | None:
     Returns the decoded JSON (e.g. ``{"Label": "1", "ContentProducer": ...}``)
     or None. The generic forms (the PNG-chunk key ``AIGC``, the bare
     ``{"AIGC":...}`` object, and the bare ``AIGC{...}`` blob) are accepted only
-    if they carry at least one known TC260 field (``_TC260_FIELDS``); the
+    if they carry at least one known TC260 field (``TC260_AIGC_FIELDS``); the
     namespaced XMP element is unambiguous, so any JSON object is accepted.
     """
     import html
@@ -390,7 +392,7 @@ def aigc_label(image_path: Path) -> dict[str, str] | None:
         if not isinstance(parsed, dict):
             return None
         fields = {str(k): str(v) for k, v in cast("dict[object, object]", parsed).items()}
-        if require_tc260_field and not (_TC260_FIELDS & fields.keys()):
+        if require_tc260_field and not (TC260_AIGC_FIELDS & fields.keys()):
             return None
         return fields
 
@@ -406,6 +408,25 @@ def aigc_label(image_path: Path) -> dict[str, str] | None:
         value = None
     if isinstance(value, str) and (result := _parse(value, require_tc260_field=True)):
         return result
+
+    # Native MP4/MOV TC260 metadata (TC260-PG-20257A): the ``AIGC`` key lives
+    # in ``moov.udta.meta.keys`` and points to a raw JSON value in ``ilst``.
+    # Read it through the bounded box walker so a tail ``moov`` after a large
+    # ``mdat`` is found without loading or scanning the media payload.
+    from remove_ai_watermarks.noai.isobmff import tc260_aigc_payloads
+
+    for payload in tc260_aigc_payloads(image_path):
+        if result := _parse(payload.decode("utf-8", "replace"), require_tc260_field=True):
+            return result
+
+    # Native MKV/WebM TC260 metadata: ``Segment.Tags.Tag.SimpleTag`` carries
+    # ``TagName=AIGC`` and the raw JSON in ``TagString``. The EBML walker seeks
+    # over clusters and reads only bounded metadata values.
+    from remove_ai_watermarks.noai.ebml import tc260_aigc_payloads as ebml_tc260_aigc_payloads
+
+    for payload in ebml_tc260_aigc_payloads(image_path):
+        if result := _parse(payload.decode("utf-8", "replace"), require_tc260_field=True):
+            return result
 
     # XMP TC260:AIGC, namespaced (unambiguous) in either serialization RDF allows:
     # an element  <TC260:AIGC>{...}</TC260:AIGC>  or an attribute  TC260:AIGC="{...}"
@@ -750,7 +771,7 @@ def _is_aigc_exif_value(raw: object) -> bool:
     Mirrors ``aigc_label``'s EXIF path: the ``{"AIGC":{...}}`` wrapper embedded in
     ``UserComment`` / ``ImageDescription`` by China-served generators (Doubao's
     producer schema AND Tencent Cloud's service-provider schema, both keyed under
-    ``_TC260_FIELDS``). Gated on both the ``AIGC`` marker and a TC260 field so a
+    ``TC260_AIGC_FIELDS``). Gated on both the ``AIGC`` marker and a TC260 field so a
     coincidental token cannot false-drop a genuine caption/comment. Accepts a ``str``
     too (a PNG ``tEXt``/``iTXt`` value), not only EXIF bytes.
     """
@@ -761,7 +782,7 @@ def _is_aigc_exif_value(raw: object) -> bool:
     if b"AIGC" not in raw:
         return False
     text = bytes(raw).decode("latin-1", "ignore")
-    return any(field in text for field in _TC260_FIELDS)
+    return any(field in text for field in TC260_AIGC_FIELDS)
 
 
 def _ai_exif_targets(loaded: dict[str, Any]) -> list[tuple[str, int, bytes, str]]:
@@ -1154,6 +1175,7 @@ def remove_ai_metadata(
     from remove_ai_watermarks.noai.isobmff import (
         blank_ai_exif_tokens,
         blank_ai_xmp_packets,
+        blank_tc260_aigc_tags,
         is_isobmff,
         strip_c2pa_boxes,
     )
@@ -1164,17 +1186,20 @@ def remove_ai_metadata(
         data = source_path.read_bytes()
         # Top-level uuid/jumb boxes (C2PA + AI-label XMP), then the meta-box items
         # the top-level stripper can't reach (HEIF/AVIF store them in mdat/idat):
-        # AI-label XMP packets and AI-generator tokens in an Exif item -- both
-        # blanked in place (same length) so box sizes and iloc offsets stay valid
-        # and the coded image is untouched.
+        # Native TC260 tags, AI-label XMP packets, and AI-generator tokens in an
+        # Exif item are blanked in place (same length) so box sizes and iloc /
+        # media offsets stay valid and the coded content is untouched.
         cleaned, stripped = strip_c2pa_boxes(data)
+        cleaned, tc260_blanked = blank_tc260_aigc_tags(cleaned)
         cleaned, blanked = blank_ai_xmp_packets(cleaned)
         cleaned, exif_blanked = blank_ai_exif_tokens(cleaned)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_bytes(cleaned)
         logger.info(
-            "Stripped %d AI-provenance box(es), blanked %d meta-box XMP packet(s) + %d EXIF token(s) → %s",
+            "Stripped %d AI-provenance box(es), blanked %d native TC260 tag(s) + "
+            "%d meta-box XMP packet(s) + %d EXIF token(s) → %s",
             stripped,
+            tc260_blanked,
             blanked,
             exif_blanked,
             output_path,

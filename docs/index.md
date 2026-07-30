@@ -8,7 +8,7 @@ to run the tool. Use the maintainer references only when changing the code.
 | Page | Use it when |
 | --- | --- |
 | [Installation](installation.md) | You need the CLI, an optional model backend, or a development environment. |
-| [CLI guide](cli.md) | You want a command for one image, a directory, or a specific watermark type. |
+| [CLI guide](cli.md) | You want a command for an image, video metadata or visible marks, a directory, or a specific watermark type. |
 | [Python API](python-api.md) | You want to call the package from Python. |
 | [Supported signals](supported-signals.md) | You need to know which visible marks, metadata formats, and invisible signals are covered. |
 | [Known limitations](known-limitations.md) | You need the quality, device, format, or verification boundaries. |

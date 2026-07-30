@@ -125,6 +125,60 @@ The command also supports the audio and video containers listed in
 [supported signals](supported-signals.md). ffmpeg must be available for the
 non-ISOBMFF audio and video path.
 
+## Strip AI metadata from video
+
+The experimental video namespace starts with metadata inspection and removal:
+
+```bash
+remove-ai-watermarks video metadata input.mp4 --check
+remove-ai-watermarks video metadata input.mp4 --remove -o clean.mp4
+```
+
+Supported containers are MP4, MOV, M4V, WebM, and MKV. The operation delegates
+to the same verified metadata scanner and stripper as the generic `metadata`
+command, so detection and removal stay in parity. Video and audio streams are
+not transcoded. For MP4 and MOV, this includes the native TC260 `AIGC` key and
+JSON value stored in `moov.udta.meta.keys/ilst`. The inspector seeks past a
+large `mdat` to find a tail `moov`; removal blanks the key and value in place so
+box sizes and media offsets do not move.
+
+For MKV and WebM, the inspector reads the native TC260
+`Segment.Tags.Tag.SimpleTag` entry. Removal uses ffmpeg stream copying to
+discard container tags and chapters without transcoding the streams.
+
+When `-o` is omitted, the command writes `<source>_clean` with the same
+extension. It never overwrites the source, and it rejects an output with a
+different container extension.
+
+Visible video labels and invisible video watermarks are not handled by this
+command.
+
+## Remove a visible Sora or Veo video mark
+
+```bash
+remove-ai-watermarks video visible input.mp4 -o clean.mp4
+remove-ai-watermarks video visible veo.mp4 --mark veo -o veo_clean.mp4
+```
+
+The experimental command supports the moving Sora mascot and wordmark plus two
+Veo corner variants: the current four-point diamond and the legacy `Veo` text.
+Sora searches the whole frame at multiple scales. Veo searches the
+bottom-right corner using separate synthetic silhouettes for the two variants.
+Both require a spatially recurring candidate across adjacent frames. Matching
+provider provenance may relax the visual score, but metadata alone never
+creates a detection. Clean API exports therefore remain untouched.
+
+The video stream is transcoded and the original audio stream is copied.
+Supported input and output containers are MP4, MOV, M4V, WebM, and MKV; the
+output extension must match the input. The default `cv2` backend is fast but can
+smear structured backgrounds. Select `--backend migan` or `--backend lama` for
+a learned fill, or `--backend auto` to choose the best installed backend.
+
+AI metadata is stripped from the encoded output by default. Use
+`--keep-metadata` to retain mapped container metadata. When no temporally stable
+mark is found, the command writes no output and exits with the no-visible-mark
+status.
+
 ## Remove invisible watermarks
 
 Install the diffusion dependencies first:
