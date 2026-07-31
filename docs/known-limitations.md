@@ -212,10 +212,10 @@ WebM, Matroska, MP3, WAV, FLAC, OGG, Opus, and AAC container metadata is strippe
 through ffmpeg with stream copying. The operation fails if ffmpeg is absent or
 cannot parse the input.
 
-### Video pixel removal is provider-specific and still experimental
+### Video pixel removal is provider-specific
 
-The experimental `video metadata` command and high level video API inspect and
-strip supported AI provenance metadata without transcoding streams.
+The `video metadata` command and high level video API inspect and strip
+supported AI provenance metadata without transcoding streams.
 
 `video visible` and `remove_video_visible` additionally support the moving
 Sora 2 mascot and wordmark, the current Veo four-point diamond, the legacy

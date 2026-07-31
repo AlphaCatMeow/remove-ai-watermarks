@@ -65,10 +65,14 @@ current line according to the environment.
 
 The wheel includes the package under `src/`.
 
-The source distribution explicitly excludes `/data` through
-`[tool.hatch.build.targets.sdist]` in `pyproject.toml`. Keep that exclusion:
-calibration captures and test corpora do not belong in the published package
-archive.
+The source distribution uses an explicit allowlist for `/src`, `/LICENSE`,
+`/README.md`, and `/pyproject.toml` through
+`[tool.hatch.build.targets.sdist]` in `pyproject.toml`. It also defensively
+excludes `/data`, `/tmp`, and `/.sc`. Keep both controls: calibration captures,
+test corpora, generated research outputs, and local session state do not belong
+in the published package archive. The matching local-root entries in
+`.gitignore` prevent accidental commits, but are not a substitute for the build
+boundary because hatchling may include untracked files.
 
 ## Build backend
 

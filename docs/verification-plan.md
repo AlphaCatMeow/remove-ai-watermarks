@@ -242,9 +242,9 @@ was negative on both carriers, and a weaker candidate was negative on one. On
 ordinary Gemini to ignore and reinterpret the detector result. Those follow-ups
 were mistakenly treated as a stricter oracle; they were not detector reruns.
 The implementation remains exposed as `video invisible` and
-`remove_video_invisible`. Its default is a calibrated operating point, while
-each important result still requires a fresh control-positive,
-candidate-negative pair.
+`remove_video_invisible`. Its oracle-certified default is the product operating
+point. A fresh control-positive, candidate-negative pair remains an optional
+per-file audit after provider changes or for unusually important files.
 
 The 2026-07-31 full-clip check added a public eight-second Veo carrier. The
 source and the complete `0.10` product output were both detected, proving the

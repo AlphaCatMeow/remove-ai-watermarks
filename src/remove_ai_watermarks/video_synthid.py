@@ -1,4 +1,4 @@
-"""Shared configuration for experimental video SynthID regeneration."""
+"""Shared configuration for oracle-certified video SynthID removal."""
 
 DEFAULT_VIDEO_SYNTHID_VAE = "stabilityai/sd-vae-ft-mse"
 DEFAULT_VIDEO_SYNTHID_NOISE_STD = 0.15

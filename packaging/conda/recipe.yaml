@@ -59,7 +59,7 @@ about:
     Detect and remove registered visible AI-provenance marks and strip
     AI-provenance metadata (C2PA, EXIF, IPTC, and PNG text chunks) from images
     and supported video containers. The core package covers the identify,
-    metadata, visible, erase, and experimental video command surface. Optional
+    metadata, visible, erase, and product-oriented video command surface. Optional
     pip extras add SynthID diffusion removal and additional invisible-watermark
     detectors.
   license: Apache-2.0

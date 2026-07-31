@@ -191,9 +191,20 @@ build-backend = "hatchling.build"
 packages = ["src/remove_ai_watermarks"]
 
 [tool.hatch.build.targets.sdist]
-# Keep the source distribution small: ship the package and metadata, not
-# calibration or evaluation data under data/. The wheel ships only src/.
-exclude = ["/data"]
+# Keep the source distribution small and public-safe: ship tracked source and
+# metadata, not corpora or local research/session artifacts. The wheel ships
+# only src/.
+include = [
+    "/src",
+    "/LICENSE",
+    "/README.md",
+    "/pyproject.toml",
+]
+exclude = [
+    "/data",
+    "/tmp",
+    "/.sc",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
