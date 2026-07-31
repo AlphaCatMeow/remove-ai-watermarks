@@ -149,11 +149,12 @@ regeneration. It centralizes container codecs, optional audio stream copying,
 metadata/chapter policy, encode-failure reporting, and atomic same-directory
 publication. Each mapped stream is allowed to reach its own end, so a copied
 audio tail is not shortened to the frame-input duration.
-Both the raw-BGR and timestamped-NUT stdin inputs disable ffmpeg probing before
-`pipe:0`: their format is already explicit, and ffmpeg 6 on Linux can otherwise
-wait for its normal analysis window while the producer blocks on a full pipe
-before the source-audio input opens. Command-order regressions cover both stdin
-modes; the real Linux full-clip CI job guards process completion.
+Both the raw-BGR and timestamped-NUT stdin modes cap the video encoder at two
+threads. A Linux full-clip trace showed ffmpeg creating dozens of worker stacks
+and severely delaying frame-pipe ingestion on a constrained hosted runner. The
+bounded codec pool avoids that scheduling collapse while leaving audio stream
+copy independent. Command regressions cover both supported video codecs; the
+real Linux full-clip CI job guards process completion.
 `probe_video_encode_profile` reads the first source video stream with ffprobe
 and preserves the supported properties that survive the 8-bit BGR boundary:
 `yuv420p`/`yuv422p`/`yuv444p` chroma sampling, recognized color tags, encoder

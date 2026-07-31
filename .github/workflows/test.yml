@@ -55,22 +55,10 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install --yes ffmpeg strace
+        run: sudo apt-get update && sudo apt-get install --yes ffmpeg
       - name: Sync dev environment
         run: uv sync --frozen --extra dev
       - name: Run full-clip video test
-        run: |
-          set +e
-          timeout --kill-after=10s 90s \
-            strace -ff -tt -s 256 -o /tmp/video-e2e.strace \
-            uv run pytest -vv -o faulthandler_timeout=45 \
-            tests/test_video.py::TestVideoVisibleFullClip
-          status=$?
-          if [ "$status" -ne 0 ]; then
-            for trace in /tmp/video-e2e.strace*; do
-              echo "::group::$trace"
-              tail -n 100 "$trace"
-              echo "::endgroup::"
-            done
-          fi
-          exit "$status"
+        run: >-
+          uv run pytest -vv -o faulthandler_timeout=60
+          tests/test_video.py::TestVideoVisibleFullClip

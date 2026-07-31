@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 _PIXEL_FORMATS = frozenset({"yuv420p", "yuv422p", "yuv444p"})
+_VIDEO_ENCODER_THREADS = 2
 _PIXEL_FORMAT_ALIASES = {
     "yuvj420p": "yuv420p",
     "yuvj422p": "yuv422p",
@@ -286,12 +287,8 @@ def raw_video_command(
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg is None:
         raise RuntimeError("Video processing requires ffmpeg on PATH")
-    # The pipe format and stream geometry are already explicit. FFmpeg 6 can
-    # otherwise wait for its normal analysis window while the producer blocks
-    # on a full pipe, before the second (audio) input has been opened.
-    pipe_input = ["-analyzeduration", "0", "-probesize", "32", "-i", "pipe:0"]
     frame_input = (
-        ["-f", "nut", *pipe_input]
+        ["-f", "nut", "-i", "pipe:0"]
         if timestamped_input
         else [
             "-f",
@@ -302,7 +299,8 @@ def raw_video_command(
             f"{width}x{height}",
             "-r",
             f"{fps:.12g}",
-            *pipe_input,
+            "-i",
+            "pipe:0",
         ]
     )
     command = [
@@ -319,6 +317,8 @@ def raw_video_command(
         "-map",
         "1:a?",
         *_video_codec_args(output.suffix.lower(), crf=crf, profile=profile),
+        "-threads:v",
+        str(_VIDEO_ENCODER_THREADS),
         *_profile_args(profile),
         "-c:a",
         "copy",

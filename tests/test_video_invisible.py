@@ -102,13 +102,9 @@ def test_timestamped_encoder_reads_nut_and_passes_pts_through(
     )
 
     assert "-copyts" in command
-    assert command[command.index("-f") : command.index("-f") + 8] == [
+    assert command[command.index("-f") : command.index("-f") + 4] == [
         "-f",
         "nut",
-        "-analyzeduration",
-        "0",
-        "-probesize",
-        "32",
         "-i",
         "pipe:0",
     ]
