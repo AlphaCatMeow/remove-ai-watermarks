@@ -171,6 +171,10 @@ failure regressions cover bounded mux diagnostics and atomic cleanup.
 and preserves the supported properties that survive the 8-bit BGR boundary:
 `yuv420p`/`yuv422p`/`yuv444p` chroma sampling, recognized color tags, encoder
 time base, MP4/MOV track timescale, source pixel format, and component depth.
+Both raw-CFR and timestamped-NUT inputs use ffmpeg's passthrough FPS mode. This
+keeps one encoded frame per supplied frame when an older ffmpeg receives a
+fine-grained source encoder time base such as `1/90000`; implicit synchronization
+can otherwise synthesize thousands of duplicate frames between CFR timestamps.
 HDR transfer functions and component depths above 8 bits are rejected before
 encoding so the OpenCV boundary cannot silently reduce them to SDR 8-bit.
 `probe_video_timestamps` reads authoritative per-frame display PTS through

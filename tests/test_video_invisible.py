@@ -127,6 +127,7 @@ def test_encoder_and_mux_commands_separate_streaming_frames_from_source_audio(
     assert "pipe:0" in command
     assert str(source) not in command
     assert command[command.index("-map") + 1] == "0:v:0"
+    assert command[command.index("-fps_mode") + 1] == "passthrough"
     assert "-shortest" not in command
 
     calls: list[list[str]] = []

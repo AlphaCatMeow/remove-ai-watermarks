@@ -378,8 +378,7 @@ def raw_video_command(
         "-map_chapters",
         "-1",
     ]
-    if timestamped_input:
-        command.extend(["-fps_mode", "passthrough"])
+    command.extend(["-fps_mode", "passthrough"])
     if copy_input_timestamps:
         command.extend(["-avoid_negative_ts", "disabled"])
     if output.suffix.lower() in {".mp4", ".mov", ".m4v"} and profile.time_base is not None:
