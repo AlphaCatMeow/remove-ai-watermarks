@@ -40,19 +40,23 @@ when you can select the affected area yourself.
 | `hailuo` | `MINIMAX | hailuo AI` composite label | Fixed lower edge | Uses a synthetic waveform, text, separator, and ring silhouette; the complete recurring label box is filled. |
 | `kling` | Kling swirl, `KLING AI`, version, and optional `PRO` suffix | Fixed bottom-right edge | Combines a synthetic logo rescue with font variants, an edge gate, a white-label gate, and anchored temporal recurrence. |
 
-Use `video visible` for this registry. It is separate from the image `visible`
-command because selection is made over a sequence rather than one raster. Its
-default `auto` mode scans all six entries in one decode pass and selects the
-first temporally stable match in table order; an explicit mark restricts the
-scan to that row.
+`video identify`, `video visible`, and `video all` share this registry and the
+same temporal arbiter. It is separate from the image registry because selection
+is made over a sequence rather than one raster. The default `auto` mode scans
+all six entries in one decode pass and selects the first temporally stable
+match in table order; an explicit mark restricts the scan to that row.
+Accepted fills are motion-aligned across adjacent frames by default. The prior
+fill contributes only where its warped mask covers the current removal mask and
+nearby source context agrees. Scene cuts or disjoint marks retain the
+independent frame fill.
 
 ## Fill backends
 
 | Backend | Install | Behavior |
 | --- | --- | --- |
 | `cv2` | Core package | Classical OpenCV inpainting |
-| `migan` | `remove-ai-watermarks[migan]` | MI-GAN through ONNX Runtime |
-| `lama` | `remove-ai-watermarks[lama]` | big-LaMa through ONNX Runtime |
+| `migan` | `remove-ai-watermarks[migan]` | MI-GAN through ONNX Runtime; practical learned CPU video tier |
+| `lama` | `remove-ai-watermarks[lama]` | big-LaMa through ONNX Runtime; offline video quality tier |
 | `auto` | Depends on installed extras | Selects LaMa, then MI-GAN, then OpenCV |
 
 The learned backends download model files on first use.
@@ -119,9 +123,13 @@ SynthID does not have a public local pixel decoder in this project. The tool can
 infer likely presence from supported provenance metadata, but after that
 metadata is removed a local negative result is inconclusive.
 
-For MP4, MOV, and M4V, `video invisible` can regenerate the video through a VAE
-and strip source metadata. This is a candidate-producing attack, not a local
-decoder. Every result still requires Gemini Flash's built-in verification.
+For MP4, MOV, and M4V, `video invisible` or the explicit
+`video all --invisible` option can regenerate the video through a VAE and strip
+source metadata. The shipped profile is oracle-certified, but it is not a local
+decoder. A fresh source-positive, output-negative pair from Gemini's built-in
+SynthID verifier is an optional per-file audit. A normal Gemini answer may instead
+infer from a visible logo or metadata; asking it to reinterpret a completed
+verifier result is not a second oracle run.
 
 The optional `detect` extra is different: it provides a local decoder for the
 open DWT-DCT watermark used by some Stable Diffusion, SDXL, and FLUX workflows.
@@ -133,7 +141,7 @@ not a universal clean verdict.
 | Provider or family | Visible | Invisible path | Metadata or provenance |
 | --- | --- | --- | --- |
 | Google Gemini | Sparkle | Diffusion regeneration for SynthID | C2PA and related source signals |
-| Google Veo video | Veo diamond and legacy text | VAE regeneration candidate for SynthID | C2PA and related source signals |
+| Google Veo video | Veo diamond and legacy text | Oracle-certified VAE removal for SynthID | C2PA and related source signals |
 | OpenAI image generators | None registered | Diffusion regeneration for supported invisible signals | C2PA and generator provenance |
 | Stable Diffusion and SDXL | None registered | Diffusion regeneration; optional open decoder | Embedded parameters and text metadata |
 | FLUX | None registered | Diffusion regeneration; optional open decoder | C2PA for supported sources |

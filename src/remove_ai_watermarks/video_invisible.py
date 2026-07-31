@@ -1,9 +1,8 @@
-"""VAE regeneration for externally verified video SynthID candidates.
+"""Oracle-certified VAE regeneration for video SynthID removal.
 
-Google does not publish a local video SynthID decoder. This module therefore
-regenerates pixels and measures fidelity, but never labels its output clean.
-Callers must verify the candidate with Google's matching content-verification
-flow.
+Google does not publish a local video SynthID decoder. The default profile is
+therefore certified against Google's matching content-verification flow and
+also reports local fidelity metrics.
 """
 
 from __future__ import annotations
@@ -24,6 +23,7 @@ from remove_ai_watermarks.video_encoding import (
     abort_raw_video_encoder,
     atomic_video_output,
     finish_raw_video_encoder,
+    probe_video_encode_profile,
     raw_video_command,
     start_raw_video_encoder,
 )
@@ -34,6 +34,12 @@ from remove_ai_watermarks.video_synthid import (
     DEFAULT_VIDEO_SYNTHID_VAE,
     VIDEO_SYNTHID_LATENT_MULTIPLE,
 )
+from remove_ai_watermarks.video_temporal import (
+    _backward_map,
+    _motion_residual,
+    build_temporal_reference,
+    temporal_residual_ratio,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
@@ -41,10 +47,12 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+__all__ = ["build_temporal_reference", "temporal_residual_ratio"]
+
 
 @dataclass(frozen=True)
 class RegenerationMetrics:
-    """Measured properties of one regenerated video candidate."""
+    """Measured properties of one regenerated video."""
 
     frames: int
     fps: float
@@ -52,6 +60,16 @@ class RegenerationMetrics:
     height: int
     psnr_db: float
     temporal_residual_ratio: float
+
+
+@dataclass(frozen=True)
+class VideoVaeRuntime:
+    """Loaded VAE state reusable across multiple video regenerations."""
+
+    model: str
+    requested_device: str
+    resolved_device: str
+    vae: Any
 
 
 def is_available() -> bool:
@@ -93,6 +111,34 @@ def _pick_device(requested: str) -> str:
     return requested
 
 
+def load_video_vae_runtime(
+    *,
+    model: str = DEFAULT_VIDEO_SYNTHID_VAE,
+    device: str = "auto",
+) -> VideoVaeRuntime:
+    """Load one reusable video VAE runtime."""
+    if device not in {"auto", "cuda", "mps", "cpu"}:
+        raise ValueError("device must be auto, cuda, mps, or cpu")
+    if not is_available():
+        raise RuntimeError("Video SynthID regeneration requires the gpu extra")
+
+    import torch
+    from diffusers import AutoencoderKL
+
+    resolved_device = _pick_device(device)
+    dtype = torch.float16 if resolved_device == "cuda" else torch.float32
+    log.info("Loading %s on %s", model, resolved_device)
+    vae = AutoencoderKL.from_pretrained(model, torch_dtype=dtype).to(resolved_device)
+    vae.eval()
+    vae.enable_slicing()
+    return VideoVaeRuntime(
+        model=model,
+        requested_device=device,
+        resolved_device=resolved_device,
+        vae=vae,
+    )
+
+
 def _shared_latent_noise(
     spatial_shape: Sequence[int],
     *,
@@ -118,74 +164,6 @@ def paired_psnr(reference: np.ndarray, candidate: np.ndarray) -> float:
     if mse == 0.0:
         return math.inf
     return 20.0 * math.log10(255.0 / math.sqrt(mse))
-
-
-def _backward_map(current_gray: np.ndarray, previous_gray: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Build a remap from a previous frame into current coordinates."""
-    flow = cv2.calcOpticalFlowFarneback(
-        current_gray,
-        previous_gray,
-        None,
-        0.5,
-        3,
-        15,
-        3,
-        5,
-        1.2,
-        0,
-    )
-    height, width = current_gray.shape
-    grid_x, grid_y = np.meshgrid(np.arange(width, dtype=np.float32), np.arange(height, dtype=np.float32))
-    return grid_x + flow[..., 0], grid_y + flow[..., 1]
-
-
-def _backward_warp(image: np.ndarray, maps: tuple[np.ndarray, np.ndarray]) -> np.ndarray:
-    """Apply a precomputed backward optical-flow map."""
-    return cv2.remap(
-        image,
-        maps[0],
-        maps[1],
-        interpolation=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_REFLECT,
-    )
-
-
-def build_temporal_reference(
-    reference: Sequence[np.ndarray],
-) -> tuple[tuple[tuple[np.ndarray, np.ndarray], ...], float]:
-    """Precompute source motion maps and its mean residual."""
-    if len(reference) < 2:
-        raise ValueError("Temporal metric needs at least two frames")
-    maps: list[tuple[np.ndarray, np.ndarray]] = []
-    reference_residuals: list[float] = []
-    for index in range(1, len(reference)):
-        current_gray = cv2.cvtColor(reference[index], cv2.COLOR_BGR2GRAY)
-        previous_gray = cv2.cvtColor(reference[index - 1], cv2.COLOR_BGR2GRAY)
-        frame_maps = _backward_map(current_gray, previous_gray)
-        maps.append(frame_maps)
-        warped_reference = _backward_warp(reference[index - 1], frame_maps)
-        reference_residuals.append(
-            float(np.mean(np.abs(reference[index].astype(np.float32) - warped_reference.astype(np.float32))))
-        )
-    return tuple(maps), float(np.mean(reference_residuals))
-
-
-def temporal_residual_ratio(
-    candidate: Sequence[np.ndarray],
-    maps: Sequence[tuple[np.ndarray, np.ndarray]],
-    baseline: float,
-) -> float:
-    """Measure candidate flicker against a precomputed source residual."""
-    if len(candidate) != len(maps) + 1:
-        raise ValueError("Temporal metric needs one map per adjacent frame pair")
-    candidate_residuals: list[float] = []
-    for index, frame_maps in enumerate(maps, start=1):
-        warped_candidate = _backward_warp(candidate[index - 1], frame_maps)
-        candidate_residuals.append(
-            float(np.mean(np.abs(candidate[index].astype(np.float32) - warped_candidate.astype(np.float32))))
-        )
-    measured = float(np.mean(candidate_residuals))
-    return measured / max(baseline, 1e-6)
 
 
 def _probe_video(source: Path) -> tuple[int, int, float]:
@@ -341,6 +319,7 @@ def encode_video_frames(
             fps=fps,
             strip_metadata=True,
             crf=18,
+            profile=probe_video_encode_profile(source),
         )
     )
     frame_pipe = process.stdin
@@ -352,7 +331,7 @@ def encode_video_frames(
             if frame.shape[:2] != (height, width):
                 raise ValueError("Video frames must have matching dimensions")
             frame_pipe.write(frame.tobytes())
-        finish_raw_video_encoder(process, output, operation="SynthID candidate encode")
+        finish_raw_video_encoder(process, output, operation="SynthID removal encode")
     except Exception:
         if process.poll() is None:
             abort_raw_video_encoder(process)
@@ -371,11 +350,13 @@ def regenerate_video_candidate(
     model: str = DEFAULT_VIDEO_SYNTHID_VAE,
     device: str = "auto",
     duration: float | None = None,
+    runtime: VideoVaeRuntime | None = None,
 ) -> RegenerationMetrics:
     """Regenerate video pixels and return fidelity metrics.
 
-    This function does not verify SynthID. Its output is an oracle candidate,
-    not a locally proven clean file.
+    The default profile is certified against the provider oracle. This function
+    does not perform a per-file SynthID decode because Google exposes no local
+    decoder.
     """
     if not 0.0 <= noise_std <= 1.0:
         raise ValueError("noise_std must be between 0 and 1")
@@ -387,22 +368,16 @@ def regenerate_video_candidate(
         raise ValueError("duration must be positive")
     if device not in {"auto", "cuda", "mps", "cpu"}:
         raise ValueError("device must be auto, cuda, mps, or cpu")
-    if not is_available():
-        raise RuntimeError("Video SynthID regeneration requires the gpu extra")
-
-    import torch
-    from diffusers import AutoencoderKL
-
     width, height, source_fps = _probe_video(source)
     size = _fit_size(width, height, long_side)
     effective_fps = min(fps, source_fps)
 
-    resolved_device = _pick_device(device)
-    dtype = torch.float16 if resolved_device == "cuda" else torch.float32
-    log.info("Loading %s on %s", model, resolved_device)
-    vae = AutoencoderKL.from_pretrained(model, torch_dtype=dtype).to(resolved_device)
-    vae.eval()
-    vae.enable_slicing()
+    if runtime is None:
+        runtime = load_video_vae_runtime(model=model, device=device)
+    elif runtime.model != model or runtime.requested_device != device:
+        raise ValueError("The supplied video VAE runtime does not match the requested model and device")
+    resolved_device = runtime.resolved_device
+    vae = runtime.vae
 
     with atomic_video_output(output) as temporary_output:
         process = start_raw_video_encoder(
@@ -414,6 +389,7 @@ def regenerate_video_candidate(
                 fps=effective_fps,
                 strip_metadata=True,
                 crf=18,
+                profile=probe_video_encode_profile(source),
             )
         )
         frame_pipe = process.stdin
@@ -425,8 +401,9 @@ def regenerate_video_candidate(
         pixel_count = 0
         temporal_baseline = 0.0
         temporal_candidate = 0.0
-        previous_reference: np.ndarray | None = None
-        previous_candidate: np.ndarray | None = None
+        previous_gray: np.ndarray | None = None
+        previous_reference_f32: np.ndarray | None = None
+        previous_candidate_f32: np.ndarray | None = None
         shared_noise: Any | None = None
         try:
             sampled_frames = _iter_sampled_frames(
@@ -459,30 +436,30 @@ def regenerate_video_candidate(
                 )
                 for reference, candidate in zip(frames, regenerated, strict=True):
                     frame_pipe.write(candidate.tobytes())
-                    difference = reference.astype(np.float32) - candidate.astype(np.float32)
+                    reference_f32 = reference.astype(np.float32)
+                    candidate_f32 = candidate.astype(np.float32)
+                    difference = reference_f32 - candidate_f32
                     squared_error += float(np.sum(difference * difference, dtype=np.float64))
                     pixel_count += reference.size
-                    if previous_reference is not None and previous_candidate is not None:
-                        current_gray = cv2.cvtColor(reference, cv2.COLOR_BGR2GRAY)
-                        previous_gray = cv2.cvtColor(previous_reference, cv2.COLOR_BGR2GRAY)
+                    current_gray = cv2.cvtColor(reference, cv2.COLOR_BGR2GRAY)
+                    if (
+                        previous_gray is not None
+                        and previous_reference_f32 is not None
+                        and previous_candidate_f32 is not None
+                    ):
                         frame_maps = _backward_map(current_gray, previous_gray)
-                        warped_reference = _backward_warp(previous_reference, frame_maps)
-                        warped_candidate = _backward_warp(previous_candidate, frame_maps)
-                        temporal_baseline += float(
-                            np.mean(np.abs(reference.astype(np.float32) - warped_reference.astype(np.float32)))
-                        )
-                        temporal_candidate += float(
-                            np.mean(np.abs(candidate.astype(np.float32) - warped_candidate.astype(np.float32)))
-                        )
-                    previous_reference = reference
-                    previous_candidate = candidate
+                        temporal_baseline += _motion_residual(reference_f32, previous_reference_f32, frame_maps)
+                        temporal_candidate += _motion_residual(candidate_f32, previous_candidate_f32, frame_maps)
+                    previous_gray = current_gray
+                    previous_reference_f32 = reference_f32
+                    previous_candidate_f32 = candidate_f32
                     frame_count += 1
             if frame_count < 2:
                 raise ValueError("The selected clip produced fewer than two frames")
             finish_raw_video_encoder(
                 process,
                 temporary_output,
-                operation="SynthID candidate encode",
+                operation="SynthID removal encode",
             )
         except Exception:
             if process.poll() is None:

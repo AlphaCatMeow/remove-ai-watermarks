@@ -121,6 +121,7 @@ IPTC_AI_FIELD_MARKERS: tuple[bytes, ...] = (
 # the container level (image, video, audio -- all ISOBMFF). A content sniff
 # (``ftyp``) is also accepted, so this is a fast-path hint, not the sole gate.
 _ISOBMFF_EXTS: frozenset[str] = frozenset({".avif", ".heif", ".heic", ".jxl", ".mp4", ".mov", ".m4v", ".m4a"})
+_STREAMING_ISOBMFF_EXTS: frozenset[str] = frozenset({".mp4", ".mov", ".m4v", ".m4a"})
 
 # Non-ISOBMFF audio/video the ISOBMFF box walker can't reach (EBML / framed /
 # RIFF / Vorbis). remove_ai_metadata strips their container metadata losslessly
@@ -1202,18 +1203,30 @@ def remove_ai_metadata(
     # strip C2PA + AI-label boxes at the container level without re-encoding.
     # Avoids needing PIL plugins (pillow-heif / pillow-jxl) and preserves the
     # codestream bit-for-bit. MP4/MOV/M4A are ISOBMFF too, so the same top-level
-    # uuid/jumb box walker applies. Route by suffix OR by an ``ftyp`` content
-    # sniff, so a correctly-shaped container is handled whatever its extension.
+    # uuid/jumb box walker applies. Known media suffixes take the bounded,
+    # offset-preserving streaming path; images retain the in-memory item scrub
+    # needed for XMP/EXIF inside mdat/idat. Route the remaining formats by suffix
+    # OR by an ``ftyp`` content sniff.
     from remove_ai_watermarks.noai.isobmff import (
         blank_ai_exif_tokens,
         blank_ai_xmp_packets,
         blank_tc260_aigc_tags,
         is_isobmff,
         strip_c2pa_boxes,
+        strip_isobmff_media_file,
     )
 
     with open(source_path, "rb") as f:
         head = f.read(12)
+    if source_path.suffix.lower() in _STREAMING_ISOBMFF_EXTS and is_isobmff(head):
+        stripped, tc260_blanked = strip_isobmff_media_file(source_path, output_path)
+        logger.info(
+            "Stream-blanked %d AI-provenance box(es) and %d native TC260 tag(s) → %s",
+            stripped,
+            tc260_blanked,
+            output_path,
+        )
+        return output_path
     if source_path.suffix.lower() in _ISOBMFF_EXTS or is_isobmff(head):
         data = source_path.read_bytes()
         # Top-level uuid/jumb boxes (C2PA + AI-label XMP), then the meta-box items

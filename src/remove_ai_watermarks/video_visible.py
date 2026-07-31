@@ -11,8 +11,10 @@ requires the candidate to recur at the same location across adjacent frames.
 This keeps isolated lookalikes in clean videos from becoming removal masks.
 
 Video pixels are decoded with OpenCV and encoded with the system ``ffmpeg``.
-Complete audio is stream-copied from the source. The video stream must be
-transcoded because visible-mark removal changes pixels.
+Variable frame timestamps cross the pipe in a PyAV-muxed NUT stream; uniform
+inputs retain the cheaper raw-BGR pipe. Complete audio is stream-copied from
+the source. The video stream must be transcoded because visible-mark removal
+changes pixels.
 """
 
 # cv2/numpy boundary: these packages do not expose usable types for many array
@@ -23,7 +25,9 @@ transcoded because visible-mark removal changes pixels.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from contextlib import suppress
+from dataclasses import dataclass, replace
+from fractions import Fraction
 from functools import lru_cache
 from itertools import pairwise
 from typing import TYPE_CHECKING, Any, Literal
@@ -37,9 +41,12 @@ from remove_ai_watermarks.video_encoding import (
     abort_raw_video_encoder,
     atomic_video_output,
     finish_raw_video_encoder,
+    probe_video_encode_profile,
+    probe_video_timestamps,
     raw_video_command,
     start_raw_video_encoder,
 )
+from remove_ai_watermarks.video_temporal import stabilize_filled_frame
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -86,6 +93,7 @@ _VEO_DIAMOND_PROFILES = (
 _DOLA_RELATIVE_HEIGHTS = tuple(value / 1000 for value in range(22, 41))
 _HAILUO_RELATIVE_HEIGHTS = tuple(value / 1000 for value in range(28, 56, 3))
 _KLING_RELATIVE_HEIGHTS = tuple(value / 1000 for value in range(24, 49, 3))
+_HDR_TRANSFERS = frozenset({"smpte2084", "arib-std-b67"})
 
 
 @dataclass(frozen=True)
@@ -105,6 +113,7 @@ class VideoScan:
     height: int
     fps: float
     detections: tuple[FrameLocalization, ...]
+    timestamps: tuple[float, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1069,6 +1078,8 @@ def _stabilize_localizations(
 def _scan_video_detectors(
     source: Path,
     detectors: dict[str, Any],
+    *,
+    collect_timestamps: bool = True,
 ) -> dict[str, VideoScan]:
     """Decode once and collect one untrusted candidate per detector and frame."""
     capture = cv2.VideoCapture(str(source))
@@ -1082,11 +1093,14 @@ def _scan_video_detectors(
         raise RuntimeError(f"Video has invalid stream geometry or frame rate: {source}")
 
     detections: dict[str, list[FrameLocalization]] = {mark: [] for mark in detectors}
+    timestamps: list[float] = []
     frame_index = 0
     while True:
         ok, frame = capture.read()
         if not ok:
             break
+        if collect_timestamps:
+            timestamps.append(float(capture.get(cv2.CAP_PROP_POS_MSEC)) / 1000)
         if frame.shape[:2] != (height, width):
             capture.release()
             raise RuntimeError(f"Video changes frame dimensions at frame {frame_index}: {source}")
@@ -1103,7 +1117,24 @@ def _scan_video_detectors(
     capture.release()
     if frame_index == 0:
         raise RuntimeError(f"Video contains no decodable frames: {source}")
-    return {mark: VideoScan(width, height, fps, tuple(mark_detections)) for mark, mark_detections in detections.items()}
+    shared_timestamps: tuple[float, ...] = ()
+    if collect_timestamps:
+        probed_timestamps = probe_video_timestamps(source)
+        if len(probed_timestamps) == frame_index:
+            shared_timestamps = probed_timestamps
+        else:
+            if probed_timestamps:
+                log.warning(
+                    "ffprobe/OpenCV frame-count mismatch for %s: timestamps=%s decoded=%s; using decoder timestamps",
+                    source,
+                    len(probed_timestamps),
+                    frame_index,
+                )
+            shared_timestamps = tuple(timestamps)
+    return {
+        mark: VideoScan(width, height, fps, tuple(mark_detections), shared_timestamps)
+        for mark, mark_detections in detections.items()
+    }
 
 
 def _scan_video(
@@ -1117,8 +1148,14 @@ def _scan_video(
 def scan_video_marks(
     source: Path,
     marks: tuple[str, ...] = VIDEO_VISIBLE_MARKS,
+    *,
+    collect_timestamps: bool = True,
 ) -> dict[str, VideoScan]:
-    """Decode once and collect candidates for every requested provider mark."""
+    """Decode once and collect candidates for every requested provider mark.
+
+    Timestamp probing is optional because identification never encodes frames.
+    Removal keeps it enabled so variable and non-zero-start timing is preserved.
+    """
     detectors = dict(
         zip(
             VIDEO_VISIBLE_MARKS,
@@ -1139,6 +1176,7 @@ def scan_video_marks(
     return _scan_video_detectors(
         source,
         {mark: detectors[mark] for mark in marks},
+        collect_timestamps=collect_timestamps,
     )
 
 
@@ -1215,6 +1253,66 @@ def _mask_for_region(
     return mask
 
 
+def _timestamp_time_base(profile_time_base: str | None) -> Fraction:
+    """Use the source time base when known, with a microsecond fallback."""
+    return Fraction(profile_time_base) if profile_time_base is not None else Fraction(1, 1_000_000)
+
+
+def _timestamps_are_variable(scan: VideoScan, *, time_base: Fraction) -> bool:
+    """Whether OpenCV exposed valid timestamps with non-uniform frame intervals."""
+    if len(scan.timestamps) != len(scan.detections) or len(scan.timestamps) < 3:
+        return False
+    ticks = tuple(round(timestamp / float(time_base)) for timestamp in scan.timestamps)
+    intervals = tuple(current - previous for previous, current in pairwise(ticks))
+    return all(interval > 0 for interval in intervals) and len(set(intervals)) > 1
+
+
+class _TimestampedNutWriter:
+    """Mux BGR frames with explicit PTS into ffmpeg's standard-input pipe."""
+
+    def __init__(
+        self,
+        pipe: Any,
+        *,
+        width: int,
+        height: int,
+        time_base: Fraction,
+        start_pts: int = 0,
+    ) -> None:
+        import av
+
+        self._av = av
+        self._time_base = time_base
+        self._start_pts = start_pts
+        self._origin: float | None = None
+        self._container = av.open(pipe, mode="w", format="nut")
+        self._stream = self._container.add_stream("rawvideo", rate=None)
+        self._stream.width = width
+        self._stream.height = height
+        self._stream.pix_fmt = "bgr24"
+        self._stream.time_base = time_base
+        self._stream.codec_context.time_base = time_base
+
+    def write(self, frame_bgr: NDArray[Any], timestamp: float) -> None:
+        """Mux one contiguous BGR frame at its source timeline timestamp."""
+        if self._origin is None:
+            self._origin = timestamp
+        frame = self._av.VideoFrame.from_ndarray(
+            np.ascontiguousarray(frame_bgr),
+            format="bgr24",
+        )
+        frame.pts = self._start_pts + round((timestamp - self._origin) / float(self._time_base))
+        frame.time_base = self._time_base
+        for packet in self._stream.encode(frame):
+            self._container.mux(packet)
+
+    def close(self) -> None:
+        """Flush the rawvideo encoder and NUT container without closing ffmpeg stdin."""
+        for packet in self._stream.encode():
+            self._container.mux(packet)
+        self._container.close()
+
+
 def encode_clean_video(
     source: Path,
     output: Path,
@@ -1225,6 +1323,7 @@ def encode_clean_video(
     strip_metadata: bool,
     padding_fraction: float = 0.28,
     mask_style: Literal["box", "veo"] = "box",
+    temporal_consistency: bool = True,
 ) -> int:
     """Decode again, fill accepted regions, and atomically encode with complete audio."""
     from remove_ai_watermarks.watermark_registry import fill, resolve_backend
@@ -1233,6 +1332,22 @@ def encode_clean_video(
         raise ValueError("Temporal localization count does not match the scanned frame count")
 
     with atomic_video_output(output) as temporary_output:
+        profile = probe_video_encode_profile(source)
+        if (profile.component_depth or 0) > 8 or profile.color_transfer in _HDR_TRANSFERS:
+            source_format = profile.source_pixel_format or "unknown pixel format"
+            raise RuntimeError(
+                "Visible video removal currently supports SDR 8-bit input only; "
+                f"refusing to silently reduce {source_format} / "
+                f"{profile.color_transfer or 'unknown transfer'} to 8-bit SDR"
+            )
+        time_base = _timestamp_time_base(profile.time_base)
+        preserve_start_offset = profile.start_pts not in (None, 0)
+        timestamped_input = preserve_start_offset or _timestamps_are_variable(scan, time_base=time_base)
+        if timestamped_input and profile.time_base is None:
+            profile = replace(
+                profile,
+                time_base=f"{time_base.numerator}/{time_base.denominator}",
+            )
         process = start_raw_video_encoder(
             raw_video_command(
                 source,
@@ -1242,6 +1357,9 @@ def encode_clean_video(
                 fps=scan.fps,
                 strip_metadata=strip_metadata,
                 crf=14,
+                profile=profile,
+                timestamped_input=timestamped_input,
+                copy_input_timestamps=preserve_start_offset,
             )
         )
         frame_pipe = process.stdin
@@ -1255,31 +1373,69 @@ def encode_clean_video(
             raise RuntimeError(f"OpenCV could not reopen video for removal: {source}")
 
         removed_frames = 0
-        resolved_backend: Literal["cv2", "migan", "lama"] = resolve_backend(backend)
+        timestamped_writer: _TimestampedNutWriter | None = None
+        previous_source: NDArray[Any] | None = None
+        previous_cleaned: NDArray[Any] | None = None
+        previous_mask: NDArray[Any] | None = None
         try:
+            resolved_backend: Literal["cv2", "migan", "lama"] = resolve_backend(backend)
+            if timestamped_input:
+                timestamped_writer = _TimestampedNutWriter(
+                    frame_pipe,
+                    width=scan.width,
+                    height=scan.height,
+                    time_base=time_base,
+                    start_pts=profile.start_pts or 0,
+                )
             for frame_index, region in enumerate(regions):
                 ok, frame = capture.read()
                 if not ok:
                     raise RuntimeError(f"Video ended while reading frame {frame_index}: {source}")
+                source_frame = frame
+                mask: NDArray[Any] | None = None
                 if region is not None:
-                    frame = fill(
+                    mask = _mask_for_region(
                         frame,
-                        _mask_for_region(
-                            frame,
-                            region,
-                            padding_fraction=padding_fraction,
-                            mask_style=mask_style,
-                        ),
-                        backend=resolved_backend,
+                        region,
+                        padding_fraction=padding_fraction,
+                        mask_style=mask_style,
                     )
+                    frame = fill(frame, mask, backend=resolved_backend)
+                    if (
+                        temporal_consistency
+                        and previous_source is not None
+                        and previous_cleaned is not None
+                        and previous_mask is not None
+                    ):
+                        frame = stabilize_filled_frame(
+                            previous_source,
+                            previous_cleaned,
+                            previous_mask,
+                            source_frame,
+                            frame,
+                            mask,
+                            copy=False,
+                        )
                     removed_frames += 1
-                frame_pipe.write(frame.tobytes())
+                if timestamped_writer is None:
+                    frame_pipe.write(frame.tobytes())
+                else:
+                    timestamped_writer.write(frame, scan.timestamps[frame_index])
+                previous_source = source_frame
+                previous_cleaned = frame
+                previous_mask = mask
+            if timestamped_writer is not None:
+                timestamped_writer.close()
+                timestamped_writer = None
             finish_raw_video_encoder(
                 process,
                 temporary_output,
                 operation="visible-watermark encode",
             )
         except Exception:
+            if timestamped_writer is not None:
+                with suppress(Exception):
+                    timestamped_writer.close()
             if process.poll() is None:
                 abort_raw_video_encoder(process)
             raise

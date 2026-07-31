@@ -1436,7 +1436,7 @@ def _box(box_type: bytes, payload: bytes) -> bytes:
 
 
 class TestVideoC2pa:
-    """C2PA in MP4 (ISOBMFF) -- detect + strip, reusing the image box walker."""
+    """C2PA in MP4 (ISOBMFF) -- detect + offset-preserving stream blank."""
 
     def test_detects_c2pa_in_mp4(self, tmp_path: Path):
         from remove_ai_watermarks.metadata import C2PA_UUID
@@ -1454,7 +1454,7 @@ class TestVideoC2pa:
         src.write_bytes(_MP4_FTYP + uuid_box + _MP4_MDAT)
         out = tmp_path / "out.mp4"
         remove_ai_metadata(src, out)
-        assert out.read_bytes() == _MP4_FTYP + _MP4_MDAT
+        assert out.read_bytes() == _MP4_FTYP + _box(b"free", b"\x00" * 24) + _MP4_MDAT
         assert has_ai_metadata(out) is False
 
 
@@ -1628,7 +1628,7 @@ class TestIsobmffMetadataRemoval:
         src.write_bytes(_MP4_FTYP + uuid_box + _MP4_MDAT)
         out = tmp_path / "clean.m4a"
         remove_ai_metadata(src, out)
-        assert out.read_bytes() == _MP4_FTYP + _MP4_MDAT
+        assert out.read_bytes() == _MP4_FTYP + _box(b"free", b"\x00" * 24) + _MP4_MDAT
 
     def test_content_sniff_routes_unknown_suffix(self, tmp_path: Path):
         # An ISOBMFF file with a non-standard extension is still box-stripped.

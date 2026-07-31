@@ -452,6 +452,44 @@ class TestISOBMFF:
         assert blanked == 0
         assert out == FTYP + b"\x00\x00\x00\x0cmdat" + b"pixels!!"
 
+    def test_streaming_malformed_walk_copies_input_unchanged(self, tmp_path: Path):
+        from remove_ai_watermarks.noai.isobmff import strip_isobmff_media_file
+
+        source = tmp_path / "malformed.mp4"
+        output = tmp_path / "clean.mp4"
+        malformed = FTYP + struct.pack(">I", 999) + b"uuid" + b"short"
+        source.write_bytes(malformed)
+
+        stripped, tc260_blanked = strip_isobmff_media_file(source, output)
+
+        assert (stripped, tc260_blanked) == (0, 0)
+        assert output.read_bytes() == malformed
+
+    def test_streaming_failure_does_not_publish_partial_output(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from remove_ai_watermarks import metadata
+        from remove_ai_watermarks.noai import isobmff
+
+        source = tmp_path / "source.mp4"
+        output = tmp_path / "clean.mp4"
+        uuid_box = struct.pack(">I", 24) + b"uuid" + metadata.C2PA_UUID
+        source.write_bytes(FTYP + uuid_box)
+        output.write_bytes(b"previous output")
+
+        def fail_patch(*_args: object, **_kwargs: object) -> None:
+            raise OSError("synthetic patch failure")
+
+        monkeypatch.setattr(isobmff, "_overwrite_range", fail_patch)
+
+        with pytest.raises(OSError, match="synthetic patch failure"):
+            isobmff.strip_isobmff_media_file(source, output)
+
+        assert output.read_bytes() == b"previous output"
+        assert not list(tmp_path.glob(".clean-*"))
+
 
 class TestIterTopLevelBoxes:
     """The box walker's three size encodings and its underflow/overflow guards."""

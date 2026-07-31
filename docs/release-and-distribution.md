@@ -57,7 +57,9 @@ The conda job uses the published artifact rather than a locally built archive
 as the hash source and commits the resulting recipe change to `main`. Runtime
 dependency mapping remains review-controlled: keep it aligned with the core
 dependencies in `pyproject.toml`, and document any conda-forge package that is
-unavailable and must be omitted.
+unavailable and must be omitted. PyPI's version-split PyAV dependency maps to
+`av >=16` in conda: the solver selects the Python-3.10-compatible build or the
+current line according to the environment.
 
 ## Source distribution boundary
 

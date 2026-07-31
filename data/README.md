@@ -15,6 +15,8 @@ data/
                   Reusable full-pipeline evaluation selection
   evaluations/
     fidelity/     Evaluation instructions and hand-verified ground truth
+    video-synthid-oracle.csv
+                  Reproducible full-clip Gemini SynthID verdicts
 ```
 
 ## Storage rules

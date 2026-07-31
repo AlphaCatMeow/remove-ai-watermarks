@@ -86,10 +86,13 @@ Regression coverage:
 - [`test_api.py`](../tests/test_api.py)
 - [`test_image_io.py`](../tests/test_image_io.py)
 
-[`video.py`](../src/remove_ai_watermarks/video.py) provides the experimental
+[`video.py`](../src/remove_ai_watermarks/video.py) provides the high-level
 video entry point:
 
+- `identify_video`
 - `inspect_video_metadata`
+- `remove_video_all`
+- `remove_video_batch`
 - `remove_video_invisible`
 - `remove_video_metadata`
 - `remove_video_visible`
@@ -97,17 +100,35 @@ video entry point:
 The video API validates both the supported extension and container signature,
 then delegates all metadata detection and stripping to `metadata.py`. It
 requires a separate same-container output, defaulting to `<source>_clean`, so
-the experimental path does not overwrite an original. The package root exposes
-all four functions lazily.
+the product path does not overwrite an original. The package root exposes all
+functions lazily.
+
+`identify_video` runs the same stable-mark selection helper as
+`remove_video_visible`, so a provenance report cannot authorize a mark that the
+removal path would reject. It reports an empty local result as unknown rather
+than clean. Identification skips the separate per-frame timestamp probe because
+it never encodes frames. `remove_video_all` is the predictable-output
+composition: visible removal plus verified metadata stripping by default, with
+a same-container passthrough when neither signal exists. The lossy invisible
+removal stage is an explicit opt-in through the oracle-certified profile.
+`remove_video_batch` applies those contracts sequentially across a top-level
+directory, returns every per-file failure, and byte-copies visible no-ops so a
+successful output set has no silent holes. An invisible batch loads one VAE
+runtime and reuses it across every compatible file; a failed model load is
+reported per file without retrying the same multi-GB initialization.
 
 Native MP4/MOV TC260 labels follow TC260-PG-20257A:
 `moov.udta.meta.keys` maps an `AIGC` key to a raw JSON value in `ilst`.
 [`noai/isobmff.py`](../src/remove_ai_watermarks/noai/isobmff.py) walks those
 nested boxes by seeking, so detection reaches a tail `moov` without reading the
-preceding `mdat`. Removal changes the four-byte key to `free` and blanks only
-the validated JSON value with same-length spaces. This preserves every box
-size, `stco`/`co64` offset, and encoded stream byte. A generic `AIGC` key whose
-value has no TC260 field is ignored.
+preceding `mdat`. The MP4/MOV/M4V/M4A removal path first validates the top-level
+box walk, then copies the source to a sibling temporary file in bounded chunks.
+Supported C2PA/JUMBF/AI-label boxes become same-size `free` boxes with blank
+payloads; TC260 removal changes the four-byte key to `free` and blanks only the
+validated JSON value with same-length spaces. This preserves every box size,
+`stco`/`co64` offset, encoded stream byte, and source-sized memory bound.
+Publication is atomic, and a malformed top-level walk is copied unchanged. A
+generic `AIGC` key whose value has no TC260 field is ignored.
 
 [`noai/ebml.py`](../src/remove_ai_watermarks/noai/ebml.py) provides the
 corresponding bounded Matroska/WebM reader. It seeks over clusters and accepts
@@ -123,14 +144,40 @@ normative TC260 video placements. The RIFF walker reads only AVI
 use the verified ffmpeg stream-copy path for removal.
 
 [`video_encoding.py`](../src/remove_ai_watermarks/video_encoding.py) owns the
-raw-BGR ffmpeg command and pipe lifecycle shared by visible removal and
-invisible regeneration. It centralizes container codecs, optional audio stream
-copying, metadata/chapter policy, encode-failure reporting, and atomic
-same-directory publication. Each mapped stream is allowed to reach its own end,
-so a copied audio tail is not shortened to the raw-video input duration.
+ffmpeg command and pipe lifecycle shared by visible removal and invisible
+regeneration. It centralizes container codecs, optional audio stream copying,
+metadata/chapter policy, encode-failure reporting, and atomic same-directory
+publication. Each mapped stream is allowed to reach its own end, so a copied
+audio tail is not shortened to the frame-input duration.
+`probe_video_encode_profile` reads the first source video stream with ffprobe
+and preserves the supported properties that survive the 8-bit BGR boundary:
+`yuv420p`/`yuv422p`/`yuv444p` chroma sampling, recognized color tags, encoder
+time base, MP4/MOV track timescale, source pixel format, and component depth.
+HDR transfer functions and component depths above 8 bits are rejected before
+encoding so the OpenCV boundary cannot silently reduce them to SDR 8-bit.
+`probe_video_timestamps` reads authoritative per-frame display PTS through
+ffprobe. OpenCV timestamps are only a count-matched fallback when ffprobe is
+unavailable or fails; this avoids decoder anomalies such as one spurious
+negative first-frame timestamp turning a CFR clip into false VFR. A uniform sequence keeps the
+cheap raw-BGR pipe unless the source starts at a non-zero PTS. A variable or
+offset sequence is packetized by the lazy PyAV bridge as rawvideo in an
+in-memory NUT stream with explicit PTS. System ffmpeg reads that stream with
+`-fps_mode passthrough`; `-copyts` additionally retains a non-zero video start
+and the corresponding copied-audio offset. No temporary frame sequence or
+second video encoder is introduced.
+
+[`video_temporal.py`](../src/remove_ai_watermarks/video_temporal.py) owns the
+shared optical-flow maps and temporal residual metric. Visible removal uses
+`stabilize_filled_frame` after the selected image backend: it works on a
+bounded crop around adjacent masks, backward-warps the prior cleaned frame,
+requires high warped-mask coverage, and gates blending on an unmasked
+source-context ring. Only covered current-mask pixels change. Scene cuts,
+disjoint marks, and poor motion matches therefore retain the independent
+current-frame fill. The same module supplies the motion-compensated metric used
+by the invisible-video sweep.
 
 [`video_invisible.py`](../src/remove_ai_watermarks/video_invisible.py)
-implements the oracle-gated video SynthID candidate engine. It samples frames
+implements the oracle-certified video SynthID removal engine. It samples frames
 uniformly, resizes to a VAE-aligned geometry, encodes each frame to latent
 space, applies one seeded spatial-noise field across the entire sequence, and
 decodes fresh pixels. Reusing a single noise field avoids independent
@@ -141,12 +188,13 @@ drops all source metadata. The result is written through a same-directory
 temporary file and atomically replaced only after a successful encode.
 
 The engine returns PSNR and a motion-compensated temporal-residual ratio as
-quality measurements. Neither is a watermark detector. The high-level
-`VideoInvisibleResult.requires_external_verification` flag is always true, and
-the CLI prints an `UNVERIFIED` warning plus the Gemini Flash verification
-prompt. The companion `scripts/video_synthid_sweep.py` imports the same engine
-helpers to build a matched control and candidate grid, preventing research and
-shipped regeneration paths from drifting.
+quality measurements. Neither is a watermark detector. The high-level result
+reports completed removal without a separate verification-status flag. The companion
+`scripts/video_synthid_sweep.py` imports the same engine helpers to build a
+matched control and candidate grid, preventing research and shipped
+regeneration paths from drifting. The full-clip oracle floor is
+`noise_std=0.15`: on the public eight-second Veo carrier, `0.10` remained
+detected while `0.15` did not.
 
 [`video_visible.py`](../src/remove_ai_watermarks/video_visible.py) implements
 the first pixel stages for Sora, Veo, Seedance, Dola, Hailuo, and Kling. The
@@ -169,7 +217,8 @@ template features for the fixed stream geometry. Provider confidence scales
 are not comparable: selection applies each provider's temporal arbiter and
 takes the first stable result in specificity order (`sora`, `veo`, `seedance`,
 `dola`, `hailuo`, `kling`). An explicit mark uses the same scan path with one
-candidate.
+candidate. Removal also collects authoritative per-frame timestamps for the
+encoder, while identification omits that unused ffprobe pass.
 
 Every per-frame result is untrusted. The provider-specific stabilization
 wrappers share one recurrence implementation, while retaining separate visual
@@ -196,13 +245,17 @@ backgrounds need MI-GAN or LaMa for better reconstruction. Invisible video
 stages must continue to reuse the image and metadata implementations rather
 than copying their logic.
 
-The inherited ISOBMFF metadata path currently reads the complete container into
-memory; replacing that with a streaming box copier is a prerequisite for large
-video inputs.
-
 Regression coverage:
 
-- [`test_video.py`](../tests/test_video.py)
+- [`test_video.py`](../tests/test_video.py), including a real ffmpeg full-clip
+  Sora/OpenCV path that generates a synthetic marked MP4 with AAC audio and
+  C2PA provenance, runs both `remove_video_visible` and the composed
+  `remove_video_all` API without mocks, and verifies complete removal, frame
+  count, frame rate, duration, untouched-region PSNR, paired temporal deltas
+  inside the filled region, byte-identical copied audio packets, source stream
+  properties, metadata stripping, and a large-`mdat` metadata case that rejects
+  any full-source `read_bytes()` call. CI installs ffmpeg explicitly for this
+  test so the integration gate cannot silently skip.
 
 ## Metadata and provenance
 

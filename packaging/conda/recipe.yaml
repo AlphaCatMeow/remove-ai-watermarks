@@ -31,6 +31,10 @@ requirements:
     - py-opencv >=4.8.0
     - click >=8.0.0
     - python-dotenv >=1.0.0
+    # PyAV packetizes processed VFR frames with explicit PTS before system
+    # ffmpeg encodes them. Conda's Python constraint selects the compatible
+    # 16.x line on Python 3.10 and the current line on newer interpreters.
+    - av >=16
     # c2pa-python is a core PyPI dependency but is not packaged on conda-forge.
     # The guarded import falls back to the built-in C2PA byte scanner when it is
     # absent. Add it here once a c2pa-python feedstock exists.
@@ -53,10 +57,11 @@ about:
   summary: Remove visible and invisible AI watermarks from images
   description: |
     Detect and remove registered visible AI-provenance marks and strip
-    AI-provenance metadata (C2PA, EXIF, IPTC, and PNG text chunks) from images.
-    The core package covers the identify, metadata, visible, and erase command
-    surface. Optional pip extras add SynthID diffusion removal and additional
-    invisible-watermark detectors.
+    AI-provenance metadata (C2PA, EXIF, IPTC, and PNG text chunks) from images
+    and supported video containers. The core package covers the identify,
+    metadata, visible, erase, and experimental video command surface. Optional
+    pip extras add SynthID diffusion removal and additional invisible-watermark
+    detectors.
   license: Apache-2.0
   license_file: LICENSE
   repository: https://github.com/wiltodelta/remove-ai-watermarks

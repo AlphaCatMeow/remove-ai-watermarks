@@ -44,3 +44,20 @@ jobs:
         run: uv sync --frozen --extra dev
       - name: Run tests
         run: uv run pytest -q
+
+  video-e2e:
+    name: video full-clip end-to-end
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install --yes ffmpeg
+      - name: Sync dev environment
+        run: uv sync --frozen --extra dev
+      - name: Run full-clip video test
+        run: >-
+          uv run pytest -q
+          tests/test_video.py::TestVideoVisibleFullClip

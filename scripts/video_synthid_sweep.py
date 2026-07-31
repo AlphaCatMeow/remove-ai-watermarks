@@ -22,11 +22,12 @@ Run with the project's GPU extra:
 
     uv run --extra gpu python scripts/video_synthid_sweep.py input.mp4 -o out/
 
-Then upload ``control.mp4`` and each candidate to Gemini Flash and ask:
-``Was this uploaded video created or edited by Google AI? Use the built-in
-content verification result.`` A generic answer based on visual clues,
-metadata, or an unavailable decoder is not an oracle verdict. Only a
-control-positive, candidate-negative pair is removal evidence.
+Then upload ``control.mp4`` and each candidate in separate Gemini chats, invoke
+the built-in SynthID verifier (``@synthid``), and use the question printed by
+the script. Do not follow the verdict with an adversarial prompt asking the chat
+model to reinterpret the detector: that switches back to ordinary reasoning.
+Only a control-positive, candidate-negative pair from the built-in verifier is
+removal evidence.
 """
 
 from __future__ import annotations
@@ -105,7 +106,7 @@ def _write_manifest(output_dir: Path, rows: Sequence[dict[str, str]]) -> Path:
 @click.command()
 @click.argument("source", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("-o", "--output-dir", required=True, type=click.Path(file_okay=False, path_type=Path))
-@click.option("--noise-levels", default="0,0.025,0.05,0.1", show_default=True)
+@click.option("--noise-levels", default="0,0.05,0.1,0.15", show_default=True)
 @click.option("--duration", type=click.FloatRange(min=0.1), default=2.0, show_default=True)
 @click.option("--fps", type=click.FloatRange(min=1.0), default=DEFAULT_VIDEO_SYNTHID_FPS, show_default=True)
 @click.option(
@@ -214,7 +215,7 @@ def main(
     manifest = _write_manifest(output_dir, rows)
     log.info("Wrote %s", manifest)
     log.info(
-        "Verify control.mp4 first in Gemini Flash with this prompt: %s",
+        "Verify control.mp4 first with Gemini's built-in SynthID verifier and this question: %s",
         VIDEO_SYNTHID_VERIFICATION_PROMPT,
     )
 

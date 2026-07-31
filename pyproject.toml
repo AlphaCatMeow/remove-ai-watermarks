@@ -64,6 +64,12 @@ dependencies = [
     # import is light (no torch/numpy) so it fits the dependency-light identify
     # host. Prebuilt wheels cover the full CI matrix (linux/macos/windows).
     "c2pa-python>=0.35.0",
+    # Timestamped NUT bridge for processed video frames. Rawvideo pipes carry no
+    # per-frame PTS, so this is what lets the existing system-ffmpeg encoder
+    # preserve VFR timing without buffering a frame sequence on disk. PyAV 18
+    # requires Python 3.11; the 16.x wheel line still covers Python 3.10.
+    "av>=16,<17; python_version < '3.11'",
+    "av>=18,<19; python_version >= '3.11'",
 ]
 
 [project.optional-dependencies]

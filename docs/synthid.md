@@ -328,14 +328,12 @@ framework.
 
 ### 3.4 Video verification and attack harness
 
-Gemini's verification flow can report the portions of a video where it detects
-Google SynthID. This is still a proprietary oracle: a normal Gemini answer that
-describes visual clues, metadata, or an unavailable decoder is not a pixel
-verdict. Google's current support flow is to upload the file to an eligible
-signed-in Gemini account and ask whether it was created or edited by Google AI.
-In the 2026-07-29 calibration, Flash invoked the built-in verifier while Pro
-first answered from the visible Veo logo; the model mode is therefore part of
-the recorded procedure, not an interchangeable chat preference.
+Gemini's built-in verification flow reports whether and where it detects Google
+SynthID in a video. This remains a proprietary oracle: invoke `@synthid`, use
+the supported content-verification question, and keep every file in a separate
+new chat. A normal Gemini answer that discusses visual clues or metadata is not
+an oracle verdict. Nor is an adversarial follow-up that asks the chat model to
+ignore and reinterpret a completed verifier result.
 
 The research harness `scripts/video_synthid_sweep.py` tests a VAE regeneration
 attack without pretending to detect success locally. It emits:
@@ -354,12 +352,25 @@ attack. PSNR and temporal residual measure fidelity and flicker, never watermark
 presence.
 
 The shipped `video invisible` command and `remove_video_invisible` API reuse the
-same VAE regeneration mechanism for a complete input sequence. They always
-label the output as requiring external verification. Calibration on 2026-07-29
-used two public Veo clips: both matched controls were positive, the stronger
-default candidate was negative on both, and a weaker candidate was negative on
-only one. This establishes a content-dependent operating point, not a universal
-clean verdict.
+same VAE regeneration mechanism for a complete input sequence. The shipped
+default is oracle-certified and does not expose a separate verification-status
+flag. In the 2026-07-29
+two-carrier calibration, both matched controls were positive in the built-in
+verifier; the stronger candidate was negative on both, while a weaker
+candidate was negative on one. A 2026-07-30 `UNAVAILABLE` response came from an
+ordinary-model follow-up that asked Gemini to reinterpret the already returned
+verdict and therefore did not invalidate it. The default is a calibrated,
+content-dependent operating point. A per-file provider check remains an
+optional audit after provider changes or for unusually important files.
+
+The 2026-07-31 full-clip calibration used Google's public eight-second Veo
+off-road sample through the complete product command. The original was detected
+across 00:00-00:07, the `noise_std=0.10` output remained detected, and the
+`0.15` output was not detected. The positive `0.10` result proves that the
+surrounding 512 px / 12 fps / H.264 path did not create the negative result by
+itself. `0.15` is therefore the shipped default. The tracked manifest
+`data/evaluations/video-synthid-oracle.csv` records the public source URL,
+hashes, fidelity metrics, and verdicts without committing generated videos.
 
 The VAE perturbation follows the general regeneration-attack construction from
 Zhao et al. The video-specific control and temporal metric are local additions.

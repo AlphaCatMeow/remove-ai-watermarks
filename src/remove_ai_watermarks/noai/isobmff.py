@@ -3,10 +3,11 @@
 The ISO Base Media File Format wraps content in nested ``[size:4][type:4][...]``
 boxes. C2PA stores its manifest in a top-level ``uuid`` box keyed by the
 C2PA UUID; JPEG-XL uses a ``jumb`` box (JUMBF) instead. To strip provenance
-without re-encoding the image, we walk the top-level box list, drop boxes that
-carry C2PA, and emit the rest verbatim. The codestream (``mdat`` for ISOBMFF,
-``jxlc`` / ``jxlp`` for JPEG-XL) is untouched, so pixel data is preserved
-bit-for-bit.
+without re-encoding, the image path drops matching boxes and emits the rest
+verbatim. The streaming MP4/MOV/M4A path instead preserves all offsets by
+retyping matching boxes as ``free`` and blanking their payloads in place. The
+codestream (``mdat`` for ISOBMFF, ``jxlc`` / ``jxlp`` for JPEG-XL) is untouched,
+so pixel, video, and audio data is preserved bit-for-bit.
 
 TC260-PG-20257A video metadata is nested instead:
 ``moov.udta.meta.keys/ilst``. Its detector seeks through those boxes without
@@ -24,7 +25,9 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import re
+import shutil
 import struct
 from typing import TYPE_CHECKING, Any, BinaryIO
 
@@ -60,6 +63,8 @@ _AI_LABEL_MARKERS: tuple[bytes, ...] = AIGC_MARKERS + IPTC_AI_MARKERS + IPTC_AI_
 # out of reach of the top-level box stripper, so an AI-label packet there is
 # blanked in place (see ``blank_ai_xmp_packets``).
 _XMP_PACKET_RE = re.compile(rb"<\?xpacket begin=.*?<\?xpacket end=[^>]*?\?>", re.DOTALL)
+_STREAM_COPY_BYTES = 1024 * 1024
+_STREAM_SCAN_BYTES = 4 * 1024 * 1024
 
 
 # TC260-PG-20257A stores an MP4/MOV label as an ``AIGC`` key in
@@ -335,6 +340,147 @@ def scan_c2pa_region(path: str | Path, *, max_total: int = 4 * 1024 * 1024) -> b
     except OSError:
         return b""
     return bytes(collected)
+
+
+def _payload_has_ai_label(
+    stream: BinaryIO,
+    start: int,
+    end: int,
+    *,
+    max_scan: int,
+) -> bool:
+    """Scan a bounded prefix of one metadata payload for an AI-label marker."""
+    longest_marker = max(len(marker) for marker in _AI_LABEL_MARKERS)
+    remaining = min(end - start, max_scan)
+    overlap = b""
+    stream.seek(start)
+    while remaining > 0:
+        chunk = stream.read(min(_STREAM_COPY_BYTES, remaining))
+        if not chunk:
+            return False
+        searchable = overlap + chunk
+        if any(marker in searchable for marker in _AI_LABEL_MARKERS):
+            return True
+        overlap = searchable[-(longest_marker - 1) :]
+        remaining -= len(chunk)
+    return False
+
+
+def _streaming_provenance_boxes(
+    stream: BinaryIO,
+    file_size: int,
+    *,
+    max_scan: int,
+) -> list[tuple[int, int, int]] | None:
+    """Return top-level provenance boxes, or ``None`` for a malformed walk.
+
+    Each result is ``(box_start, payload_start, box_end)``. The walk reads only
+    headers and bounded metadata prefixes, seeking over ``mdat`` payloads.
+    """
+    stream.seek(0)
+    if not is_isobmff(stream.read(8)):
+        return None
+    targets: list[tuple[int, int, int]] = []
+    pos = 0
+    while pos < file_size:
+        header = _read_box_header(stream, pos, file_size)
+        if header is None:
+            return None
+        box_end, box_type, payload_off = header
+        if box_type == b"uuid":
+            stream.seek(payload_off)
+            is_c2pa = payload_off + 16 <= box_end and stream.read(16) == C2PA_UUID
+            has_ai_label = not is_c2pa and _payload_has_ai_label(
+                stream,
+                payload_off,
+                box_end,
+                max_scan=max_scan,
+            )
+            if is_c2pa or has_ai_label:
+                targets.append((pos, payload_off, box_end))
+        elif box_type == b"jumb":
+            targets.append((pos, payload_off, box_end))
+        pos = box_end
+    return targets
+
+
+def _overwrite_range(
+    stream: BinaryIO,
+    start: int,
+    end: int,
+    *,
+    byte: bytes,
+) -> None:
+    """Overwrite one byte range with bounded allocations."""
+    stream.seek(start)
+    remaining = end - start
+    block = byte * min(_STREAM_COPY_BYTES, max(remaining, 1))
+    while remaining > 0:
+        size = min(len(block), remaining)
+        stream.write(block[:size])
+        remaining -= size
+
+
+def strip_isobmff_media_file(
+    source: str | Path,
+    output: str | Path,
+    *,
+    max_box_scan: int = _STREAM_SCAN_BYTES,
+) -> tuple[int, int]:
+    """Stream-copy an MP4/MOV/M4A while removing supported AI metadata.
+
+    The output retains every box size and byte offset. A top-level C2PA/JUMBF or
+    AI-label box is converted to a ``free`` box and its payload is zeroed; native
+    TC260 key/value spans are blanked in place. Keeping the original lengths is
+    required because removing a pre-``mdat`` box would invalidate absolute media
+    offsets in an existing sample table.
+
+    The source is copied in bounded chunks to a sibling temporary file and
+    atomically published only after all patches succeed. A malformed top-level
+    walk is fail-safe: the input is copied unchanged.
+
+    Returns ``(provenance_boxes_blanked, native_tc260_keys_blanked)``.
+    """
+    from pathlib import Path as _Path
+
+    from remove_ai_watermarks.video_encoding import atomic_video_output
+
+    source_path = _Path(source)
+    output_path = _Path(output)
+    with source_path.open("rb") as stream:
+        stream.seek(0, 2)
+        file_size = stream.tell()
+        targets = _streaming_provenance_boxes(
+            stream,
+            file_size,
+            max_scan=max_box_scan,
+        )
+        tc260_regions = _tc260_aigc_regions(stream, file_size) if targets is not None else []
+        tc260_key_spans = {(region[0], region[1]) for region in tc260_regions}
+
+    with atomic_video_output(output_path) as temporary_path:
+        with source_path.open("rb") as source_stream, temporary_path.open("r+b") as temporary:
+            shutil.copyfileobj(source_stream, temporary, length=_STREAM_COPY_BYTES)
+            if targets is not None:
+                for box_start, payload_start, box_end in targets:
+                    temporary.seek(box_start + 4)
+                    temporary.write(b"free")
+                    _overwrite_range(temporary, payload_start, box_end, byte=b"\x00")
+                for key_start, _key_end, value_start, value_end, _value in tc260_regions:
+                    temporary.seek(key_start)
+                    temporary.write(b"free")
+                    _overwrite_range(temporary, value_start, value_end, byte=b" ")
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        shutil.copymode(source_path, temporary_path)
+
+    if targets is None:
+        logger.warning(
+            "ISOBMFF box walk failed for %s; copied input unchanged to avoid corrupting media offsets",
+            source_path,
+        )
+        return 0, 0
+    return len(targets), len(tc260_key_spans)
 
 
 def strip_c2pa_boxes(data: bytes) -> tuple[bytes, int]:

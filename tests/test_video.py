@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
+import json
+import shutil
+import subprocess
 from typing import TYPE_CHECKING
 
 import cv2
@@ -148,6 +152,334 @@ def _stamp_gray_mark(
     ).astype(np.uint8)
 
 
+def _independent_sora_mark() -> tuple[np.ndarray, tuple[int, int, int, int]]:
+    """Render a Sora-like mark without using the detector's template."""
+    mark = Image.new("L", (180, 64), 0)
+    draw = ImageDraw.Draw(mark)
+    draw.ellipse((1, 14, 32, 54), fill=255)
+    draw.ellipse((25, 8, 62, 58), fill=255)
+    draw.ellipse((15, 20, 28, 44), fill=0)
+    draw.ellipse((37, 18, 50, 43), fill=0)
+    try:
+        font = ImageFont.load_default(size=49)
+    except TypeError:
+        font = ImageFont.load_default()
+    draw.text((68, 1), "Sora", font=font, fill=255, stroke_width=1)
+    mark_array = cv2.resize(np.asarray(mark), (124, 44), interpolation=cv2.INTER_AREA)
+    x, y = 620, 398
+    return mark_array, (x, y, 124, 44)
+
+
+def _independent_sora_frame() -> tuple[np.ndarray, tuple[int, int, int, int]]:
+    """Stamp the independent Sora-like mark onto a flat test frame."""
+    frame = np.full((480, 840, 3), 36, dtype=np.uint8)
+    mark_array, region = _independent_sora_mark()
+    x, y, _width, _height = region
+    _stamp_gray_mark(frame, mark_array, x=x, y=y, opacity=0.78)
+    return frame, region
+
+
+def _moving_video_background(frame_index: int) -> np.ndarray:
+    """Return a smooth moving background with known clean pixels."""
+    x = np.arange(840, dtype=np.float32)[None, :]
+    y = np.arange(480, dtype=np.float32)[:, None]
+    luma = 42 + 10 * np.sin((x + frame_index * 5) / 38) + 5 * np.cos((y - frame_index * 2) / 54)
+    frame = np.stack(
+        (
+            np.clip(luma - 5, 0, 255),
+            np.clip(luma + 1, 0, 255),
+            np.clip(luma + 7, 0, 255),
+        ),
+        axis=2,
+    ).astype(np.uint8)
+    moving_x = 30 + frame_index * 8
+    cv2.rectangle(frame, (moving_x, 70), (moving_x + 72, 132), (80, 140, 210), -1)
+    cv2.line(frame, (0, 220 + frame_index), (839, 250 + frame_index), (110, 70, 45), 3)
+    return frame
+
+
+def _ffmpeg_test_tools() -> tuple[str, str]:
+    """Return real ffmpeg tools or skip the integration test."""
+    ffmpeg = shutil.which("ffmpeg")
+    ffprobe = shutil.which("ffprobe")
+    if ffmpeg is None or ffprobe is None:
+        pytest.skip("full-clip video integration test requires ffmpeg and ffprobe")
+    return ffmpeg, ffprobe
+
+
+def _write_synthetic_sora_clip(
+    path: Path,
+    frames: list[np.ndarray],
+    *,
+    fps: float,
+    ffmpeg: str,
+    start_offset: float = 0.0,
+) -> None:
+    """Encode a synthetic marked MP4 with AAC audio and C2PA provenance."""
+    height, width = frames[0].shape[:2]
+    duration = len(frames) / fps
+    command = [
+        ffmpeg,
+        "-y",
+        "-loglevel",
+        "error",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "bgr24",
+        "-s:v",
+        f"{width}x{height}",
+        "-r",
+        f"{fps:.12g}",
+        "-i",
+        "pipe:0",
+        "-f",
+        "lavfi",
+        "-i",
+        f"sine=frequency=880:sample_rate=48000:duration={duration:.12g}",
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-crf",
+        "8",
+        "-x264-params",
+        "colorprim=bt709:transfer=bt709:colormatrix=bt709:range=limited",
+        "-pix_fmt",
+        "yuv420p",
+        "-color_range",
+        "tv",
+        "-colorspace",
+        "bt709",
+        "-color_trc",
+        "bt709",
+        "-color_primaries",
+        "bt709",
+        "-c:a",
+        "aac",
+        "-shortest",
+        "-video_track_timescale",
+        "90000",
+        "-movflags",
+        "+faststart",
+    ]
+    if start_offset:
+        command.extend(["-output_ts_offset", f"{start_offset:.12g}"])
+    command.append(str(path))
+    subprocess.run(  # noqa: S603
+        command,
+        input=b"".join(frame.tobytes() for frame in frames),
+        capture_output=True,
+        check=True,
+    )
+    with path.open("ab") as stream:
+        stream.write(_box(b"uuid", C2PA_UUID + b"OpenAI Sora trainedAlgorithmicMedia"))
+
+
+def _write_vfr_sora_clip(
+    path: Path,
+    frames: list[np.ndarray],
+    *,
+    durations: list[float],
+    ffmpeg: str,
+    start_offset: float = 0.0,
+) -> None:
+    """Encode marked stills at deliberately irregular presentation times."""
+    assert len(frames) == len(durations)
+    frame_paths: list[Path] = []
+    for index, frame in enumerate(frames):
+        frame_path = path.with_name(f"{path.stem}-frame-{index:03d}.png")
+        assert cv2.imwrite(str(frame_path), frame)
+        frame_paths.append(frame_path)
+    manifest = path.with_suffix(".ffconcat")
+    lines = ["ffconcat version 1.0"]
+    for frame_path, duration in zip(frame_paths, durations, strict=True):
+        lines.extend((f"file '{frame_path.as_posix()}'", f"duration {duration:.12g}"))
+    lines.append(f"file '{frame_paths[-1].as_posix()}'")
+    manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    total_duration = sum(durations)
+    command = [
+        ffmpeg,
+        "-y",
+        "-loglevel",
+        "error",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        str(manifest),
+        "-f",
+        "lavfi",
+        "-i",
+        f"sine=frequency=880:sample_rate=48000:duration={total_duration:.12g}",
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-frames:v",
+        str(len(frames)),
+        "-fps_mode",
+        "vfr",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-crf",
+        "8",
+        "-bf",
+        "0",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-video_track_timescale",
+        "90000",
+    ]
+    if start_offset:
+        command.extend(["-output_ts_offset", f"{start_offset:.12g}"])
+    command.append(str(path))
+    subprocess.run(command, capture_output=True, check=True)  # noqa: S603
+    with path.open("ab") as stream:
+        stream.write(_box(b"uuid", C2PA_UUID + b"OpenAI Sora trainedAlgorithmicMedia"))
+
+
+def _decode_video(path: Path) -> tuple[list[np.ndarray], float]:
+    """Decode every frame through the same OpenCV boundary as production."""
+    capture = cv2.VideoCapture(str(path))
+    assert capture.isOpened()
+    fps = float(capture.get(cv2.CAP_PROP_FPS))
+    frames: list[np.ndarray] = []
+    try:
+        while True:
+            ok, frame = capture.read()
+            if not ok:
+                break
+            frames.append(frame)
+    finally:
+        capture.release()
+    return frames, fps
+
+
+def _video_frame_timestamps(path: Path, *, ffprobe: str) -> list[float]:
+    """Read display timestamps from the first video stream."""
+    result = subprocess.run(  # noqa: S603
+        [
+            ffprobe,
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_frames",
+            "-show_entries",
+            "frame=best_effort_timestamp_time",
+            "-of",
+            "json",
+            str(path),
+        ],
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    frames = json.loads(result.stdout)["frames"]
+    return [float(frame["best_effort_timestamp_time"]) for frame in frames]
+
+
+def _audio_bitstream(path: Path, *, ffmpeg: str) -> bytes:
+    """Extract copied AAC packets in a container-independent form."""
+    result = subprocess.run(  # noqa: S603
+        [
+            ffmpeg,
+            "-loglevel",
+            "error",
+            "-i",
+            str(path),
+            "-map",
+            "0:a:0",
+            "-c:a",
+            "copy",
+            "-f",
+            "adts",
+            "pipe:1",
+        ],
+        capture_output=True,
+        check=True,
+    )
+    return result.stdout
+
+
+def _container_duration(path: Path, *, ffprobe: str) -> float:
+    """Read the container duration from the real ffprobe boundary."""
+    result = subprocess.run(  # noqa: S603
+        [
+            ffprobe,
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(path),
+        ],
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    return float(result.stdout.strip())
+
+
+def _video_stream_info(path: Path, *, ffprobe: str) -> dict[str, str]:
+    """Read source-sensitive video stream properties through ffprobe."""
+    result = subprocess.run(  # noqa: S603
+        [
+            ffprobe,
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=pix_fmt,color_range,color_space,color_transfer,color_primaries,time_base",
+            "-of",
+            "json",
+            str(path),
+        ],
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    streams = json.loads(result.stdout)["streams"]
+    assert len(streams) == 1
+    return streams[0]
+
+
+def _stream_start_times(path: Path, *, ffprobe: str) -> dict[str, float]:
+    """Read the first video and audio stream start times."""
+    result = subprocess.run(  # noqa: S603
+        [
+            ffprobe,
+            "-v",
+            "error",
+            "-show_entries",
+            "stream=codec_type,start_time",
+            "-of",
+            "json",
+            str(path),
+        ],
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    return {
+        stream["codec_type"]: float(stream["start_time"])
+        for stream in json.loads(result.stdout)["streams"]
+        if stream["codec_type"] in {"video", "audio"}
+    }
+
+
 def _regeneration_metrics(
     *,
     frames: int = 24,
@@ -173,7 +505,10 @@ class TestVideoMetadataApi:
     def test_top_level_api_is_lazy_exported(self):
         import remove_ai_watermarks as raiw
 
+        assert raiw.identify_video is not None
         assert raiw.inspect_video_metadata is not None
+        assert raiw.remove_video_all is not None
+        assert raiw.remove_video_batch is not None
         assert raiw.remove_video_invisible is not None
         assert raiw.remove_video_metadata is not None
         assert raiw.remove_video_visible is not None
@@ -254,6 +589,46 @@ class TestVideoMetadataApi:
         assert _VIDEO_PAYLOAD in cleaned
         assert b"standard title" in cleaned
         assert b"AIGC" not in cleaned
+        assert _TC260_AIGC not in cleaned
+
+    def test_streams_large_isobmff_without_full_file_read(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from remove_ai_watermarks.video import inspect_video_metadata, remove_video_metadata
+
+        media_payload = b"x" * (8 * 1024 * 1024)
+        source = _video_with_tc260(tmp_path / "source.mp4", media_payload=media_payload)
+        with source.open("ab") as stream:
+            stream.write(_box(b"uuid", C2PA_UUID + b"OpenAI trainedAlgorithmicMedia"))
+        output = tmp_path / "clean.mp4"
+        source_size = source.stat().st_size
+        source_media_digest = hashlib.sha256(media_payload).digest()
+        original_read_bytes = type(source).read_bytes
+        source_report = inspect_video_metadata(source)
+
+        assert source_report.has_ai_metadata is True
+        assert "synthid_watermark" in source_report.markers
+        assert "aigc_label" in source_report.markers
+
+        def reject_source_read_bytes(path: Path) -> bytes:
+            if path.resolve() == source.resolve():
+                raise AssertionError("video metadata removal must not read the complete source")
+            return original_read_bytes(path)
+
+        monkeypatch.setattr(type(source), "read_bytes", reject_source_read_bytes)
+
+        result = remove_video_metadata(source, output)
+        cleaned = output.read_bytes()
+        mdat_start = cleaned.index(b"mdat") + 4
+        mdat_end = mdat_start + len(media_payload)
+
+        assert result.remaining == {}
+        assert output.stat().st_size == source_size
+        assert hashlib.sha256(cleaned[mdat_start:mdat_end]).digest() == source_media_digest
+        assert b"standard title" in cleaned
+        assert C2PA_UUID not in cleaned
         assert _TC260_AIGC not in cleaned
 
     def test_ignores_generic_mp4_aigc_tag_without_tc260_fields(self, tmp_path: Path):
@@ -356,6 +731,81 @@ class TestVideoMetadataApi:
             remove_video_metadata(source, tmp_path / "clean.mov")
 
 
+class TestVideoProvenanceApi:
+    def test_identifies_metadata_without_pixel_scan(self, tmp_path: Path):
+        from remove_ai_watermarks.video import identify_video
+
+        source = _video_with_c2pa(tmp_path / "source.mp4")
+
+        report = identify_video(source, check_visible=False)
+
+        assert report.source == source
+        assert report.is_ai_generated is True
+        assert report.confidence == "high"
+        assert report.platform == "OpenAI (ChatGPT / gpt-image / DALL-E / Sora)"
+        assert report.visible_mark is None
+        assert report.total_frames is None
+        assert report.has_ai_metadata is True
+        assert report.metadata_markers
+        assert "Visible video-mark detection was skipped." in report.caveats
+
+    def test_identifies_stable_visible_mark_with_shared_arbiter(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from remove_ai_watermarks import video_visible
+        from remove_ai_watermarks.video import VIDEO_VISIBLE_MARKS, identify_video
+        from remove_ai_watermarks.video_visible import FrameLocalization, VideoScan
+
+        source = _video_with_c2pa(tmp_path / "source.mp4")
+        box = (4, 4, 20, 8)
+        stable = VideoScan(
+            width=64,
+            height=64,
+            fps=24.0,
+            detections=tuple(FrameLocalization(index, 0.66, box) for index in range(5)),
+        )
+        empty = VideoScan(
+            width=64,
+            height=64,
+            fps=24.0,
+            detections=tuple(FrameLocalization(index, 0.0, None) for index in range(5)),
+        )
+
+        def fake_scan(
+            _source: Path,
+            marks: tuple[str, ...],
+            *,
+            collect_timestamps: bool,
+        ) -> dict[str, VideoScan]:
+            assert collect_timestamps is False
+            return {candidate: stable if candidate == "sora" else empty for candidate in marks}
+
+        monkeypatch.setattr(video_visible, "scan_video_marks", fake_scan)
+
+        report = identify_video(source)
+
+        assert report.platform == "OpenAI Sora"
+        assert report.visible_mark == "sora"
+        assert report.visible_detected_frames == 5
+        assert report.total_frames == 5
+        assert tuple(VIDEO_VISIBLE_MARKS) == ("sora", "veo", "seedance", "dola", "hailuo", "kling")
+
+    def test_reports_unknown_instead_of_clean(self, tmp_path: Path):
+        from remove_ai_watermarks.video import identify_video
+
+        source = tmp_path / "source.mp4"
+        source.write_bytes(_MP4_FTYP + _box(b"mdat", _VIDEO_PAYLOAD))
+
+        report = identify_video(source, check_visible=False)
+
+        assert report.is_ai_generated is None
+        assert report.confidence == "unknown"
+        assert report.has_ai_metadata is False
+        assert any("not proof" in caveat for caveat in report.caveats)
+
+
 class TestVideoMetadataCli:
     def test_help(self):
         runner = CliRunner()
@@ -394,8 +844,428 @@ class TestVideoMetadataCli:
         assert "Unsupported video format" in result.output
 
 
+class TestVideoProvenanceCli:
+    def test_json_metadata_report(self, tmp_path: Path):
+        source = _video_with_c2pa(tmp_path / "source.mp4")
+
+        result = CliRunner().invoke(main, ["video", "identify", str(source), "--no-visible", "--json"])
+
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        assert payload["is_ai_generated"] is True
+        assert payload["visible_mark"] is None
+        assert payload["has_ai_metadata"] is True
+
+
+class TestVideoAllApi:
+    def test_no_visible_mark_still_strips_metadata_and_writes_output(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from remove_ai_watermarks import video
+        from remove_ai_watermarks.video import VideoVisibleResult, remove_video_all
+
+        source = _video_with_c2pa(tmp_path / "source.mp4")
+        output = tmp_path / "clean.mp4"
+        monkeypatch.setattr(
+            video,
+            "remove_video_visible",
+            lambda *_args, **_kwargs: VideoVisibleResult(
+                source=source,
+                output=None,
+                mark="auto",
+                total_frames=3,
+                detected_frames=0,
+                removed_frames=0,
+                remaining_metadata={"c2pa_manifest": "present"},
+            ),
+        )
+
+        result = remove_video_all(source, output)
+
+        assert result.output == output
+        assert result.visible_mark is None
+        assert result.detected_metadata
+        assert result.remaining_metadata == {}
+        assert result.invisible_removed is False
+        assert C2PA_UUID not in output.read_bytes()
+        assert _VIDEO_PAYLOAD in output.read_bytes()
+
+    def test_visible_output_is_the_final_locally_verified_result(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from remove_ai_watermarks import video
+        from remove_ai_watermarks.video import VideoVisibleResult, remove_video_all
+
+        source = _video_with_c2pa(tmp_path / "source.mp4")
+        output = tmp_path / "clean.mp4"
+
+        def fake_visible(_source: Path, target: Path, **_kwargs: object) -> VideoVisibleResult:
+            target.write_bytes(_MP4_FTYP + _box(b"mdat", _VIDEO_PAYLOAD))
+            return VideoVisibleResult(
+                source=source,
+                output=target,
+                mark="sora",
+                total_frames=12,
+                detected_frames=12,
+                removed_frames=12,
+                remaining_metadata={},
+            )
+
+        monkeypatch.setattr(video, "remove_video_visible", fake_visible)
+        monkeypatch.setattr(
+            video,
+            "remove_video_metadata",
+            lambda *_args, **_kwargs: pytest.fail("metadata must not reprocess an already stripped visible output"),
+        )
+
+        result = remove_video_all(source, output)
+
+        assert result.visible_mark == "sora"
+        assert result.visible_removed_frames == 12
+        assert result.remaining_metadata == {}
+        assert output.exists()
+
+    def test_invisible_stage_is_explicit_and_uses_an_intermediate_visible_output(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from remove_ai_watermarks import video
+        from remove_ai_watermarks.video import (
+            VideoInvisibleResult,
+            VideoVisibleResult,
+            remove_video_all,
+        )
+
+        source = _video_with_c2pa(tmp_path / "source.mp4")
+        output = tmp_path / "clean.mp4"
+        intermediate_sources: list[Path] = []
+
+        def fake_visible(_source: Path, target: Path, **_kwargs: object) -> VideoVisibleResult:
+            target.write_bytes(_MP4_FTYP + _box(b"mdat", _VIDEO_PAYLOAD))
+            return VideoVisibleResult(
+                source=source,
+                output=target,
+                mark="sora",
+                total_frames=12,
+                detected_frames=12,
+                removed_frames=12,
+                remaining_metadata={},
+            )
+
+        def fake_invisible(
+            candidate_source: Path,
+            target: Path,
+            **_kwargs: object,
+        ) -> VideoInvisibleResult:
+            assert candidate_source != source
+            assert candidate_source.exists()
+            intermediate_sources.append(candidate_source)
+            target.write_bytes(_MP4_FTYP + _box(b"mdat", _VIDEO_PAYLOAD))
+            return VideoInvisibleResult(
+                source=candidate_source,
+                output=target,
+                noise_std=0.1,
+                metrics=_regeneration_metrics(frames=12),
+                remaining_metadata={},
+            )
+
+        monkeypatch.setattr(video, "remove_video_visible", fake_visible)
+        monkeypatch.setattr(video, "remove_video_invisible", fake_invisible)
+
+        result = remove_video_all(source, output, include_invisible=True)
+
+        assert result.invisible_removed is True
+        assert output.exists()
+        assert len(intermediate_sources) == 1
+        assert not intermediate_sources[0].exists()
+
+    def test_rejects_unsupported_invisible_container_before_visible_scan(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from remove_ai_watermarks import video
+        from remove_ai_watermarks.video import remove_video_all
+
+        source = _video_with_tc260_ebml(tmp_path / "source.webm")
+        monkeypatch.setattr(
+            video,
+            "remove_video_visible",
+            lambda *_args, **_kwargs: pytest.fail("visible scan must not start"),
+        )
+
+        with pytest.raises(ValueError, match="requires one of"):
+            remove_video_all(source, include_invisible=True)
+
+
+class TestVideoAllCli:
+    def test_help_keeps_invisible_stage_opt_in(self):
+        result = CliRunner().invoke(main, ["video", "all", "--help"])
+
+        assert result.exit_code == 0, result.output
+        assert "--invisible" in result.output
+        assert "oracle-certified" in result.output
+
+    def test_reports_locally_verified_result(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        from remove_ai_watermarks import video
+        from remove_ai_watermarks.video import VideoAllResult
+
+        source = _video_with_c2pa(tmp_path / "source.mp4")
+        output = tmp_path / "clean.mp4"
+        monkeypatch.setattr(
+            video,
+            "remove_video_all",
+            lambda *_args, **_kwargs: VideoAllResult(
+                source=source,
+                output=output,
+                visible_mark="sora",
+                total_frames=12,
+                visible_detected_frames=12,
+                visible_removed_frames=12,
+                detected_metadata={"c2pa_manifest": "present"},
+                remaining_metadata={},
+                invisible_removed=False,
+            ),
+        )
+
+        result = CliRunner().invoke(main, ["video", "all", str(source), "-o", str(output)])
+
+        assert result.exit_code == 0, result.output
+        assert "removed sora from 12/12 frames" in result.output
+        assert "UNVERIFIED" not in result.output
+
+    def test_reports_oracle_certified_invisible_removal(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from remove_ai_watermarks import video
+        from remove_ai_watermarks.video import VideoAllResult
+
+        source = _video_with_c2pa(tmp_path / "source.mp4")
+        output = tmp_path / "clean.mp4"
+        monkeypatch.setattr(
+            video,
+            "remove_video_all",
+            lambda *_args, **_kwargs: VideoAllResult(
+                source=source,
+                output=output,
+                visible_mark=None,
+                total_frames=12,
+                visible_detected_frames=0,
+                visible_removed_frames=0,
+                detected_metadata={},
+                remaining_metadata={},
+                invisible_removed=True,
+            ),
+        )
+
+        result = CliRunner().invoke(main, ["video", "all", str(source), "--invisible"])
+
+        assert result.exit_code == 0, result.output
+        assert "UNVERIFIED" not in result.output
+        assert "oracle-certified VAE profile" in result.output
+
+
+class TestVideoBatchApi:
+    def test_visible_mode_copies_noop_and_collects_per_file_error(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from remove_ai_watermarks import video
+        from remove_ai_watermarks.video import VideoVisibleResult, remove_video_batch
+
+        directory = tmp_path / "videos"
+        directory.mkdir()
+        clean = directory / "clean.mp4"
+        clean.write_bytes(_MP4_FTYP + _box(b"mdat", _VIDEO_PAYLOAD))
+        broken = directory / "broken.mp4"
+        broken.write_bytes(b"not a video")
+        (directory / "notes.txt").write_text("ignored", encoding="utf-8")
+
+        def fake_visible(source: Path, *_args: object, **_kwargs: object) -> VideoVisibleResult:
+            if source == broken:
+                raise ValueError("invalid container")
+            return VideoVisibleResult(
+                source=source,
+                output=None,
+                mark="auto",
+                total_frames=3,
+                detected_frames=0,
+                removed_frames=0,
+                remaining_metadata={},
+            )
+
+        monkeypatch.setattr(video, "remove_video_visible", fake_visible)
+
+        result = remove_video_batch(directory, mode="visible")
+
+        assert result.processed == 1
+        assert result.failed == 1
+        assert len(result.items) == 2
+        assert (result.output_directory / clean.name).read_bytes() == clean.read_bytes()
+        assert result.items[0].source.name == "broken.mp4"
+        assert result.items[0].error == "invalid container"
+        assert result.items[1].changed is False
+
+    def test_metadata_mode_processes_every_supported_video(self, tmp_path: Path):
+        from remove_ai_watermarks.video import remove_video_batch
+
+        directory = tmp_path / "videos"
+        directory.mkdir()
+        marked = _video_with_c2pa(directory / "marked.mp4")
+        clean = directory / "clean.mp4"
+        clean.write_bytes(_MP4_FTYP + _box(b"mdat", _VIDEO_PAYLOAD))
+
+        result = remove_video_batch(directory, mode="metadata")
+
+        assert result.processed == 2
+        assert result.failed == 0
+        assert C2PA_UUID not in (result.output_directory / marked.name).read_bytes()
+        assert (result.output_directory / clean.name).read_bytes() == clean.read_bytes()
+        assert {item.changed for item in result.items} == {False, True}
+
+    def test_rejects_invisible_stage_outside_all_mode(self, tmp_path: Path):
+        from remove_ai_watermarks.video import remove_video_batch
+
+        directory = tmp_path / "videos"
+        directory.mkdir()
+
+        with pytest.raises(ValueError, match="only in all mode"):
+            remove_video_batch(directory, mode="visible", include_invisible=True)
+
+    def test_invisible_mode_reuses_one_vae_runtime_for_the_batch(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from remove_ai_watermarks import video, video_invisible
+        from remove_ai_watermarks.video import VideoAllResult, remove_video_batch
+
+        directory = tmp_path / "videos"
+        directory.mkdir()
+        for name in ("one.mp4", "two.mp4"):
+            (directory / name).write_bytes(_MP4_FTYP + _box(b"mdat", _VIDEO_PAYLOAD))
+        runtime = object()
+        load_calls: list[tuple[str, str]] = []
+        used_runtimes: list[object] = []
+
+        def fake_load(*, model: str, device: str) -> object:
+            load_calls.append((model, device))
+            return runtime
+
+        def fake_all(source: Path, output: Path, **kwargs: object) -> VideoAllResult:
+            used_runtimes.append(kwargs["_invisible_runtime"])
+            return VideoAllResult(
+                source=source,
+                output=output,
+                visible_mark=None,
+                total_frames=2,
+                visible_detected_frames=0,
+                visible_removed_frames=0,
+                detected_metadata={},
+                remaining_metadata={},
+                invisible_removed=True,
+            )
+
+        monkeypatch.setattr(video_invisible, "load_video_vae_runtime", fake_load)
+        monkeypatch.setattr(video, "remove_video_all", fake_all)
+
+        result = remove_video_batch(directory, include_invisible=True)
+
+        assert result.processed == 2
+        assert load_calls == [("stabilityai/sd-vae-ft-mse", "auto")]
+        assert used_runtimes == [runtime, runtime]
+
+    def test_invisible_runtime_failure_is_not_retried_for_every_file(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from remove_ai_watermarks import video_invisible
+        from remove_ai_watermarks.video import remove_video_batch
+
+        directory = tmp_path / "videos"
+        directory.mkdir()
+        for name in ("one.mp4", "two.mp4"):
+            (directory / name).write_bytes(_MP4_FTYP + _box(b"mdat", _VIDEO_PAYLOAD))
+        load_calls = 0
+
+        def fail_load(**_kwargs: object) -> object:
+            nonlocal load_calls
+            load_calls += 1
+            raise RuntimeError("model unavailable")
+
+        monkeypatch.setattr(video_invisible, "load_video_vae_runtime", fail_load)
+
+        result = remove_video_batch(directory, include_invisible=True)
+
+        assert result.failed == 2
+        assert load_calls == 1
+        assert {item.error for item in result.items} == {"model unavailable"}
+
+    def test_rejects_source_as_output_directory(self, tmp_path: Path):
+        from remove_ai_watermarks.video import remove_video_batch
+
+        with pytest.raises(ValueError, match="must differ"):
+            remove_video_batch(tmp_path, tmp_path)
+
+
+class TestVideoBatchCli:
+    def test_help(self):
+        result = CliRunner().invoke(main, ["video", "batch", "--help"])
+
+        assert result.exit_code == 0, result.output
+        assert "all|visible|metadata" in result.output
+        assert "--invisible" in result.output
+
+    def test_returns_nonzero_when_any_file_fails(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from remove_ai_watermarks import video
+        from remove_ai_watermarks.video import VideoBatchItem, VideoBatchResult
+
+        directory = tmp_path / "videos"
+        directory.mkdir()
+        output = tmp_path / "clean"
+        failed_source = directory / "broken.mp4"
+        monkeypatch.setattr(
+            video,
+            "remove_video_batch",
+            lambda *_args, **_kwargs: VideoBatchResult(
+                directory=directory,
+                output_directory=output,
+                items=(
+                    VideoBatchItem(
+                        source=failed_source,
+                        output=None,
+                        mode="all",
+                        changed=False,
+                        visible_mark=None,
+                        invisible_removed=False,
+                        error="invalid container",
+                    ),
+                ),
+            ),
+        )
+
+        result = CliRunner().invoke(main, ["video", "batch", str(directory)])
+
+        assert result.exit_code == 1
+        assert "FAILED broken.mp4: invalid container" in result.output
+        assert "1 failed" in result.output
+
+
 class TestVideoInvisibleApi:
-    def test_generates_unverified_candidate_and_strips_metadata(
+    def test_removes_synthid_and_strips_metadata(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -404,7 +1274,7 @@ class TestVideoInvisibleApi:
         from remove_ai_watermarks.video import remove_video_invisible
 
         source = _video_with_c2pa(tmp_path / "source.mp4")
-        output = tmp_path / "candidate.mp4"
+        output = tmp_path / "clean.mp4"
 
         def fake_regenerate(_source: Path, target: Path, **_kwargs: object):
             target.write_bytes(_MP4_FTYP + _box(b"mdat", _VIDEO_PAYLOAD))
@@ -415,11 +1285,10 @@ class TestVideoInvisibleApi:
         result = remove_video_invisible(source, output)
 
         assert result.output == output
-        assert result.requires_external_verification is True
         assert result.total_frames == 24
         assert result.remaining_metadata == {}
 
-    def test_default_output_is_named_as_candidate(
+    def test_default_output_is_named_as_clean(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -444,7 +1313,7 @@ class TestVideoInvisibleApi:
 
         result = remove_video_invisible(source)
 
-        assert result.output == tmp_path / "source_synthid_candidate.mp4"
+        assert result.output == tmp_path / "source_clean.mp4"
 
     def test_rejects_webm_regeneration(self, tmp_path: Path):
         from remove_ai_watermarks.video import remove_video_invisible
@@ -456,15 +1325,15 @@ class TestVideoInvisibleApi:
 
 
 class TestVideoInvisibleCli:
-    def test_help_describes_external_verification(self):
+    def test_help_describes_oracle_certification(self):
         runner = CliRunner()
 
         result = runner.invoke(main, ["video", "invisible", "--help"])
 
         assert result.exit_code == 0, result.output
-        assert "externally verifiable" in result.output
+        assert "oracle-certified" in result.output
 
-    def test_reports_unverified_candidate(
+    def test_reports_completed_removal(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -473,7 +1342,7 @@ class TestVideoInvisibleCli:
 
         runner = CliRunner()
         source = _video_with_c2pa(tmp_path / "source.mp4")
-        output = tmp_path / "candidate.mp4"
+        output = tmp_path / "clean.mp4"
 
         def fake_remove(_source: Path, target: Path, **_kwargs: object):
             target.write_bytes(_MP4_FTYP + _box(b"mdat", _VIDEO_PAYLOAD))
@@ -490,35 +1359,15 @@ class TestVideoInvisibleCli:
         result = runner.invoke(main, ["video", "invisible", str(source), "-o", str(output)])
 
         assert result.exit_code == 0, result.output
-        assert "Candidate generated" in result.output
-        assert "UNVERIFIED" in result.output
-        assert "Gemini Flash" in result.output
+        assert "SynthID removal complete" in result.output
+        assert "UNVERIFIED" not in result.output
 
 
 class TestSoraFrameLocalization:
-    @staticmethod
-    def _sora_like_frame() -> tuple[np.ndarray, tuple[int, int, int, int]]:
-        frame = np.full((480, 840, 3), 36, dtype=np.uint8)
-        mark = Image.new("L", (180, 64), 0)
-        draw = ImageDraw.Draw(mark)
-        draw.ellipse((1, 14, 32, 54), fill=255)
-        draw.ellipse((25, 8, 62, 58), fill=255)
-        draw.ellipse((15, 20, 28, 44), fill=0)
-        draw.ellipse((37, 18, 50, 43), fill=0)
-        try:
-            font = ImageFont.load_default(size=49)
-        except TypeError:
-            font = ImageFont.load_default()
-        draw.text((68, 1), "Sora", font=font, fill=255, stroke_width=1)
-        mark_array = cv2.resize(np.asarray(mark), (124, 44), interpolation=cv2.INTER_AREA)
-        x, y = 620, 398
-        _stamp_gray_mark(frame, mark_array, x=x, y=y, opacity=0.78)
-        return frame, (x, y, 124, 44)
-
     def test_localizes_independently_rendered_sora_like_mark(self):
         from remove_ai_watermarks.video_visible import _region_iou, detect_sora_frame
 
-        frame, expected = self._sora_like_frame()
+        frame, expected = _independent_sora_frame()
 
         detection = detect_sora_frame(frame)
 
@@ -1042,6 +1891,7 @@ class TestVideoVisibleScan:
                     video_visible.cv2.CAP_PROP_FRAME_WIDTH: 12.0,
                     video_visible.cv2.CAP_PROP_FRAME_HEIGHT: 8.0,
                     video_visible.cv2.CAP_PROP_FPS: 24.0,
+                    video_visible.cv2.CAP_PROP_POS_MSEC: 0.0,
                 }[property_id]
 
             def read(self) -> tuple[bool, np.ndarray | None]:
@@ -1066,6 +1916,7 @@ class TestVideoVisibleScan:
             return FrameLocalization(frame_index, 0.0, None)
 
         monkeypatch.setattr(video_visible.cv2, "VideoCapture", lambda _path: FakeCapture())
+        monkeypatch.setattr(video_visible, "probe_video_timestamps", lambda _path: (0.25,))
         for detector_name in (
             "detect_sora_frame",
             "detect_veo_frame",
@@ -1082,6 +1933,7 @@ class TestVideoVisibleScan:
         )
 
         assert set(scans) == {"sora", "veo", "seedance", "dola", "hailuo", "kling"}
+        assert all(scan.timestamps == (0.25,) for scan in scans.values())
         assert len(prepared_ids) == 6
         assert len(set(prepared_ids)) == 1
 
@@ -1202,6 +2054,294 @@ class TestVideoVisibleEncoding:
         assert output.read_bytes() == b"previous"
         assert not targets[0].exists()
 
+    def test_rejects_high_bit_depth_before_silent_downconversion(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from remove_ai_watermarks import video_visible
+        from remove_ai_watermarks.video_encoding import VideoEncodeProfile
+        from remove_ai_watermarks.video_visible import FrameLocalization, VideoScan, encode_clean_video
+
+        source = tmp_path / "source.mp4"
+        source.write_bytes(b"source")
+        output = tmp_path / "clean.mp4"
+        output.write_bytes(b"previous")
+        scan = VideoScan(
+            8,
+            8,
+            24.0,
+            (FrameLocalization(0, 1.0, (1, 1, 2, 2)),),
+        )
+        monkeypatch.setattr(
+            video_visible,
+            "probe_video_encode_profile",
+            lambda _path: VideoEncodeProfile(
+                pixel_format="yuv420p",
+                color_transfer="smpte2084",
+                source_pixel_format="yuv420p10le",
+                component_depth=10,
+            ),
+        )
+        monkeypatch.setattr(
+            video_visible,
+            "start_raw_video_encoder",
+            lambda _command: pytest.fail("encoder must not start for a high-bit-depth source"),
+        )
+
+        with pytest.raises(RuntimeError, match="refusing to silently reduce yuv420p10le"):
+            encode_clean_video(
+                source,
+                output,
+                scan,
+                [(1, 1, 2, 2)],
+                backend="cv2",
+                strip_metadata=True,
+            )
+
+        assert output.read_bytes() == b"previous"
+        assert list(tmp_path.glob(".clean-*")) == []
+
+
+class TestVideoVisibleFullClip:
+    def test_removes_complete_clip_and_preserves_sequence_and_audio(self, tmp_path: Path):
+        from remove_ai_watermarks.metadata import get_ai_metadata
+        from remove_ai_watermarks.video import remove_video_all, remove_video_metadata, remove_video_visible
+        from remove_ai_watermarks.video_visible import scan_video_marks, stabilize_sora_localizations
+
+        ffmpeg, ffprobe = _ffmpeg_test_tools()
+        frame_count = 18
+        fps = 12.0
+        clean_frames: list[np.ndarray] = []
+        source_frames: list[np.ndarray] = []
+        mark, mark_region = _independent_sora_mark()
+        mark_x, mark_y, _mark_width, _mark_height = mark_region
+        for frame_index in range(frame_count):
+            clean_frame = _moving_video_background(frame_index)
+            marked_frame = clean_frame.copy()
+            _stamp_gray_mark(marked_frame, mark, x=mark_x, y=mark_y, opacity=0.78)
+            clean_frames.append(clean_frame)
+            source_frames.append(marked_frame)
+
+        source = tmp_path / "marked.mp4"
+        clean_control = tmp_path / "control.mp4"
+        metadata_clean = tmp_path / "metadata-clean.mp4"
+        output = tmp_path / "clean.mp4"
+        all_output = tmp_path / "clean-all.mp4"
+        independent_output = tmp_path / "clean-independent.mp4"
+        _write_synthetic_sora_clip(source, source_frames, fps=fps, ffmpeg=ffmpeg)
+        _write_synthetic_sora_clip(clean_control, clean_frames, fps=fps, ffmpeg=ffmpeg)
+        assert get_ai_metadata(source)
+
+        metadata_result = remove_video_metadata(source, metadata_clean)
+        result = remove_video_visible(source, output, mark="sora", backend="cv2")
+        all_result = remove_video_all(source, all_output, mark="sora", backend="cv2")
+        independent_result = remove_video_visible(
+            source,
+            independent_output,
+            mark="sora",
+            backend="cv2",
+            temporal_consistency=False,
+        )
+
+        assert metadata_result.remaining == {}
+        assert metadata_clean.stat().st_size == source.stat().st_size
+        assert get_ai_metadata(metadata_clean) == {}
+        assert result.output == output
+        assert result.total_frames == frame_count
+        assert result.detected_frames == frame_count
+        assert result.removed_frames == frame_count
+        assert result.remaining_metadata == {}
+        assert get_ai_metadata(output) == {}
+        assert all_result.output == all_output
+        assert all_result.visible_mark == "sora"
+        assert all_result.visible_removed_frames == frame_count
+        assert all_result.detected_metadata
+        assert all_result.remaining_metadata == {}
+        assert all_result.invisible_removed is False
+        assert get_ai_metadata(all_output) == {}
+        assert independent_result.removed_frames == frame_count
+
+        decoded_source, source_fps = _decode_video(source)
+        decoded_control, control_fps = _decode_video(clean_control)
+        decoded_metadata_clean, metadata_clean_fps = _decode_video(metadata_clean)
+        decoded_output, output_fps = _decode_video(output)
+        decoded_all, all_fps = _decode_video(all_output)
+        decoded_independent, independent_fps = _decode_video(independent_output)
+        assert (
+            len(decoded_source)
+            == len(decoded_control)
+            == len(decoded_metadata_clean)
+            == len(decoded_output)
+            == len(decoded_all)
+            == len(decoded_independent)
+            == frame_count
+        )
+        assert source_fps == pytest.approx(fps, abs=0.01)
+        assert control_fps == pytest.approx(source_fps, abs=0.01)
+        assert metadata_clean_fps == pytest.approx(source_fps, abs=0.01)
+        assert output_fps == pytest.approx(source_fps, abs=0.01)
+        assert all_fps == pytest.approx(source_fps, abs=0.01)
+        assert independent_fps == pytest.approx(source_fps, abs=0.01)
+        assert all(
+            np.array_equal(original, metadata_cleaned)
+            for original, metadata_cleaned in zip(decoded_source, decoded_metadata_clean, strict=True)
+        )
+        assert _container_duration(output, ffprobe=ffprobe) == pytest.approx(
+            _container_duration(source, ffprobe=ffprobe),
+            abs=1 / fps,
+        )
+        source_stream = _video_stream_info(source, ffprobe=ffprobe)
+        output_stream = _video_stream_info(output, ffprobe=ffprobe)
+        expected_stream_properties = {
+            "pix_fmt": "yuv420p",
+            "color_range": "tv",
+            "color_space": "bt709",
+            "color_transfer": "bt709",
+            "color_primaries": "bt709",
+            "time_base": "1/90000",
+        }
+        assert source_stream == expected_stream_properties
+        assert _video_stream_info(metadata_clean, ffprobe=ffprobe) == source_stream
+        assert output_stream == expected_stream_properties
+        assert _video_stream_info(all_output, ffprobe=ffprobe) == expected_stream_properties
+        source_audio = _audio_bitstream(source, ffmpeg=ffmpeg)
+        assert source_audio
+        assert _audio_bitstream(metadata_clean, ffmpeg=ffmpeg) == source_audio
+        assert _audio_bitstream(output, ffmpeg=ffmpeg) == source_audio
+        assert _audio_bitstream(all_output, ffmpeg=ffmpeg) == source_audio
+
+        output_scan = scan_video_marks(output, ("sora",))["sora"]
+        all_output_scan = scan_video_marks(all_output, ("sora",))["sora"]
+        assert all(
+            region is None
+            for region in stabilize_sora_localizations(
+                output_scan.detections,
+                provenance=False,
+            )
+        )
+        assert all(
+            region is None
+            for region in stabilize_sora_localizations(
+                all_output_scan.detections,
+                provenance=False,
+            )
+        )
+
+        x, y, width, height = mark_region
+        untouched = np.ones(decoded_source[0].shape[:2], dtype=bool)
+        padding = 24
+        untouched[
+            max(0, y - padding) : min(untouched.shape[0], y + height + padding),
+            max(0, x - padding) : min(untouched.shape[1], x + width + padding),
+        ] = False
+        untouched_psnr: list[float] = []
+        for original, cleaned in zip(decoded_source, decoded_output, strict=True):
+            squared_error = (original.astype(np.float32) - cleaned.astype(np.float32)) ** 2
+            mean_squared_error = float(np.mean(squared_error[untouched]))
+            untouched_psnr.append(float(10 * np.log10((255**2) / mean_squared_error)))
+        assert min(untouched_psnr) >= 35.0
+
+        filled_region = np.logical_not(untouched)
+        temporal_errors: list[float] = []
+        independent_temporal_errors: list[float] = []
+        for frame_index in range(1, frame_count):
+            expected_delta = decoded_control[frame_index].astype(np.float32) - decoded_control[frame_index - 1].astype(
+                np.float32
+            )
+            cleaned_delta = decoded_output[frame_index].astype(np.float32) - decoded_output[frame_index - 1].astype(
+                np.float32
+            )
+            independent_delta = decoded_independent[frame_index].astype(np.float32) - decoded_independent[
+                frame_index - 1
+            ].astype(np.float32)
+            temporal_errors.append(float(np.mean(np.abs(cleaned_delta[filled_region] - expected_delta[filled_region]))))
+            independent_temporal_errors.append(
+                float(np.mean(np.abs(independent_delta[filled_region] - expected_delta[filled_region])))
+            )
+        assert float(np.median(temporal_errors)) <= 1.5
+        assert float(np.percentile(temporal_errors, 95)) <= 2.0
+        assert float(np.median(temporal_errors)) < float(np.median(independent_temporal_errors))
+        assert float(np.percentile(temporal_errors, 95)) <= float(np.percentile(independent_temporal_errors, 95))
+
+    def test_preserves_variable_frame_timestamps(self, tmp_path: Path):
+        from remove_ai_watermarks.video import remove_video_visible
+
+        ffmpeg, ffprobe = _ffmpeg_test_tools()
+        durations = [value for _ in range(6) for value in (1 / 30, 1 / 12, 1 / 20)]
+        mark, mark_region = _independent_sora_mark()
+        mark_x, mark_y, _mark_width, _mark_height = mark_region
+        frames: list[np.ndarray] = []
+        for frame_index in range(len(durations)):
+            frame = _moving_video_background(frame_index)
+            _stamp_gray_mark(frame, mark, x=mark_x, y=mark_y, opacity=0.78)
+            frames.append(frame)
+        source = tmp_path / "marked-vfr.mp4"
+        output = tmp_path / "clean-vfr.mp4"
+        _write_vfr_sora_clip(
+            source,
+            frames,
+            durations=durations,
+            ffmpeg=ffmpeg,
+            start_offset=2.0,
+        )
+        source_timestamps = _video_frame_timestamps(source, ffprobe=ffprobe)
+        source_intervals = np.diff(source_timestamps)
+
+        assert len(source_timestamps) == len(frames)
+        assert source_timestamps[0] == pytest.approx(2.0, abs=1 / 90000)
+        assert float(np.ptp(source_intervals)) >= 0.03
+
+        result = remove_video_visible(source, output, mark="sora", backend="cv2")
+        output_timestamps = _video_frame_timestamps(output, ffprobe=ffprobe)
+
+        assert result.removed_frames == len(frames)
+        assert len(output_timestamps) == len(source_timestamps)
+        assert output_timestamps == pytest.approx(source_timestamps, abs=1 / 90000)
+        assert _stream_start_times(output, ffprobe=ffprobe) == pytest.approx(
+            _stream_start_times(source, ffprobe=ffprobe),
+            abs=1 / 90000,
+        )
+        assert _container_duration(output, ffprobe=ffprobe) == pytest.approx(
+            _container_duration(source, ffprobe=ffprobe),
+            abs=max(durations),
+        )
+        assert _audio_bitstream(output, ffmpeg=ffmpeg) == _audio_bitstream(source, ffmpeg=ffmpeg)
+
+    def test_preserves_nonzero_start_on_constant_rate_clip(self, tmp_path: Path):
+        from remove_ai_watermarks.video import remove_video_visible
+
+        ffmpeg, ffprobe = _ffmpeg_test_tools()
+        mark, mark_region = _independent_sora_mark()
+        mark_x, mark_y, _mark_width, _mark_height = mark_region
+        frames = []
+        for frame_index in range(18):
+            frame = _moving_video_background(frame_index)
+            _stamp_gray_mark(frame, mark, x=mark_x, y=mark_y, opacity=0.78)
+            frames.append(frame)
+        source = tmp_path / "marked-offset.mp4"
+        output = tmp_path / "clean-offset.mp4"
+        _write_synthetic_sora_clip(
+            source,
+            frames,
+            fps=12.0,
+            ffmpeg=ffmpeg,
+            start_offset=2.0,
+        )
+
+        result = remove_video_visible(source, output, mark="sora", backend="cv2")
+
+        assert result.removed_frames == len(frames)
+        assert _video_frame_timestamps(output, ffprobe=ffprobe) == pytest.approx(
+            _video_frame_timestamps(source, ffprobe=ffprobe),
+            abs=1 / 90000,
+        )
+        assert _stream_start_times(output, ffprobe=ffprobe) == pytest.approx(
+            _stream_start_times(source, ffprobe=ffprobe),
+            abs=1 / 90000,
+        )
+        assert _audio_bitstream(output, ffmpeg=ffmpeg) == _audio_bitstream(source, ffmpeg=ffmpeg)
+
 
 class TestVideoVisibleApi:
     def test_auto_prefers_specific_sora_run_over_hailuo_cross_match(
@@ -1252,6 +2392,7 @@ class TestVideoVisibleApi:
         ) -> int:
             assert regions == [sora_box] * 12
             assert kwargs["padding_fraction"] == 0.28
+            assert kwargs["temporal_consistency"] is True
             target.write_bytes(_MP4_FTYP + _box(b"mdat", _VIDEO_PAYLOAD))
             return 12
 
@@ -1287,15 +2428,21 @@ class TestVideoVisibleApi:
             target: Path,
             _scan: VideoScan,
             regions: list[tuple[int, int, int, int] | None],
-            **_kwargs: object,
+            **kwargs: object,
         ) -> int:
             assert regions == [box] * 5
+            assert kwargs["temporal_consistency"] is False
             target.write_bytes(_MP4_FTYP + _box(b"mdat", _VIDEO_PAYLOAD))
             return 5
 
         monkeypatch.setattr(video_visible, "encode_clean_video", fake_encode)
 
-        result = remove_video_visible(source, output, mark="sora")
+        result = remove_video_visible(
+            source,
+            output,
+            mark="sora",
+            temporal_consistency=False,
+        )
 
         assert result.output == output
         assert result.detected_frames == 5
@@ -1441,6 +2588,7 @@ class TestVideoVisibleCli:
         assert result.exit_code == 0, result.output
         assert "temporally stable" in result.output
         assert "auto|sora|veo|seedance|dola|hailuo|kling" in result.output
+        assert "--temporal-consistency" in result.output
 
     def test_reports_removed_frames(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         from remove_ai_watermarks import video
