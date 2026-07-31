@@ -106,21 +106,7 @@ class _RawVideoEncoder:
         if self._stderr_buffer.closed:
             raise RuntimeError("ffmpeg diagnostics have already been collected")
         try:
-            self._stderr_buffer.seek(0, os.SEEK_END)
-            size = self._stderr_buffer.tell()
-            if size <= _FFMPEG_STDERR_LIMIT:
-                self._stderr_buffer.seek(0)
-                raw_stderr = self._stderr_buffer.read()
-            else:
-                payload_limit = _FFMPEG_STDERR_LIMIT - len(_FFMPEG_STDERR_TRUNCATION)
-                head_size = payload_limit // 2
-                tail_size = payload_limit - head_size
-                self._stderr_buffer.seek(0)
-                head = self._stderr_buffer.read(head_size)
-                self._stderr_buffer.seek(-tail_size, os.SEEK_END)
-                tail = self._stderr_buffer.read(tail_size)
-                raw_stderr = head + _FFMPEG_STDERR_TRUNCATION + tail
-            return raw_stderr.decode("utf-8", errors="replace")
+            return _read_bounded_stderr(self._stderr_buffer)
         finally:
             self._stderr_buffer.close()
 
@@ -129,6 +115,25 @@ class _RawVideoEncoder:
         if self._stderr_buffer.closed:
             return
         self._stderr_buffer.close()
+
+
+def _read_bounded_stderr(buffer: BinaryIO) -> str:
+    """Read bounded head-and-tail diagnostics from a seekable binary stream."""
+    buffer.seek(0, os.SEEK_END)
+    size = buffer.tell()
+    if size <= _FFMPEG_STDERR_LIMIT:
+        buffer.seek(0)
+        raw_stderr = buffer.read()
+    else:
+        payload_limit = _FFMPEG_STDERR_LIMIT - len(_FFMPEG_STDERR_TRUNCATION)
+        head_size = payload_limit // 2
+        tail_size = payload_limit - head_size
+        buffer.seek(0)
+        head = buffer.read(head_size)
+        buffer.seek(-tail_size, os.SEEK_END)
+        tail = buffer.read(tail_size)
+        raw_stderr = head + _FFMPEG_STDERR_TRUNCATION + tail
+    return raw_stderr.decode("utf-8", errors="replace")
 
 
 def _known_value(value: object, allowed: frozenset[str]) -> str | None:
@@ -268,11 +273,11 @@ def probe_video_timestamps(source: Path) -> tuple[float, ...]:
 
 
 @contextmanager
-def atomic_video_output(output: Path) -> Generator[Path]:
-    """Yield a sibling temporary path and publish it only after success."""
+def _temporary_video_path(output: Path, *, prefix: str) -> Generator[Path]:
+    """Yield one sibling temporary path and remove it on exit."""
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
-        prefix=f".{output.stem}-",
+        prefix=prefix,
         suffix=output.suffix,
         dir=output.parent,
         delete=False,
@@ -280,9 +285,16 @@ def atomic_video_output(output: Path) -> Generator[Path]:
         temporary_output = Path(stream.name)
     try:
         yield temporary_output
-        os.replace(temporary_output, output)
     finally:
         temporary_output.unlink(missing_ok=True)
+
+
+@contextmanager
+def atomic_video_output(output: Path) -> Generator[Path]:
+    """Yield a sibling temporary path and publish it only after success."""
+    with _temporary_video_path(output, prefix=f".{output.stem}-") as temporary_output:
+        yield temporary_output
+        os.replace(temporary_output, output)
 
 
 def _video_codec_args(suffix: str, *, crf: int, profile: VideoEncodeProfile) -> list[str]:
@@ -320,19 +332,17 @@ def _profile_args(profile: VideoEncodeProfile) -> list[str]:
 
 
 def raw_video_command(
-    source: Path,
     output: Path,
     *,
     width: int,
     height: int,
     fps: float,
-    strip_metadata: bool,
     crf: int,
     profile: VideoEncodeProfile,
     timestamped_input: bool = False,
     copy_input_timestamps: bool = False,
 ) -> list[str]:
-    """Build a source-aware ffmpeg command for BGR frames on standard input."""
+    """Build an ffmpeg command for BGR frames on standard input."""
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg is None:
         raise RuntimeError("Video processing requires ffmpeg on PATH")
@@ -358,34 +368,95 @@ def raw_video_command(
         "-loglevel",
         "error",
         *(["-copyts"] if copy_input_timestamps else []),
-        "-i",
-        str(source),
         *frame_input,
         "-map",
-        "1:v:0",
-        "-map",
-        "0:a?",
+        "0:v:0",
         *_video_codec_args(output.suffix.lower(), crf=crf, profile=profile),
         *_profile_args(profile),
-        "-c:a",
-        "copy",
         "-map_metadata",
-        "-1" if strip_metadata else "0",
+        "-1",
         "-map_chapters",
-        "-1" if strip_metadata else "0",
+        "-1",
     ]
     if timestamped_input:
         command.extend(["-fps_mode", "passthrough"])
     if copy_input_timestamps:
         command.extend(["-avoid_negative_ts", "disabled"])
-    if output.suffix.lower() in {".mp4", ".mov", ".m4v"}:
-        if profile.time_base is not None:
-            numerator, denominator = (int(part) for part in profile.time_base.split("/", 1))
-            if numerator == 1:
-                command.extend(["-video_track_timescale", str(denominator)])
-        command.extend(["-movflags", "+faststart"])
+    if output.suffix.lower() in {".mp4", ".mov", ".m4v"} and profile.time_base is not None:
+        numerator, denominator = (int(part) for part in profile.time_base.split("/", 1))
+        if numerator == 1:
+            command.extend(["-video_track_timescale", str(denominator)])
     command.append(str(output))
     return command
+
+
+def mux_encoded_video(
+    encoded_video: Path,
+    source: Path,
+    output: Path,
+    *,
+    strip_metadata: bool,
+    copy_input_timestamps: bool = False,
+) -> None:
+    """Copy encoded video and source audio into the final container."""
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise RuntimeError("Video processing requires ffmpeg on PATH")
+    command = [
+        ffmpeg,
+        "-y",
+        "-loglevel",
+        "error",
+        *(["-copyts"] if copy_input_timestamps else []),
+        "-i",
+        str(encoded_video),
+        "-i",
+        str(source),
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a?",
+        "-c",
+        "copy",
+        "-map_metadata",
+        "-1" if strip_metadata else "1",
+        "-map_chapters",
+        "-1" if strip_metadata else "1",
+    ]
+    if copy_input_timestamps:
+        command.extend(["-avoid_negative_ts", "disabled"])
+    if output.suffix.lower() in {".mp4", ".mov", ".m4v"}:
+        command.extend(["-movflags", "+faststart"])
+    command.append(str(output))
+    with tempfile.TemporaryFile(mode="w+b") as stderr_buffer:
+        result = subprocess.run(  # noqa: S603
+            command,
+            stdout=subprocess.DEVNULL,
+            stderr=stderr_buffer,
+            check=False,
+        )
+        stderr = _read_bounded_stderr(stderr_buffer)
+    log.info(
+        "ffmpeg video mux: command=%s status=%s stderr=%s",
+        command,
+        result.returncode,
+        stderr,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg failed to mux {output}: {stderr.strip()[:500]}")
+
+
+@contextmanager
+def staged_video_output(output: Path) -> Generator[tuple[Path, Path]]:
+    """Yield video-only and final temporary paths, then publish atomically."""
+    with (
+        atomic_video_output(output) as temporary_output,
+        _temporary_video_path(
+            output,
+            prefix=f".{output.stem}-video-",
+        ) as encoded_video,
+    ):
+        yield encoded_video, temporary_output
 
 
 def start_raw_video_encoder(command: list[str]) -> _RawVideoEncoder:

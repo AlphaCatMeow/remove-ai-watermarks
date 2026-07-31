@@ -21,10 +21,11 @@ import numpy as np
 
 from remove_ai_watermarks.video_encoding import (
     abort_raw_video_encoder,
-    atomic_video_output,
     finish_raw_video_encoder,
+    mux_encoded_video,
     probe_video_encode_profile,
     raw_video_command,
+    staged_video_output,
     start_raw_video_encoder,
 )
 from remove_ai_watermarks.video_synthid import (
@@ -309,29 +310,28 @@ def encode_video_frames(
     if not frames:
         raise ValueError("At least one frame is required for video encoding")
     height, width = frames[0].shape[:2]
-    output.parent.mkdir(parents=True, exist_ok=True)
-    process = start_raw_video_encoder(
-        raw_video_command(
-            source,
-            output,
-            width=width,
-            height=height,
-            fps=fps,
-            strip_metadata=True,
-            crf=18,
-            profile=probe_video_encode_profile(source),
+    with staged_video_output(output) as (encoded_video, temporary_output):
+        process = start_raw_video_encoder(
+            raw_video_command(
+                encoded_video,
+                width=width,
+                height=height,
+                fps=fps,
+                crf=18,
+                profile=probe_video_encode_profile(source),
+            )
         )
-    )
-    frame_pipe = process.stdin
-    try:
-        for frame in frames:
-            if frame.shape[:2] != (height, width):
-                raise ValueError("Video frames must have matching dimensions")
-            frame_pipe.write(frame.tobytes())
-        finish_raw_video_encoder(process, output, operation="SynthID removal encode")
-    except Exception:
-        abort_raw_video_encoder(process)
-        raise
+        frame_pipe = process.stdin
+        try:
+            for frame in frames:
+                if frame.shape[:2] != (height, width):
+                    raise ValueError("Video frames must have matching dimensions")
+                frame_pipe.write(frame.tobytes())
+            finish_raw_video_encoder(process, encoded_video, operation="SynthID removal encode")
+            mux_encoded_video(encoded_video, source, temporary_output, strip_metadata=True)
+        except Exception:
+            abort_raw_video_encoder(process)
+            raise
 
 
 def regenerate_video_candidate(
@@ -375,15 +375,13 @@ def regenerate_video_candidate(
     resolved_device = runtime.resolved_device
     vae = runtime.vae
 
-    with atomic_video_output(output) as temporary_output:
+    with staged_video_output(output) as (encoded_video, temporary_output):
         process = start_raw_video_encoder(
             raw_video_command(
-                source,
-                temporary_output,
+                encoded_video,
                 width=size[0],
                 height=size[1],
                 fps=effective_fps,
-                strip_metadata=True,
                 crf=18,
                 profile=probe_video_encode_profile(source),
             )
@@ -451,9 +449,10 @@ def regenerate_video_candidate(
                 raise ValueError("The selected clip produced fewer than two frames")
             finish_raw_video_encoder(
                 process,
-                temporary_output,
+                encoded_video,
                 operation="SynthID removal encode",
             )
+            mux_encoded_video(encoded_video, source, temporary_output, strip_metadata=True)
         except Exception:
             abort_raw_video_encoder(process)
             raise

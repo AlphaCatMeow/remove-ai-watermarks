@@ -39,11 +39,12 @@ from PIL import Image, ImageDraw, ImageFont
 from remove_ai_watermarks.video import VIDEO_VISIBLE_MARKS
 from remove_ai_watermarks.video_encoding import (
     abort_raw_video_encoder,
-    atomic_video_output,
     finish_raw_video_encoder,
+    mux_encoded_video,
     probe_video_encode_profile,
     probe_video_timestamps,
     raw_video_command,
+    staged_video_output,
     start_raw_video_encoder,
 )
 from remove_ai_watermarks.video_temporal import stabilize_filled_frame
@@ -1331,7 +1332,7 @@ def encode_clean_video(
     if len(regions) != len(scan.detections):
         raise ValueError("Temporal localization count does not match the scanned frame count")
 
-    with atomic_video_output(output) as temporary_output:
+    with staged_video_output(output) as (encoded_video, temporary_output):
         profile = probe_video_encode_profile(source)
         if (profile.component_depth or 0) > 8 or profile.color_transfer in _HDR_TRANSFERS:
             source_format = profile.source_pixel_format or "unknown pixel format"
@@ -1350,12 +1351,10 @@ def encode_clean_video(
             )
         process = start_raw_video_encoder(
             raw_video_command(
-                source,
-                temporary_output,
+                encoded_video,
                 width=scan.width,
                 height=scan.height,
                 fps=scan.fps,
-                strip_metadata=strip_metadata,
                 crf=14,
                 profile=profile,
                 timestamped_input=timestamped_input,
@@ -1426,8 +1425,15 @@ def encode_clean_video(
                 timestamped_writer = None
             finish_raw_video_encoder(
                 process,
-                temporary_output,
+                encoded_video,
                 operation="visible-watermark encode",
+            )
+            mux_encoded_video(
+                encoded_video,
+                source,
+                temporary_output,
+                strip_metadata=strip_metadata,
+                copy_input_timestamps=preserve_start_offset,
             )
         except Exception:
             if timestamped_writer is not None:

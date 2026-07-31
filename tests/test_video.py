@@ -1992,7 +1992,7 @@ class TestVideoVisibleEncoding:
 
         targets: list[Path] = []
 
-        def fake_command(_source: Path, target: Path, **_kwargs: object) -> list[str]:
+        def fake_command(target: Path, **_kwargs: object) -> list[str]:
             targets.append(target)
             return ["ffmpeg", str(target)]
 
@@ -2001,11 +2001,15 @@ class TestVideoVisibleEncoding:
             if fail:
                 raise RuntimeError("synthetic encode failure")
 
+        def fake_mux(encoded: Path, _source: Path, target: Path, **_kwargs: object) -> None:
+            target.write_bytes(encoded.read_bytes())
+
         process = FakeProcess()
         monkeypatch.setattr(video_visible.cv2, "VideoCapture", lambda _path: FakeCapture())
         monkeypatch.setattr(video_visible, "raw_video_command", fake_command)
         monkeypatch.setattr(video_visible, "start_raw_video_encoder", lambda _command: process)
         monkeypatch.setattr(video_visible, "finish_raw_video_encoder", fake_finish)
+        monkeypatch.setattr(video_visible, "mux_encoded_video", fake_mux)
         monkeypatch.setattr(watermark_registry, "resolve_backend", lambda _backend: "cv2")
         return process, targets
 
@@ -2059,6 +2063,43 @@ class TestVideoVisibleEncoding:
         )
 
         with pytest.raises(RuntimeError, match="synthetic encode failure"):
+            encode_clean_video(
+                source,
+                output,
+                scan,
+                [None],
+                backend="cv2",
+                strip_metadata=True,
+            )
+
+        assert output.read_bytes() == b"previous"
+        assert not targets[0].exists()
+
+    def test_failed_mux_preserves_existing_output(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from remove_ai_watermarks import video_visible
+        from remove_ai_watermarks.video_visible import FrameLocalization, VideoScan, encode_clean_video
+
+        source = tmp_path / "source.mp4"
+        source.write_bytes(b"source")
+        output = tmp_path / "clean.mp4"
+        output.write_bytes(b"previous")
+        scan = VideoScan(8, 8, 24.0, (FrameLocalization(0, 0.0, None),))
+        _process, targets = self._patch_single_frame_encode(
+            monkeypatch,
+            encoded_bytes=b"complete video stream",
+            fail=False,
+        )
+
+        def fail_mux(*_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("synthetic mux failure")
+
+        monkeypatch.setattr(video_visible, "mux_encoded_video", fail_mux)
+
+        with pytest.raises(RuntimeError, match="synthetic mux failure"):
             encode_clean_video(
                 source,
                 output,

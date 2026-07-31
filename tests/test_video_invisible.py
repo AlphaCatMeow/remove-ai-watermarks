@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 import threading
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
@@ -14,6 +14,7 @@ from remove_ai_watermarks.video_synthid import DEFAULT_VIDEO_SYNTHID_NOISE_STD
 
 if TYPE_CHECKING:
     from pathlib import Path
+    from typing import BinaryIO
 
 
 def test_encoder_redirects_large_stderr_while_frames_are_streaming(
@@ -84,7 +85,7 @@ def test_regeneration_rejects_noise_outside_unit_interval(tmp_path: Path) -> Non
         )
 
 
-def test_encoder_command_discards_metadata_and_copies_audio(
+def test_encoder_and_mux_commands_separate_streaming_frames_from_source_audio(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -102,20 +103,16 @@ def test_encoder_command_discards_metadata_and_copies_audio(
     )
 
     command = video_encoding.raw_video_command(
-        source,
         output,
         width=8,
         height=8,
         fps=2.0,
-        strip_metadata=True,
         crf=18,
         profile=profile,
     )
 
     metadata_index = command.index("-map_metadata")
     assert command[metadata_index + 1] == "-1"
-    audio_codec_index = command.index("-c:a")
-    assert command[audio_codec_index + 1] == "copy"
     output_pixel_format_index = command.index("-pix_fmt", command.index("-c:v"))
     assert command[output_pixel_format_index + 1] == "yuv420p"
     assert command[command.index("-color_range") + 1] == "tv"
@@ -128,28 +125,77 @@ def test_encoder_command_discards_metadata_and_copies_audio(
         "colorprim=bt709:transfer=bt709:colormatrix=bt709:range=limited"
     )
     assert "pipe:0" in command
-    assert command.index(str(source)) < command.index("pipe:0")
-    assert command[command.index("-map") + 1] == "1:v:0"
-    second_map = command.index("-map", command.index("-map") + 1)
-    assert command[second_map + 1] == "0:a?"
+    assert str(source) not in command
+    assert command[command.index("-map") + 1] == "0:v:0"
     assert "-shortest" not in command
+
+    calls: list[list[str]] = []
+
+    def fake_run(mux_command: list[str], **_kwargs: object) -> SimpleNamespace:
+        calls.append(mux_command)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(video_encoding.subprocess, "run", fake_run)
+    encoded_video = tmp_path / "encoded.mp4"
+    video_encoding.mux_encoded_video(
+        encoded_video,
+        source,
+        output,
+        strip_metadata=True,
+    )
+
+    mux_command = calls[0]
+    assert mux_command.index(str(encoded_video)) < mux_command.index(str(source))
+    assert mux_command[mux_command.index("-map") + 1] == "0:v:0"
+    second_map = mux_command.index("-map", mux_command.index("-map") + 1)
+    assert mux_command[second_map + 1] == "1:a?"
+    assert mux_command[mux_command.index("-c") + 1] == "copy"
+    assert mux_command[mux_command.index("-map_metadata") + 1] == "-1"
+    assert "-shortest" not in mux_command
+
+
+def test_mux_reports_bounded_disk_backed_stderr(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    diagnostic = b"synthetic mux diagnostic"
+    tail_diagnostic = b"synthetic mux diagnostic tail"
+    caplog.set_level("INFO", logger=video_encoding.__name__)
+    monkeypatch.setattr(video_encoding.shutil, "which", lambda _name: "/usr/bin/ffmpeg")
+
+    def fake_run(_command: list[str], **kwargs: object) -> SimpleNamespace:
+        stderr = cast("BinaryIO", kwargs["stderr"])
+        stderr.write(diagnostic + b"x" * 262144 + tail_diagnostic)
+        stderr.flush()
+        return SimpleNamespace(returncode=7)
+
+    monkeypatch.setattr(video_encoding.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match=diagnostic.decode()):
+        video_encoding.mux_encoded_video(
+            tmp_path / "encoded.mp4",
+            tmp_path / "source.mp4",
+            tmp_path / "output.mp4",
+            strip_metadata=True,
+        )
+
+    assert "ffmpeg stderr truncated" in caplog.text
+    assert tail_diagnostic.decode() in caplog.text
 
 
 def test_timestamped_encoder_reads_nut_and_passes_pts_through(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = tmp_path / "source.mp4"
     output = tmp_path / "candidate.mp4"
     monkeypatch.setattr(video_encoding.shutil, "which", lambda _name: "/usr/bin/ffmpeg")
 
     command = video_encoding.raw_video_command(
-        source,
         output,
         width=8,
         height=8,
         fps=24.0,
-        strip_metadata=True,
         crf=18,
         profile=video_encoding.VideoEncodeProfile(time_base="1/90000"),
         timestamped_input=True,
