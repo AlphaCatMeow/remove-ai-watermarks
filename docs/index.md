@@ -19,6 +19,7 @@ to run the tool. Use the maintainer references only when changing the code.
 | Page | Purpose |
 | --- | --- |
 | [Module internals](module-internals.md) | Current architecture, invariants, and regression guards by module. |
+| [Code provenance](code-provenance.md) | Required notices for licensed derivative work. |
 | [Verification plan](verification-plan.md) | Verification methods, completed measurements, and remaining validation gaps. |
 | [Release and distribution](release-and-distribution.md) | PyPI, Homebrew, Hugging Face Space, and release workflow. |
 | [Watermarking landscape](watermarking-landscape.md) | Vendor signals and detection approaches. |

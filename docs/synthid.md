@@ -623,7 +623,7 @@ it; (3) **historical engineering conclusion:** this dated run argued for a
 higher ControlNet strength than the then-current default. That proposal was
 later superseded. The current resolver intentionally shares the 0.10/0.15
 ladder between SDXL and ControlNet and uses a separate Qwen ladder; see
-`noai/watermark_profiles.py`.
+`_internal/watermark_profiles.py`.
 Source images are private (faces / product shots), not committed; reproduce on any
 photoreal + flat-graphic gpt-image pair, varying the seed, and re-checking the
 oracle.

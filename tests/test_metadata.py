@@ -110,8 +110,8 @@ class TestHasAiMetadata:
 
     def test_strip_c2pa_boxes_removes_uuid_box(self, tmp_path: Path):
         """ISOBMFF strip should drop the C2PA uuid box and keep everything else."""
+        from remove_ai_watermarks._internal.isobmff import strip_c2pa_boxes
         from remove_ai_watermarks.metadata import C2PA_UUID
-        from remove_ai_watermarks.noai.isobmff import strip_c2pa_boxes
 
         ftyp = b"\x00\x00\x00\x18ftypavif\x00\x00\x00\x00avifmif1"
         # uuid box: size(4) + 'uuid' + 16-byte UUID + minimal payload (8 bytes -> total 32)
@@ -123,7 +123,7 @@ class TestHasAiMetadata:
 
     def test_strip_c2pa_boxes_passthrough_for_non_isobmff(self):
         """Non-ISOBMFF input must be returned unchanged."""
-        from remove_ai_watermarks.noai.isobmff import strip_c2pa_boxes
+        from remove_ai_watermarks._internal.isobmff import strip_c2pa_boxes
 
         data = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + b"\x00" * 100
         cleaned, stripped = strip_c2pa_boxes(data)
@@ -1375,7 +1375,7 @@ class TestSoftBinding:
     """C2PA soft-binding alg identifier -> forensic-watermark vendor name."""
 
     def test_vendors_in_recognizes_known_algs(self):
-        from remove_ai_watermarks.noai.c2pa import soft_binding_vendors_in
+        from remove_ai_watermarks._internal.c2pa import soft_binding_vendors_in
 
         assert soft_binding_vendors_in(b"...alg...com.adobe.trustmark.P...") == ["Adobe TrustMark"]
         assert soft_binding_vendors_in(b"com.digimarc.validate.1") == ["Digimarc"]
@@ -1385,7 +1385,7 @@ class TestSoftBinding:
         assert soft_binding_vendors_in(b"io.iscc.v0") == ["ISCC (content code)"]
 
     def test_vendors_in_empty_when_absent(self):
-        from remove_ai_watermarks.noai.c2pa import soft_binding_vendors_in
+        from remove_ai_watermarks._internal.c2pa import soft_binding_vendors_in
 
         assert soft_binding_vendors_in(b"no soft binding here") == []
 
@@ -1472,8 +1472,8 @@ class TestLateProvenanceBox:
         return p
 
     def test_scan_c2pa_region_finds_late_box(self, tmp_path: Path):
+        from remove_ai_watermarks._internal.isobmff import scan_c2pa_region
         from remove_ai_watermarks.metadata import C2PA_UUID
-        from remove_ai_watermarks.noai.isobmff import scan_c2pa_region
 
         region = scan_c2pa_region(self._mp4_late_c2pa(tmp_path))
         assert C2PA_UUID in region
@@ -1495,7 +1495,7 @@ class TestLateProvenanceBox:
         assert has_ai_metadata(self._mp4_late_c2pa(tmp_path)) is True
 
     def test_scan_c2pa_region_non_isobmff_is_empty(self, tmp_path: Path):
-        from remove_ai_watermarks.noai.isobmff import scan_c2pa_region
+        from remove_ai_watermarks._internal.isobmff import scan_c2pa_region
 
         p = tmp_path / "not.bin"
         p.write_bytes(b"\x89PNG\r\n\x1a\n not an isobmff file")
@@ -1505,7 +1505,7 @@ class TestLateProvenanceBox:
         """A 64-bit largesize (size32 == 1) uuid box must be walked and collected."""
         import struct
 
-        from remove_ai_watermarks.noai.isobmff import scan_c2pa_region
+        from remove_ai_watermarks._internal.isobmff import scan_c2pa_region
 
         payload = b"LARGESIZE-C2PA-MANIFEST"
         total = 16 + len(payload)  # 4 (size32=1) + 4 (type) + 8 (largesize) + payload
@@ -1516,7 +1516,7 @@ class TestLateProvenanceBox:
 
     def test_scan_c2pa_region_caps_at_max_total(self, tmp_path: Path):
         """The collected payload is bounded by ``max_total`` (never unbounded)."""
-        from remove_ai_watermarks.noai.isobmff import scan_c2pa_region
+        from remove_ai_watermarks._internal.isobmff import scan_c2pa_region
 
         p = tmp_path / "big.mp4"
         p.write_bytes(_MP4_FTYP + _box(b"uuid", b"A" * 5000))
@@ -1550,7 +1550,7 @@ class TestMetaBoxXmpBlanking:
     in place (same length -> iloc offsets and image data stay intact)."""
 
     def test_blanks_ai_packet_only(self):
-        from remove_ai_watermarks.noai.isobmff import blank_ai_xmp_packets
+        from remove_ai_watermarks._internal.isobmff import blank_ai_xmp_packets
 
         before, after = b"IMG_BEFORE" * 4, b"IMG_AFTER" * 4
         data = before + _AI_XMP + after + _PLAIN_XMP
@@ -1563,13 +1563,13 @@ class TestMetaBoxXmpBlanking:
         assert b"dc:rights" in out  # plain XMP left alone
 
     def test_no_packet_is_noop(self):
-        from remove_ai_watermarks.noai.isobmff import blank_ai_xmp_packets
+        from remove_ai_watermarks._internal.isobmff import blank_ai_xmp_packets
 
         data = b"just some mdat bytes, no xmp here"
         assert blank_ai_xmp_packets(data) == (data, 0)
 
     def test_plain_xmp_untouched(self):
-        from remove_ai_watermarks.noai.isobmff import blank_ai_xmp_packets
+        from remove_ai_watermarks._internal.isobmff import blank_ai_xmp_packets
 
         out, n = blank_ai_xmp_packets(_PLAIN_XMP)
         assert n == 0
@@ -1600,7 +1600,7 @@ class TestIsobmffMetadataRemoval:
     def test_strips_ai_xmp_uuid_box(self):
         # A uuid box carrying a TC260 AIGC label is dropped by content match,
         # regardless of the (non-C2PA) XMP UUID's byte order.
-        from remove_ai_watermarks.noai.isobmff import strip_c2pa_boxes
+        from remove_ai_watermarks._internal.isobmff import strip_c2pa_boxes
 
         xmp_uuid = bytes(range(16))  # arbitrary, not the C2PA UUID
         payload = b'<x:xmpmeta><TC260:AIGC>{"Label":"1"}</TC260:AIGC></x:xmpmeta>'
@@ -1611,7 +1611,7 @@ class TestIsobmffMetadataRemoval:
 
     def test_keeps_plain_non_ai_xmp(self):
         # A uuid box with ordinary (non-AI) XMP must be preserved.
-        from remove_ai_watermarks.noai.isobmff import strip_c2pa_boxes
+        from remove_ai_watermarks._internal.isobmff import strip_c2pa_boxes
 
         xmp_uuid = bytes(range(16))
         payload = b"<x:xmpmeta><dc:rights>(c) me</dc:rights></x:xmpmeta>"

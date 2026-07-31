@@ -1,7 +1,4 @@
-"""AI metadata detection and removal.
-
-Wraps the noai-watermark metadata handling for stripping AI-generation
-metadata (EXIF, PNG text chunks, C2PA provenance) from images.
+"""Detect and remove AI provenance metadata from image containers.
 
 For metadata-only operations, the heavy ML dependencies are NOT required.
 """
@@ -104,7 +101,7 @@ IPTC_AI_MARKERS: tuple[bytes, ...] = (
 # (Meta / Instagram / MidJourney) use ``trainedAlgorithmicMedia``. Including the bare
 # token flagged clean procedural images as AI (is_ai=high + has_invisible_target=True ->
 # a diffusion scrub of clean content), contradicting the c2pa layer, which sets
-# source_type without ai_source for it (tests/test_noai.py::test_plain_algorithmic_media_not_flagged_ai).
+# source_type without ai_source for it (tests/test_metadata_internals.py::test_plain_algorithmic_media_not_flagged_ai).
 # It is not a substring of the trained/composite tokens, so its removal does not affect
 # their detection.
 
@@ -218,7 +215,7 @@ def _is_ai_value(value: str) -> bool:
     detection: NovelAI stamps a generic ``Title``/``Source`` text chunk (an
     AI-shaped value under a non-AI key) that ``_is_ai_key`` alone would keep.
     """
-    from remove_ai_watermarks.noai.constants import AI_GENERATOR_TOKENS
+    from remove_ai_watermarks._internal.constants import AI_GENERATOR_TOKENS
 
     value_lower = value.lower()
     return any(token in value_lower for token in AI_GENERATOR_TOKENS)
@@ -310,7 +307,7 @@ def _scan_head_impl(image_path: Path, size: int) -> bytes:
     with open(image_path, "rb") as f:
         head = f.read(size)
     # Lazy import: isobmff imports this module's constants at top level.
-    from remove_ai_watermarks.noai import isobmff
+    from remove_ai_watermarks._internal import isobmff
 
     if isobmff.is_isobmff(head):
         region = isobmff.scan_c2pa_region(image_path)
@@ -348,7 +345,7 @@ def has_ai_metadata(image_path: Path) -> bool:
     # Check C2PA — via the official c2pa-python reader first (spec-tracking, every
     # container it supports), then a binary scan that also catches AVIF/HEIF/JPEG-XL
     # containers and synthetic/partial blobs the validator rejects.
-    from remove_ai_watermarks.noai.c2pa import read_manifest_store_json
+    from remove_ai_watermarks._internal.c2pa import read_manifest_store_json
 
     if read_manifest_store_json(image_path) is not None:
         return True
@@ -466,7 +463,7 @@ def aigc_label(image_path: Path) -> dict[str, str] | None:
     # in ``moov.udta.meta.keys`` and points to a raw JSON value in ``ilst``.
     # Read it through the bounded box walker so a tail ``moov`` after a large
     # ``mdat`` is found without loading or scanning the media payload.
-    from remove_ai_watermarks.noai.isobmff import tc260_aigc_payloads
+    from remove_ai_watermarks._internal.isobmff import tc260_aigc_payloads
 
     isobmff_candidates = tuple(payload.decode("utf-8", "replace") for payload in tc260_aigc_payloads(image_path))
     if result := aigc_label_from_metadata(b"", isobmff_candidates):
@@ -475,7 +472,7 @@ def aigc_label(image_path: Path) -> dict[str, str] | None:
     # Native MKV/WebM TC260 metadata: ``Segment.Tags.Tag.SimpleTag`` carries
     # ``TagName=AIGC`` and the raw JSON in ``TagString``. The EBML walker seeks
     # over clusters and reads only bounded metadata values.
-    from remove_ai_watermarks.noai.ebml import tc260_aigc_payloads as ebml_tc260_aigc_payloads
+    from remove_ai_watermarks._internal.ebml import tc260_aigc_payloads as ebml_tc260_aigc_payloads
 
     ebml_candidates = tuple(payload.decode("utf-8", "replace") for payload in ebml_tc260_aigc_payloads(image_path))
     if result := aigc_label_from_metadata(b"", ebml_candidates):
@@ -486,11 +483,11 @@ def aigc_label(image_path: Path) -> dict[str, str] | None:
     # that could collide inside compressed video.
     legacy_payloads: tuple[bytes, ...] = ()
     if image_path.suffix.lower() == ".avi":
-        from remove_ai_watermarks.noai.riff import tc260_aigc_payloads as riff_tc260_aigc_payloads
+        from remove_ai_watermarks._internal.riff import tc260_aigc_payloads as riff_tc260_aigc_payloads
 
         legacy_payloads = riff_tc260_aigc_payloads(image_path)
     elif image_path.suffix.lower() == ".flv":
-        from remove_ai_watermarks.noai.flv import tc260_aigc_payloads as flv_tc260_aigc_payloads
+        from remove_ai_watermarks._internal.flv import tc260_aigc_payloads as flv_tc260_aigc_payloads
 
         legacy_payloads = flv_tc260_aigc_payloads(image_path)
     legacy_candidates = tuple(payload.decode("utf-8", "replace") for payload in legacy_payloads)
@@ -672,7 +669,7 @@ def synthid_source(image_path: Path) -> str | None:
     Returns:
         Comma-joined vendor name(s) (e.g. ``"OpenAI"``) or None.
     """
-    from remove_ai_watermarks.noai.c2pa import extract_c2pa_info, synthid_vendors_in
+    from remove_ai_watermarks._internal.c2pa import extract_c2pa_info, synthid_vendors_in
 
     # PNG: the caBX chunk parser gives a clean, structured issuer.
     vendors = extract_c2pa_info(image_path).get("synthid_vendors")
@@ -694,7 +691,7 @@ def synthid_source(image_path: Path) -> str | None:
 
 def generator_from_metadata(candidates: Iterable[str], scan: bytes = b"") -> str | None:
     """Return a known AI generator from collected EXIF, PNG, or XMP values."""
-    from remove_ai_watermarks.noai.constants import AI_GENERATOR_TOKENS
+    from remove_ai_watermarks._internal.constants import AI_GENERATOR_TOKENS
 
     creator_tools = (
         match.group(1).decode("latin1", "replace")
@@ -844,7 +841,7 @@ def _ai_exif_targets(loaded: dict[str, Any]) -> list[tuple[str, int, bytes, str]
     """
     import piexif
 
-    from remove_ai_watermarks.noai.constants import AI_GENERATOR_TOKENS
+    from remove_ai_watermarks._internal.constants import AI_GENERATOR_TOKENS
 
     ifd0: dict[int, Any] = loaded.get("0th") or {}
     ifde: dict[int, Any] = loaded.get("Exif") or {}
@@ -903,7 +900,7 @@ def get_ai_metadata(image_path: Path) -> dict[str, str]:
     """
     from PIL import Image
 
-    from remove_ai_watermarks.noai.c2pa import extract_c2pa_info, soft_binding_vendors_in, synthid_verdict
+    from remove_ai_watermarks._internal.c2pa import extract_c2pa_info, soft_binding_vendors_in, synthid_verdict
 
     result: dict[str, str] = {}
 
@@ -923,7 +920,7 @@ def get_ai_metadata(image_path: Path) -> dict[str, str]:
     except Exception as exc:
         logger.debug("PIL could not open %s for AI-metadata scan: %s", image_path, exc)
 
-    # C2PA manifest fields from the single canonical parser (noai/c2pa.py).
+    # C2PA manifest fields from the single canonical parser (_internal/c2pa.py).
     c2pa = extract_c2pa_info(image_path)
     for key in (
         "c2pa_manifest",
@@ -1215,7 +1212,7 @@ def remove_ai_metadata(
     # offset-preserving streaming path; images retain the in-memory item scrub
     # needed for XMP/EXIF inside mdat/idat. Route the remaining formats by suffix
     # OR by an ``ftyp`` content sniff.
-    from remove_ai_watermarks.noai.isobmff import (
+    from remove_ai_watermarks._internal.isobmff import (
         blank_ai_exif_tokens,
         blank_ai_xmp_packets,
         blank_tc260_aigc_tags,

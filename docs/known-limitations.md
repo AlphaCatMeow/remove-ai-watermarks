@@ -133,7 +133,7 @@ or a different random seed may change the verifier result.
 
 The base Qwen and `qwen-zimage` profiles have profile specific strength
 behavior. Consult `remove-ai-watermarks invisible --help` and the source of
-[`watermark_profiles.py`](../src/remove_ai_watermarks/noai/watermark_profiles.py)
+[`watermark_profiles.py`](../src/remove_ai_watermarks/_internal/watermark_profiles.py)
 for the current resolver.
 
 ### Pipelines have different quality tradeoffs

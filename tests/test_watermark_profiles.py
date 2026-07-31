@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from remove_ai_watermarks.noai.watermark_profiles import resolve_strength, viable_steps
+from remove_ai_watermarks._internal.watermark_profiles import resolve_strength, viable_steps
 
 
 class TestViableSteps:

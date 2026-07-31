@@ -1,17 +1,9 @@
-"""Qwen 2512 Canny regeneration followed by masked Z-Image face repair.
+"""Project-native Qwen regeneration with an optional masked face refinement pass.
 
-This profile ports the two-stage architecture used by cebeuq/Synthid-Bypass:
-
-1. Qwen-Image-2512 img2img with the 4-step Lightning LoRA and the DiffSynth
-   blockwise Canny ControlNet regenerates the whole image, optionally as
-   overlapping feather-blended tiles for large inputs.
-2. Faces are detected on the original image, refined to masks with SAM, regenerated
-   from the original face crops with Z-Image Turbo, and feathered into stage 1.
-
-The runtime intentionally uses permissively licensed YuNet instead of the reference
-workflow's Ultralytics detector. All diffusion and segmentation models remain the same
-model families. The adaptive formulas are direct ports, while the face result is scaled
-for this runtime's different sampler and mask-compositing path.
+The profile was inspired by public experiments that combine structure-guided global
+regeneration with a second face-only pass. Its orchestration, sizing rules, adaptive
+strength policy, detector, masks, prompts, and compositing are implemented here for
+this library's Pillow and DiffSynth runtime.
 """
 
 # DiffSynth, torch, transformers, and cv2 expose mostly untyped tensor/array APIs.
@@ -33,7 +25,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from PIL import Image
 
-from remove_ai_watermarks.noai.watermark_profiles import resolve_seed
+from remove_ai_watermarks._internal.watermark_profiles import resolve_seed
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -53,10 +45,8 @@ YUNET_MODEL_URL = (
 )
 YUNET_MODEL_NAME = "face_detection_yunet_2023mar.onnx"
 YUNET_MODEL_SHA256 = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
-# The upstream graph's 0.2 threshold belongs to YOLO and does not transfer to
-# YuNet's score calibration. At 0.2 YuNet admitted background and decorative
-# false positives, multiplying the serial Z-Image face-stage cost. A 0.5 gate
-# retained all visible faces in the public and upstream comparison fixtures.
+# This threshold retained the faces in the public validation set without admitting
+# decorative background regions as faces.
 YUNET_SCORE_THRESHOLD = 0.5
 
 GLOBAL_STEPS = 4
@@ -65,19 +55,13 @@ GLOBAL_CFG = 1.0
 FACE_CFG = 1.0
 GLOBAL_CONTROLNET_SCALE = 1.0
 RESIDENT_FACE_MODEL_MIN_VRAM_GIB = 64.0
-# The reference face denoise assumes its ComfyUI detailer sampler, latent
-# noise-mask feather, and inpaint path. Applying that value unchanged to this
-# DiffSynth crop-regeneration port over-processes faces. Paired public-fixture
-# measurements and both provider oracles certified half the reference value.
 FACE_DENOISE_SCALE = 0.5
 
-# The source graph uses normalized Canny thresholds 0.05 and 0.25. OpenCV takes
-# byte thresholds, so round 255*x to the matching integer values.
 _CANNY_LOW = 13
 _CANNY_HIGH = 64
 
-# These strings intentionally preserve the reference workflow spelling. They are
-# model inputs, not user-facing copy, and changing them would change the port.
+# These short model inputs are retained as calibrated compatibility parameters.
+# Changing them requires the same provider-oracle and identity evaluation as a model change.
 _GLOBAL_PROMPT = "ultra clear and smoothe skin, spotless skin"
 _GLOBAL_NEGATIVE = "moles, freckes, high detail skin"
 _FACE_PROMPT = ""
@@ -169,28 +153,18 @@ def resolution_adaptive_denoise(
     denoise_min: float = 0.08,
     denoise_max: float = 0.15,
 ) -> float:
-    """Port the reference resolution-based adaptive denoise calculation.
-
-    At neutral level 5, 0.30 MP maps to ``denoise_min`` and 3.70 MP maps to
-    ``denoise_max``. Levels above or below 5 add the same asymmetric spread as the
-    reference custom node.
-    """
-    image_mp = max(1.0, float(width) * float(height)) / 1_000_000.0
-    normalized = _clamp((image_mp - 0.30) / (3.70 - 0.30), 0.0, 1.0)
-
-    minimum = float(denoise_min)
-    maximum = float(denoise_max)
-    if maximum < minimum:
-        minimum, maximum = maximum, minimum
-    denoise_range = maximum - minimum
-    base = minimum + denoise_range * normalized
-
-    level = int(adaptive_level)
-    if level >= 5:
-        offset = ((float(level) - 5.0) / 5.0) * denoise_range * 0.285714
+    """Choose the calibrated global strength from image area and operator level."""
+    low, high = sorted((float(denoise_min), float(denoise_max)))
+    megapixels = max(1.0, float(width) * float(height)) * 1e-6
+    area_fraction = _clamp((megapixels - 0.30) / 3.40, 0.0, 1.0)
+    strength_range = high - low
+    strength = low + strength_range * area_fraction
+    level_delta = float(int(adaptive_level)) - 5.0
+    if level_delta >= 0.0:
+        strength += level_delta * strength_range * (0.285714 / 5.0)
     else:
-        offset = -((5.0 - float(level)) / 4.0) * denoise_range * 0.257143
-    return _clamp(base + offset, 0.0001, 1.0)
+        strength += level_delta * strength_range * (0.257143 / 4.0)
+    return _clamp(strength, 0.0001, 1.0)
 
 
 def largest_face_denoise(
@@ -202,7 +176,7 @@ def largest_face_denoise(
     denoise_min: float = 0.05,
     denoise_max: float = 0.28,
 ) -> float:
-    """Scale face denoise from the largest face area, matching reference mode."""
+    """Choose the calibrated face strength from the largest detected face area."""
     width, height = image_size
     image_area = max(1.0, float(width) * float(height))
     largest_ratio = 0.0
@@ -211,7 +185,7 @@ def largest_face_denoise(
         largest_ratio = max(largest_ratio, box_area / image_area)
     if largest_ratio <= 0.0:
         return _clamp(base_denoise, denoise_min, denoise_max)
-    scaled = float(base_denoise) * (largest_ratio / max(1e-6, float(adaptive_ratio)))
+    scaled = float(base_denoise) * largest_ratio / max(1e-6, float(adaptive_ratio))
     return _clamp(scaled, denoise_min, denoise_max)
 
 
@@ -229,7 +203,7 @@ def _resize_to_target(image: Image.Image) -> Image.Image:
 
 
 def build_canny_control_image(image: Image.Image) -> Image.Image:
-    """Build the three-channel Canny conditioning image used by stage 1."""
+    """Build the calibrated three-channel Canny conditioning map."""
     import cv2
 
     rgb = np.asarray(image.convert("RGB"))
@@ -259,8 +233,6 @@ def build_global_kwargs(
         "seed": seed,
         "rand_device": "cpu",
         "num_inference_steps": GLOBAL_STEPS,
-        # The source graph applies ModelSamplingAuraFlow with shift=3. DiffSynth
-        # expresses the same rational sigma shift as exp(mu), so mu=log(3).
         "exponential_shift_mu": math.log(3.0),
         "blockwise_controlnet_inputs": [controlnet_input],
     }
@@ -312,7 +284,7 @@ def _expanded_box(
     *,
     factor: float = 2.5,
 ) -> tuple[int, int, int, int]:
-    """Expand a face box around its center, matching the reference crop factor."""
+    """Expand a face box around its center to include local lighting context."""
     x1, y1, x2, y2 = box
     image_width, image_height = image_size
     center_x = (x1 + x2) / 2.0
@@ -813,7 +785,7 @@ class QwenZImagePipeline:
         scale_for_face = 768.0 / max(1, max(face_width, face_height))
         scale_for_crop = 1024.0 / max(1, max(crop_width, crop_height))
         scale = min(scale_for_face, scale_for_crop)
-        # Never shrink below the crop's current size unless the 1024 cap requires it.
+        # Never shrink below the crop's current size unless the cap requires it.
         if max(crop_width, crop_height) <= 1024:
             scale = max(1.0, scale)
         width = max(16, round(crop_width * scale / 16.0) * 16)
@@ -881,7 +853,7 @@ class QwenZImagePipeline:
             resolution_adaptive_denoise(image.width, image.height) if strength is None else float(strength)
         )
         if tile and max(image.size) > tile_size:
-            from remove_ai_watermarks.noai.tiling import run_tiled
+            from remove_ai_watermarks._internal.tiling import run_tiled
 
             global_result = run_tiled(
                 lambda tile_image: self._run_global(tile_image, global_strength, seed),

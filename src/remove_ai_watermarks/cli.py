@@ -21,8 +21,8 @@ from typing import TYPE_CHECKING, Any, Literal, NoReturn
 import click
 
 from remove_ai_watermarks import __version__, image_io, watermark_registry
-from remove_ai_watermarks.noai.constants import SUPPORTED_FORMATS
-from remove_ai_watermarks.noai.watermark_profiles import (
+from remove_ai_watermarks._internal.constants import SUPPORTED_FORMATS
+from remove_ai_watermarks._internal.watermark_profiles import (
     resolve_seed,
     resolve_steps,
     resolve_strength,
@@ -158,7 +158,7 @@ def _resolved_strength_for_display(
     if pipeline == "qwen-zimage" and strength is None:
         from PIL import Image
 
-        from remove_ai_watermarks.noai.qwen_zimage_pipeline import resolution_adaptive_denoise
+        from remove_ai_watermarks._internal.qwen_zimage_pipeline import resolution_adaptive_denoise
 
         with Image.open(source) as image:
             return resolution_adaptive_denoise(image.width, image.height)
@@ -269,7 +269,7 @@ def _normalize_pipeline(ctx: click.Context, param: click.Parameter, value: str |
     """
     if value is None:
         return None
-    from remove_ai_watermarks.noai.watermark_profiles import normalize_profile
+    from remove_ai_watermarks._internal.watermark_profiles import normalize_profile
 
     normalized = normalize_profile(value)
     if value.strip().lower() == "default":

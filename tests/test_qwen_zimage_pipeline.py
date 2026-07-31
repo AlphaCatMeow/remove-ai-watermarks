@@ -13,7 +13,7 @@ from PIL import Image
 
 def _mock_watermark_runtime_deps(monkeypatch):
     """Bypass optional GPU imports while testing Qwen Z-Image routing."""
-    from remove_ai_watermarks.noai import watermark_remover
+    from remove_ai_watermarks._internal import watermark_remover
 
     fake_torch = MagicMock()
     fake_torch.float16 = object()
@@ -23,26 +23,24 @@ def _mock_watermark_runtime_deps(monkeypatch):
     monkeypatch.setattr(watermark_remover, "is_watermark_removal_available", lambda: True)
 
 
-def test_resolution_adaptive_denoise_matches_reference_formula():
-    from remove_ai_watermarks.noai.qwen_zimage_pipeline import resolution_adaptive_denoise
+def test_resolution_adaptive_denoise_preserves_calibrated_values():
+    from remove_ai_watermarks._internal.qwen_zimage_pipeline import resolution_adaptive_denoise
 
-    # The reference node maps 0.30 MP to the lower bound and 3.70 MP to the
-    # upper bound. Level 6 adds one fifth of the configured upward spread.
     assert resolution_adaptive_denoise(600, 500, adaptive_level=6) == pytest.approx(0.084)
     assert resolution_adaptive_denoise(2000, 1850, adaptive_level=6) == pytest.approx(0.154)
 
 
-def test_largest_face_denoise_matches_reference_formula():
-    from remove_ai_watermarks.noai.qwen_zimage_pipeline import largest_face_denoise
+def test_largest_face_denoise_preserves_calibrated_values():
+    from remove_ai_watermarks._internal.qwen_zimage_pipeline import largest_face_denoise
 
     image_size = (1000, 1000)
-    assert largest_face_denoise([(0, 0, 300, 100)], image_size) == 0.10
-    assert largest_face_denoise([(0, 0, 150, 100)], image_size) == 0.05
-    assert largest_face_denoise([(0, 0, 900, 900)], image_size) == 0.28
+    assert largest_face_denoise([(0, 0, 300, 100)], image_size) == pytest.approx(0.10)
+    assert largest_face_denoise([(0, 0, 150, 100)], image_size) == pytest.approx(0.05)
+    assert largest_face_denoise([(0, 0, 900, 900)], image_size) == pytest.approx(0.28)
 
 
 def test_global_kwargs_use_lightning_and_diffsynth_controlnet_shape():
-    from remove_ai_watermarks.noai.qwen_zimage_pipeline import build_global_kwargs
+    from remove_ai_watermarks._internal.qwen_zimage_pipeline import build_global_kwargs
 
     image = Image.new("RGB", (1122, 1402))
     kwargs = build_global_kwargs(image, strength=0.11, seed=7, controlnet_input="CONTROL")
@@ -56,10 +54,12 @@ def test_global_kwargs_use_lightning_and_diffsynth_controlnet_shape():
     assert kwargs["width"] == 1120
     assert kwargs["height"] == 1392
     assert kwargs["exponential_shift_mu"] == pytest.approx(math.log(3.0))
+    assert kwargs["prompt"] == "ultra clear and smoothe skin, spotless skin"
+    assert kwargs["negative_prompt"] == "moles, freckes, high detail skin"
 
 
-def test_face_kwargs_use_zimage_reference_settings():
-    from remove_ai_watermarks.noai.qwen_zimage_pipeline import build_face_kwargs
+def test_face_kwargs_use_project_zimage_settings():
+    from remove_ai_watermarks._internal.qwen_zimage_pipeline import build_face_kwargs
 
     crop = Image.new("RGB", (713, 941))
     kwargs = build_face_kwargs(crop, strength=0.17, seed=9)
@@ -71,10 +71,12 @@ def test_face_kwargs_use_zimage_reference_settings():
     assert kwargs["seed"] == 9
     assert kwargs["width"] == 704
     assert kwargs["height"] == 928
+    assert kwargs["prompt"] == ""
+    assert kwargs["negative_prompt"] == "blurry, ugly, bad quality,"
 
 
-def test_canny_control_image_matches_reference_thresholds():
-    from remove_ai_watermarks.noai.qwen_zimage_pipeline import build_canny_control_image
+def test_canny_control_image_is_three_channel_and_detects_an_edge():
+    from remove_ai_watermarks._internal.qwen_zimage_pipeline import build_canny_control_image
 
     source = np.zeros((64, 80, 3), dtype=np.uint8)
     source[:, 40:] = 255
@@ -83,11 +85,21 @@ def test_canny_control_image_matches_reference_thresholds():
     assert result.shape == (64, 80, 3)
     assert np.array_equal(result[:, :, 0], result[:, :, 1])
     assert np.array_equal(result[:, :, 1], result[:, :, 2])
-    assert result.max() == 255
+    import cv2
+
+    expected = cv2.Canny(cv2.cvtColor(source, cv2.COLOR_RGB2GRAY), 13, 64)
+    assert np.array_equal(result[:, :, 0], expected)
+
+
+def test_face_crop_geometry_preserves_calibrated_values():
+    from remove_ai_watermarks._internal.qwen_zimage_pipeline import QwenZImagePipeline, _expanded_box
+
+    assert _expanded_box((100, 100, 200, 200), (500, 500)) == (25, 25, 275, 275)
+    assert QwenZImagePipeline._detail_size((500, 400), (100, 80)) == (1024, 816)
 
 
 def test_yunet_download_targets_verified_lfs_artifact():
-    from remove_ai_watermarks.noai.qwen_zimage_pipeline import (
+    from remove_ai_watermarks._internal.qwen_zimage_pipeline import (
         YUNET_MODEL_SHA256,
         YUNET_MODEL_URL,
         YUNET_SCORE_THRESHOLD,
@@ -95,14 +107,11 @@ def test_yunet_download_targets_verified_lfs_artifact():
 
     assert YUNET_MODEL_URL.startswith("https://media.githubusercontent.com/media/opencv/opencv_zoo/")
     assert YUNET_MODEL_SHA256 == "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
-    # YuNet scores are not calibrated like the upstream YOLO detector's scores.
-    # A 0.2 YuNet threshold admitted background and decorative false positives,
-    # multiplying the serial Z-Image face-stage cost on crowded scenes.
     assert pytest.approx(0.5) == YUNET_SCORE_THRESHOLD
 
 
 def test_resident_face_models_disable_vram_offload():
-    from remove_ai_watermarks.noai.qwen_zimage_pipeline import (
+    from remove_ai_watermarks._internal.qwen_zimage_pipeline import (
         QwenZImagePipeline,
         _pin_vram_managed_models,
         resolve_face_model_residency,
@@ -154,7 +163,7 @@ def test_resident_face_models_disable_vram_offload():
 
 
 def test_static_prompt_cache_reuses_embeddings_without_caching_image_edits():
-    from remove_ai_watermarks.noai.qwen_zimage_pipeline import _cache_static_prompt_embeddings
+    from remove_ai_watermarks._internal.qwen_zimage_pipeline import _cache_static_prompt_embeddings
 
     class PromptUnit:
         output_params = ("prompt_embeds",)
@@ -186,7 +195,7 @@ def test_static_prompt_cache_reuses_embeddings_without_caching_image_edits():
 def test_sam_pixels_match_model_dtype_without_casting_boxes():
     import torch
 
-    from remove_ai_watermarks.noai.qwen_zimage_pipeline import _prepare_sam_inputs
+    from remove_ai_watermarks._internal.qwen_zimage_pipeline import _prepare_sam_inputs
 
     class Inputs(dict[str, torch.Tensor]):
         def to(self, device: str):
@@ -206,7 +215,7 @@ def test_sam_pixels_match_model_dtype_without_casting_boxes():
 
 
 def test_sam_prompts_match_impact_center_and_clip_masks_to_boxes():
-    from remove_ai_watermarks.noai.qwen_zimage_pipeline import (
+    from remove_ai_watermarks._internal.qwen_zimage_pipeline import (
         _clip_sam_masks_to_boxes,
         _sam_point_prompts,
     )
@@ -226,7 +235,7 @@ def test_sam_prompts_match_impact_center_and_clip_masks_to_boxes():
 
 
 def test_sam_proposal_selection_matches_impact_sub_threshold():
-    from remove_ai_watermarks.noai.qwen_zimage_pipeline import _select_sam_masks
+    from remove_ai_watermarks._internal.qwen_zimage_pipeline import _select_sam_masks
 
     masks = np.zeros((2, 3, 8, 8), dtype=np.float32)
     masks[0, 0, 1:3, 1:3] = 1.0
@@ -256,7 +265,7 @@ def test_sam_proposal_selection_matches_impact_sub_threshold():
 def test_sam_bfloat16_outputs_convert_to_numpy_float32():
     import torch
 
-    from remove_ai_watermarks.noai.qwen_zimage_pipeline import _sam_outputs_to_numpy
+    from remove_ai_watermarks._internal.qwen_zimage_pipeline import _sam_outputs_to_numpy
 
     masks = torch.ones((1, 2, 3, 4, 4), dtype=torch.bfloat16)
     scores = torch.tensor([[[0.95, 0.75, 0.50], [0.99, 0.80, 0.60]]], dtype=torch.bfloat16)
@@ -269,7 +278,7 @@ def test_sam_bfloat16_outputs_convert_to_numpy_float32():
 
 
 def test_face_composite_preserves_every_pixel_outside_mask():
-    from remove_ai_watermarks.noai.qwen_zimage_pipeline import composite_face
+    from remove_ai_watermarks._internal.qwen_zimage_pipeline import composite_face
 
     base = np.full((32, 32, 3), 10, dtype=np.uint8)
     detail = np.full((32, 32, 3), 240, dtype=np.uint8)
@@ -284,7 +293,7 @@ def test_face_composite_preserves_every_pixel_outside_mask():
 
 
 def test_profile_defaults_to_four_global_steps():
-    from remove_ai_watermarks.noai.watermark_profiles import (
+    from remove_ai_watermarks._internal.watermark_profiles import (
         normalize_profile,
         resolve_seed,
         resolve_steps,
@@ -305,7 +314,7 @@ def test_cli_exposes_qwen_zimage_profile():
     assert "qwen-zimage" in _PIPELINE_CHOICES
 
 
-def test_cli_qwen_zimage_keeps_upstream_postprocess_default(tmp_image_path, monkeypatch):
+def test_cli_qwen_zimage_keeps_profile_postprocess_default(tmp_image_path, monkeypatch):
     from remove_ai_watermarks import cli
 
     mock_engine = MagicMock()
@@ -338,7 +347,7 @@ def test_cli_qwen_zimage_keeps_upstream_postprocess_default(tmp_image_path, monk
 
 
 def test_watermark_remover_dispatches_to_full_pipeline(tmp_path, monkeypatch):
-    from remove_ai_watermarks.noai.watermark_remover import WatermarkRemover
+    from remove_ai_watermarks._internal.watermark_remover import WatermarkRemover
 
     _mock_watermark_runtime_deps(monkeypatch)
     source = tmp_path / "source.png"
@@ -364,7 +373,7 @@ def test_watermark_remover_dispatches_to_full_pipeline(tmp_path, monkeypatch):
 
 
 def test_watermark_remover_dispatches_qwen_tiling_to_full_pipeline(tmp_path, monkeypatch):
-    from remove_ai_watermarks.noai.watermark_remover import WatermarkRemover
+    from remove_ai_watermarks._internal.watermark_remover import WatermarkRemover
 
     _mock_watermark_runtime_deps(monkeypatch)
     source = tmp_path / "source.png"
@@ -395,11 +404,11 @@ def test_watermark_remover_dispatches_qwen_tiling_to_full_pipeline(tmp_path, mon
 
 
 def test_qwen_tiling_runs_global_tiles_then_one_full_frame_face_stage(monkeypatch):
-    from remove_ai_watermarks.noai.qwen_zimage_pipeline import (
+    from remove_ai_watermarks._internal.qwen_zimage_pipeline import (
         QwenZImagePipeline,
         resolution_adaptive_denoise,
     )
-    from remove_ai_watermarks.noai.tiling import plan_tiles
+    from remove_ai_watermarks._internal.tiling import plan_tiles
 
     image = Image.new("RGB", (1500, 1500), (20, 30, 40))
     runtime = QwenZImagePipeline(device="cuda", torch_dtype="bf16")
@@ -415,7 +424,7 @@ def test_qwen_tiling_runs_global_tiles_then_one_full_frame_face_stage(monkeypatc
     monkeypatch.setattr(runtime, "_run_global", fake_global)
     monkeypatch.setattr(runtime, "_run_faces", face_stage)
     monkeypatch.setattr(
-        "remove_ai_watermarks.noai.qwen_zimage_pipeline.detect_faces",
+        "remove_ai_watermarks._internal.qwen_zimage_pipeline.detect_faces",
         lambda _image: [(100, 100, 300, 300)],
     )
     monkeypatch.setattr(runtime, "_sam_masks", lambda _image, _boxes: [np.ones((1500, 1500), dtype=np.uint8)])
@@ -435,9 +444,6 @@ def test_qwen_tiling_runs_global_tiles_then_one_full_frame_face_stage(monkeypatc
     assert all(strength == pytest.approx(resolution_adaptive_denoise(1500, 1500)) for _, strength, _ in global_calls)
     assert all(seed == 0 for _, _, seed in global_calls)
     face_stage.assert_called_once()
-    # Keep this literal independent from the runtime helper: the port deliberately
-    # uses half the upstream face denoise because it lacks the reference latent
-    # noise-mask feather and uses a different sampler/runtime.
     assert face_stage.call_args.kwargs["strength"] == pytest.approx(0.0296296296)
     assert face_stage.call_args.args[0] is image
     assert face_stage.call_args.args[1].size == image.size
@@ -445,7 +451,7 @@ def test_qwen_tiling_runs_global_tiles_then_one_full_frame_face_stage(monkeypatc
 
 
 def test_global_only_preload_skips_face_models(monkeypatch):
-    from remove_ai_watermarks.noai.qwen_zimage_pipeline import QwenZImagePipeline
+    from remove_ai_watermarks._internal.qwen_zimage_pipeline import QwenZImagePipeline
 
     runtime = QwenZImagePipeline(device="cuda", torch_dtype="bf16")
     qwen = MagicMock()
@@ -456,7 +462,7 @@ def test_global_only_preload_skips_face_models(monkeypatch):
     monkeypatch.setattr(runtime, "_load_zimage", zimage)
     monkeypatch.setattr(runtime, "_load_sam", sam)
     monkeypatch.setattr(
-        "remove_ai_watermarks.noai.qwen_zimage_pipeline._yunet_model_path",
+        "remove_ai_watermarks._internal.qwen_zimage_pipeline._yunet_model_path",
         yunet,
     )
 
@@ -469,7 +475,7 @@ def test_global_only_preload_skips_face_models(monkeypatch):
 
 
 def test_full_preload_still_loads_face_models(monkeypatch):
-    from remove_ai_watermarks.noai.qwen_zimage_pipeline import QwenZImagePipeline
+    from remove_ai_watermarks._internal.qwen_zimage_pipeline import QwenZImagePipeline
 
     runtime = QwenZImagePipeline(device="cuda", torch_dtype="bf16")
     qwen = MagicMock()
@@ -480,7 +486,7 @@ def test_full_preload_still_loads_face_models(monkeypatch):
     monkeypatch.setattr(runtime, "_load_zimage", zimage)
     monkeypatch.setattr(runtime, "_load_sam", sam)
     monkeypatch.setattr(
-        "remove_ai_watermarks.noai.qwen_zimage_pipeline._yunet_model_path",
+        "remove_ai_watermarks._internal.qwen_zimage_pipeline._yunet_model_path",
         yunet,
     )
 
@@ -493,7 +499,7 @@ def test_full_preload_still_loads_face_models(monkeypatch):
 
 
 def test_watermark_remover_forwards_global_only_preload(monkeypatch):
-    from remove_ai_watermarks.noai.watermark_remover import WatermarkRemover
+    from remove_ai_watermarks._internal.watermark_remover import WatermarkRemover
 
     runtime = MagicMock()
     remover = WatermarkRemover.__new__(WatermarkRemover)
@@ -506,7 +512,7 @@ def test_watermark_remover_forwards_global_only_preload(monkeypatch):
 
 
 def test_qwen_zimage_rejects_runtime_knobs_that_change_fixed_graph(tmp_path, monkeypatch):
-    from remove_ai_watermarks.noai.watermark_remover import WatermarkRemover
+    from remove_ai_watermarks._internal.watermark_remover import WatermarkRemover
 
     _mock_watermark_runtime_deps(monkeypatch)
     with pytest.raises(ValueError, match="fixed Qwen-Image-2512"):
@@ -517,7 +523,7 @@ def test_qwen_zimage_rejects_runtime_knobs_that_change_fixed_graph(tmp_path, mon
     remover = WatermarkRemover(device="cpu", pipeline="qwen-zimage")
     with pytest.raises(ValueError, match=r"CFG 1\.0"):
         remover.remove_watermark(source, guidance_scale=2.0)
-    with pytest.raises(ValueError, match="4-step Lightning"):
+    with pytest.raises(ValueError, match="requires 4 steps"):
         remover.remove_watermark(source, num_inference_steps=8)
 
 

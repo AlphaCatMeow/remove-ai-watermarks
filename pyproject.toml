@@ -51,7 +51,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     # Official C2PA reader (Content Authenticity Initiative, MIT/Apache-2.0). The
     # primary, spec-tracking manifest parser for the identify/metadata path; the
-    # hand-rolled caBX/CBOR scanner in noai/c2pa.py is kept only as a fallback for
+    # hand-rolled caBX/CBOR scanner in _internal/c2pa.py is kept only as a fallback for
     # synthetic/partial blobs the validator rejects. Binary wheel (Rust), but the
     # import is light (no torch/numpy) so it fits the dependency-light identify
     # host. Prebuilt wheels cover the full CI matrix (linux/macos/windows).
@@ -235,8 +235,8 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "scripts/*.py" = ["G004", "S108", "S310", "T20"]
 "tests/*.py" = ["ANN", "S101", "S105", "S106", "S108"]
-"src/remove_ai_watermarks/noai/watermark_remover.py" = ["S603", "S606", "S607", "T201"]  # subprocess calls for auto-install/CUDA fix
-"src/remove_ai_watermarks/noai/c2pa.py" = ["S110"]  # try-except-pass for corrupt file handling
+"src/remove_ai_watermarks/_internal/watermark_remover.py" = ["S603", "S606", "S607"]  # nvidia-smi capability probe
+"src/remove_ai_watermarks/_internal/c2pa.py" = ["S110"]  # try-except-pass for corrupt file handling
 
 [tool.ruff.format]
 quote-style = "double"

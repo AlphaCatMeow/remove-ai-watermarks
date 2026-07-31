@@ -119,7 +119,7 @@ reported per file without retrying the same multi-GB initialization.
 
 Native MP4/MOV TC260 labels follow TC260-PG-20257A:
 `moov.udta.meta.keys` maps an `AIGC` key to a raw JSON value in `ilst`.
-[`noai/isobmff.py`](../src/remove_ai_watermarks/noai/isobmff.py) walks those
+[`_internal/isobmff.py`](../src/remove_ai_watermarks/_internal/isobmff.py) walks those
 nested boxes by seeking, so detection reaches a tail `moov` without reading the
 preceding `mdat`. The MP4/MOV/M4V/M4A removal path first validates the top-level
 box walk, then copies the source to a sibling temporary file in bounded chunks.
@@ -130,14 +130,14 @@ validated JSON value with same-length spaces. This preserves every box size,
 Publication is atomic, and a malformed top-level walk is copied unchanged. A
 generic `AIGC` key whose value has no TC260 field is ignored.
 
-[`noai/ebml.py`](../src/remove_ai_watermarks/noai/ebml.py) provides the
+[`_internal/ebml.py`](../src/remove_ai_watermarks/_internal/ebml.py) provides the
 corresponding bounded Matroska/WebM reader. It seeks over clusters and accepts
 only a `Segment.Tags.Tag.SimpleTag` pairing `TagName=AIGC` with a JSON
 `TagString` carrying a TC260 field. The existing ffmpeg stream-copy path removes
 those container tags without transcoding the encoded streams.
 
-[`noai/riff.py`](../src/remove_ai_watermarks/noai/riff.py) and
-[`noai/flv.py`](../src/remove_ai_watermarks/noai/flv.py) implement the remaining
+[`_internal/riff.py`](../src/remove_ai_watermarks/_internal/riff.py) and
+[`_internal/flv.py`](../src/remove_ai_watermarks/_internal/flv.py) implement the remaining
 normative TC260 video placements. The RIFF walker reads only AVI
 `LIST/INFO/AIGC` children. The FLV walker skips media tags and parses the AMF0
 `script.onMetaData.AIGC` string. Both require a recognized TC260 JSON field and
@@ -284,12 +284,12 @@ Regression coverage:
 
 ### C2PA
 
-[`noai/c2pa.py`](../src/remove_ai_watermarks/noai/c2pa.py) reads C2PA with the
+[`_internal/c2pa.py`](../src/remove_ai_watermarks/_internal/c2pa.py) reads C2PA with the
 official `c2pa-python` reader first. Its byte-level PNG parser remains a fallback
 for partial and synthetic fixtures that the official reader rejects.
 
 Vendor attribution comes from the registry in
-[`noai/constants.py`](../src/remove_ai_watermarks/noai/constants.py). Derived
+[`_internal/constants.py`](../src/remove_ai_watermarks/_internal/constants.py). Derived
 issuer and platform maps should not be maintained separately.
 
 ### Metadata scanning and stripping
@@ -303,7 +303,7 @@ Key contracts:
 - JPEG stripping walks metadata segments and preserves the entropy-coded image
   scan.
 - ISOBMFF containers use
-  [`noai/isobmff.py`](../src/remove_ai_watermarks/noai/isobmff.py).
+  [`_internal/isobmff.py`](../src/remove_ai_watermarks/_internal/isobmff.py).
 - Native MP4/MOV TC260 `AIGC` entries are read from
   `moov.udta.meta.keys/ilst` and blanked without changing box sizes.
 - Native MKV/WebM TC260 `AIGC` entries are read from
@@ -327,7 +327,7 @@ test proves that it no longer appears in the output.
 Regression coverage:
 
 - [`test_metadata.py`](../tests/test_metadata.py)
-- [`test_noai.py`](../tests/test_noai.py)
+- [`test_metadata_internals.py`](../tests/test_metadata_internals.py)
 - [`test_security_clamp.py`](../tests/test_security_clamp.py)
 
 ### Provenance report
@@ -474,7 +474,7 @@ Regression coverage:
 
 ### Profiles and strength
 
-[`noai/watermark_profiles.py`](../src/remove_ai_watermarks/noai/watermark_profiles.py)
+[`_internal/watermark_profiles.py`](../src/remove_ai_watermarks/_internal/watermark_profiles.py)
 is the source of truth for:
 
 - profile aliases;
@@ -494,11 +494,18 @@ router.
 [`invisible_engine.py`](../src/remove_ai_watermarks/invisible_engine.py) handles
 image sizing, optional pre-upscaling, postprocessing, and the public engine
 interface. It delegates model execution to
-[`noai/watermark_remover.py`](../src/remove_ai_watermarks/noai/watermark_remover.py).
+[`_internal/watermark_remover.py`](../src/remove_ai_watermarks/_internal/watermark_remover.py).
 
 The Python engine and CLI do not have identical defaults for every optional
 postprocessing argument. Integrations that require reproducibility should pass
 the relevant values explicitly.
+
+The standard Qwen and ControlNet prompts are calibrated model inputs, and the
+ControlNet edge map uses fixed Canny thresholds of 100 and 200. Treat those
+values as behavioral compatibility contracts: a refactor must preserve them,
+and any deliberate change requires image-quality evaluation rather than only a
+unit-test pass. Exact prompt and edge-map regression guards live in
+`test_platform.py` and `test_invisible_engine.py`.
 
 Regression coverage:
 
@@ -519,7 +526,7 @@ Regression coverage:
 
 ### Qwen plus Z-Image
 
-[`noai/qwen_zimage_pipeline.py`](../src/remove_ai_watermarks/noai/qwen_zimage_pipeline.py)
+[`_internal/qwen_zimage_pipeline.py`](../src/remove_ai_watermarks/_internal/qwen_zimage_pipeline.py)
 implements the fixed CUDA-only two-stage profile:
 
 1. Qwen Image with Canny conditioning regenerates the frame.
@@ -530,13 +537,11 @@ The profile rejects a custom model identifier. Its global and face model stack
 is fixed by the implementation. When tiling is enabled, only the global stage
 is tiled; the face stage runs once after the tiles are blended.
 
-The resolution and largest-face adaptive formulas remain exact ports of the
-reference workflow. The face stage applies half the reference result because
-this port uses a different sampler and composites regenerated SAM pixels rather
-than using the reference latent inpaint mask and noise feather. Paired face
-evaluations favored this scale on identity, perceptual distance, and full-image
-similarity, and the exact OpenAI and Gemini candidates both passed their
-matching provider oracle. The global stage stays unchanged.
+The maintained implementation preserves the previously oracle-tested strength,
+conditioning, crop, and sampler parameters as compatibility contracts. Its Python
+orchestration, YuNet integration, SAM selection, masks, sizing helpers, and pixel
+compositing are implemented for this runtime. Changing a calibrated model input
+requires the same provider-oracle and identity evaluation as a model change.
 
 Regression coverage:
 
@@ -545,7 +550,7 @@ Regression coverage:
 
 ### Tiling
 
-[`noai/tiling.py`](../src/remove_ai_watermarks/noai/tiling.py) contains pure
+[`_internal/tiling.py`](../src/remove_ai_watermarks/_internal/tiling.py) contains pure
 tile planning, feather weights, tile orchestration, and region compositing.
 
 Tiling engages only when requested and the long side exceeds the tile size.

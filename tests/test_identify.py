@@ -718,7 +718,7 @@ class TestSparkleDetectRemoveAlignment:
 
 
 class TestIdentifyImportIsLight:
-    """`import identify` must stay torch-free (lazy noai/__init__): the package
+    """`import identify` must stay torch-free (lazy _internal/__init__): the package
     is deployed on a 512 MB host where eagerly pulling torch/diffusers OOMs."""
 
     def test_import_identify_does_not_pull_torch(self):

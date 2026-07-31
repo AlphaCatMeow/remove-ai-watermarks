@@ -318,7 +318,7 @@ def _select_stable_visible_mark(
 
 def _platform_from_video_metadata(markers: dict[str, str]) -> str | None:
     """Map supported C2PA-derived marker text to its generating platform."""
-    from remove_ai_watermarks.noai.constants import C2PA_AI_VENDORS
+    from remove_ai_watermarks._internal.constants import C2PA_AI_VENDORS
 
     marker_text = "\n".join(markers.values()).casefold()
     if not marker_text:

@@ -32,7 +32,7 @@ from pathlib import Path
 import click
 import numpy as np
 
-from remove_ai_watermarks.noai.constants import SUPPORTED_FORMATS
+from remove_ai_watermarks._internal.constants import SUPPORTED_FORMATS
 
 log = logging.getLogger(__name__)
 

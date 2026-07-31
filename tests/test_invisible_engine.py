@@ -215,7 +215,7 @@ class TestCannyControlImage:
             pytest.skip("diffusion extra (torch/diffusers) not installed")
         import numpy as np
 
-        from remove_ai_watermarks.noai.watermark_remover import WatermarkRemover
+        from remove_ai_watermarks._internal.watermark_remover import WatermarkRemover
 
         rng = np.random.default_rng(0)
         img = Image.fromarray(rng.integers(0, 256, (64, 80, 3), dtype=np.uint8))
@@ -224,4 +224,10 @@ class TestCannyControlImage:
         arr = np.array(out)
         assert out.mode == "RGB"
         assert arr.shape == (64, 80, 3)
-        assert arr.max() <= 255
+        import cv2
+
+        gray = cv2.cvtColor(np.asarray(img.convert("RGB")), cv2.COLOR_RGB2GRAY)
+        expected = cv2.Canny(gray, 100, 200)
+        assert np.array_equal(arr[:, :, 0], expected)
+        assert np.array_equal(arr[:, :, 1], expected)
+        assert np.array_equal(arr[:, :, 2], expected)

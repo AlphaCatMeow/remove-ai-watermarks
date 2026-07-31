@@ -25,6 +25,18 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
+from remove_ai_watermarks._internal.c2pa import (
+    c2pa_info_from_manifest_store,
+    cbor_text_after,
+    extract_c2pa_info,
+    soft_binding_vendors_in,
+)
+from remove_ai_watermarks._internal.constants import (
+    C2PA_AI_TOOLS,
+    C2PA_AI_VENDORS,
+    C2PA_IDENTITY_AI_ORGS,
+    C2PA_ISSUERS,
+)
 from remove_ai_watermarks.metadata import (
     AI_METADATA_KEYS,
     AIGC_MARKERS,
@@ -45,18 +57,6 @@ from remove_ai_watermarks.metadata import (
     scan_head,
     xai_signature,
     xai_signature_pair,
-)
-from remove_ai_watermarks.noai.c2pa import (
-    c2pa_info_from_manifest_store,
-    cbor_text_after,
-    extract_c2pa_info,
-    soft_binding_vendors_in,
-)
-from remove_ai_watermarks.noai.constants import (
-    C2PA_AI_TOOLS,
-    C2PA_AI_VENDORS,
-    C2PA_IDENTITY_AI_ORGS,
-    C2PA_ISSUERS,
 )
 from remove_ai_watermarks.watermark_registry import GEMINI_SPARKLE_TRUST_CONF
 
@@ -822,7 +822,7 @@ def _identify_from_evidence(
     issuers = [info["issuer"]] if info.get("issuer") else _issuers_in(head)
     # Full AI generation (trainedAlgorithmicMedia) vs an AI-enhanced real photo
     # (compositeWithTrainedAlgorithmicMedia). The structured kind is parsed once in
-    # noai.c2pa._populate_registry_fields (covers PNG + any container the c2pa-python
+    # _internal.c2pa._populate_registry_fields (covers PNG + any container the c2pa-python
     # reader handles); fall back to a raw head scan for the non-PNG raw-blob path
     # where extract_c2pa_info returns {}. Full generation wins when both appear.
     c2pa_source_kind = info.get("ai_source_kind")

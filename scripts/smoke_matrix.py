@@ -590,8 +590,8 @@ def _diffusion_rows(r: Runner, tmp: Path, doubao: Path) -> None:
     try:
         import numpy as np
 
+        from remove_ai_watermarks._internal.watermark_remover import WatermarkRemover
         from remove_ai_watermarks.image_io import imread
-        from remove_ai_watermarks.noai.watermark_remover import WatermarkRemover
 
         src = imread(str(mj))
         h, w = src.shape[:2]
