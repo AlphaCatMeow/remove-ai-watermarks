@@ -52,8 +52,8 @@ class TestConstants:
         assert ".jpg" in SUPPORTED_FORMATS
 
     def test_supported_formats_include_heic_avif(self):
-        # HEIC/AVIF are first-class on the pixel path now (read+write via pillow-heif),
-        # so batch discovers them and the CLI does not warn.
+        # HEIC/AVIF are first-class when the visible pixel extra is installed
+        # (read+write via pillow-heif), so batch discovers them without a warning.
         assert {".heic", ".heif", ".avif"} <= SUPPORTED_FORMATS
 
     def test_supported_formats_exclude_jpeg_xl(self):

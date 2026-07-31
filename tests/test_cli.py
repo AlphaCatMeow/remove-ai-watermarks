@@ -542,7 +542,7 @@ class TestAllCommand:
             result = runner.invoke(main, ["all", str(sample_png), "-o", str(output)])
         assert result.exit_code != 0, result.output
         assert "NOT removed" in result.output
-        assert "remove-ai-watermarks[gpu]" in result.output
+        assert "remove-ai-watermarks[diffusion]" in result.output
         assert output.exists()  # visible + metadata still produced a file
 
     def test_all_reports_metadata_that_survived_stripping(self, runner, sample_png, tmp_path):
@@ -933,21 +933,21 @@ class TestBatchCommand:
 
 
 class TestGpuHintMarkup:
-    """The GPU-extra install hint must reach the user with the ``[gpu]`` token
+    """The diffusion install hint must reach the user with the ``[diffusion]`` token
     intact (plain output prints it verbatim, with no markup parsing)."""
 
     def test_invisible_install_hint_keeps_gpu_extra(self, runner, sample_png):
         with patch("remove_ai_watermarks.invisible_engine.is_available", return_value=False):
             result = runner.invoke(main, ["invisible", str(sample_png)])
         assert result.exit_code != 0
-        assert "remove-ai-watermarks[gpu]" in result.output
+        assert "remove-ai-watermarks[diffusion]" in result.output
 
     def test_all_install_hint_keeps_gpu_extra(self, runner, sample_png):
         # The `all` pipeline skips the invisible step with a warning that carries
-        # the same hint; it must keep the [gpu] extra too.
+        # the same hint; it must keep the [diffusion] extra too.
         with patch("remove_ai_watermarks.invisible_engine.is_available", return_value=False):
             result = runner.invoke(main, ["all", str(sample_png)])
-        assert "remove-ai-watermarks[gpu]" in result.output
+        assert "remove-ai-watermarks[diffusion]" in result.output
 
 
 class TestEraseCommand:

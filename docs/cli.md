@@ -9,15 +9,35 @@ remove-ai-watermarks [OPTIONS] COMMAND [ARGS]
 Run `remove-ai-watermarks COMMAND --help` for the complete option list and
 defaults. This page focuses on choosing the right command.
 
+## Command dependency map
+
+| Command or signal | Required installation |
+| --- | --- |
+| `metadata` and metadata-only `identify` | Default package |
+| Visible signals in `identify` | `remove-ai-watermarks[visible]` (`pixels` is the minimal runtime) |
+| Open DWT-DCT signals in `identify` | `remove-ai-watermarks[detect]` |
+| Adobe TrustMark signals in `identify` | `remove-ai-watermarks[trustmark]` |
+| `visible` and `erase` with OpenCV | `remove-ai-watermarks[visible]` (`pixels` is the minimal runtime) |
+| `visible` or `erase` with MI-GAN | `remove-ai-watermarks[migan]` |
+| `visible` or `erase` with big-LaMa | `remove-ai-watermarks[lama]` |
+| `invisible` | `remove-ai-watermarks[diffusion]` |
+| `invisible --pipeline qwen-zimage` | `remove-ai-watermarks[qwen-zimage]` |
+| HEIC/HEIF/AVIF pixel input | Add `remove-ai-watermarks[heif]` |
+| Every production command and backend | `remove-ai-watermarks[all]` |
+
+`batch` requires the same extra as its selected mode. Extras can be combined in
+one installation, for example `remove-ai-watermarks[visible,detect,heif]`.
+
 ## Inspect an image
 
 ```bash
 remove-ai-watermarks identify image.png
 ```
 
-`identify` combines supported metadata and pixel signals into one provenance
-report. When no signal is found, it reports the origin as unknown. It does not
-claim the image is clean.
+`identify` always inspects supported metadata. When pixel extras are installed,
+it also evaluates supported visible and invisible pixel signals. When no signal
+is found, it reports the origin as unknown. It does not claim the image is
+clean.
 
 Machine readable output:
 
@@ -35,6 +55,8 @@ Despite the historical option name, `--no-visible` skips both visible and open
 invisible pixel detectors. Metadata inspection still runs.
 
 ## Remove known visible marks
+
+Install `remove-ai-watermarks[visible]` before using `visible` or `erase`.
 
 ```bash
 remove-ai-watermarks visible image.png -o clean.png
@@ -130,7 +152,7 @@ non-ISOBMFF audio and video path.
 Install the diffusion dependencies first:
 
 ```bash
-uv tool install --force "remove-ai-watermarks[gpu]"
+uv tool install --force "remove-ai-watermarks[diffusion]"
 ```
 
 Then run:
@@ -194,6 +216,12 @@ It is a memory strategy, not a guarantee of better quality.
 
 ## Run the full pipeline
 
+The `all` command and the `all` installation extra are separate concepts. The
+command runs every applicable stage. Installing `remove-ai-watermarks[all]`
+makes every production backend available; a smaller installation such as
+`remove-ai-watermarks[visible,diffusion]` can also run the command with fewer
+optional backends.
+
 ```bash
 remove-ai-watermarks all image.png -o clean.png
 ```
@@ -206,7 +234,7 @@ The command runs:
 
 The visible options and diffusion options are also available on `all`.
 
-If diffusion is required but the `gpu` extra is unavailable, `all` still
+If diffusion is required but the `diffusion` extra is unavailable, `all` still
 writes the result of the visible and metadata stages, prints a prominent
 warning, and exits with code 1. This prevents a partial result from being
 reported as complete.

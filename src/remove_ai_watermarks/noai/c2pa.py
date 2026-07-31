@@ -43,7 +43,7 @@ from remove_ai_watermarks.noai.constants import (
 
 logger = logging.getLogger(__name__)
 
-# Official C2PA reader (c2pa-python, a core dependency). It is the primary,
+# Official C2PA reader (c2pa-python, a default dependency). It is the primary,
 # spec-tracking manifest parser; the hand-rolled caBX/CBOR scanner below stays as
 # a fallback for synthetic/partial blobs the validator rejects. The import is
 # guarded so a partially-broken install degrades to the byte-scan rather than

@@ -722,8 +722,8 @@ def _visible_text_marks(image_path: Path, *, image: NDArray[Any] | None = None) 
 def _invisible_watermark(image_path: Path) -> str | None:
     """Open invisible-watermark scheme name (SD/SDXL/FLUX) or None.
 
-    Optional: needs the imwatermark decoder (extra ``detect``). Returns None if
-    it is not installed or no known watermark decodes.
+    Optional: needs the torch-free DWT-DCT decoder (extra ``detect``). Returns
+    None if it is not installed or no known watermark decodes.
     """
     from remove_ai_watermarks.invisible_watermark import detect_invisible_watermark
 
@@ -761,6 +761,9 @@ def _collect_visible_signals(
         image = imread(image_path)
     except Exception as exc:  # cv2 missing - detectors fall back / no-op
         logger.debug("visible-mark decode unavailable: %s", exc)
+        return platform
+    if image is None:
+        return platform
 
     sparkle_conf = _visible_sparkle(image_path, image=image)
     if sparkle_conf is not None and sparkle_conf >= _SPARKLE_THRESHOLD:
@@ -1087,8 +1090,8 @@ def identify(
         image_path: Path to the image (PNG, JPEG, WebP, or ISOBMFF container).
         check_visible: Also run the registered visible-mark detectors through cv2.
             Set False for a metadata-only, dependency-light scan.
-        check_invisible: Also decode open invisible watermarks (SD/SDXL/FLUX) via
-            the optional imwatermark library. No-op when it is not installed.
+        check_invisible: Also decode optional open invisible watermarks
+            (SD/SDXL/FLUX). No-op when the decoder extra is not installed.
 
     File-backed metadata extraction runs first. The extracted evidence is then
     evaluated independently, followed by the optional pixel-backed visible and

@@ -782,6 +782,15 @@ class TestIdentifyVisibleTextMarks:
             identify(tmp_clean_png, check_visible=True, check_invisible=False)
         assert mock_imread.call_count == 1
 
+    def test_missing_pixel_extra_preserves_metadata_verdict(self, tmp_png_with_ai_metadata: Path):
+        import remove_ai_watermarks.image_io as image_io
+
+        with patch.object(image_io, "imread", side_effect=ModuleNotFoundError("No module named 'cv2'")):
+            report = identify(tmp_png_with_ai_metadata, check_visible=True, check_invisible=False)
+
+        assert report.is_ai_generated is True
+        assert report.confidence == "high"
+
 
 # ── Caveats and serialization ───────────────────────────────────────
 
@@ -989,7 +998,7 @@ class TestIdentifyC2paDevice:
 from remove_ai_watermarks.invisible_watermark import is_available as _wm_available  # noqa: E402
 
 
-@pytest.mark.skipif(not _wm_available(), reason="invisible-watermark not installed")
+@pytest.mark.skipif(not _wm_available(), reason="detect extra not installed")
 class TestIdentifyInvisibleWatermark:
     def _sdxl_watermarked(self, tmp_path: Path) -> Path:
         import cv2

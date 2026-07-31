@@ -1,8 +1,7 @@
-"""Tests for open invisible-watermark (imwatermark) detection.
+"""Tests for open DWT-DCT watermark detection.
 
-Each known scheme is round-tripped: embed its exact upstream pattern with the
-encoder, then assert the detector names it. Skipped entirely if the optional
-``invisible-watermark`` package is not installed.
+The upstream encoder supplies known watermarks, while the in-tree decoder must
+both identify them and match the upstream decoder bit for bit.
 """
 
 from __future__ import annotations
@@ -25,7 +24,7 @@ from remove_ai_watermarks.invisible_watermark import (
     is_available,
 )
 
-pytestmark = pytest.mark.skipif(not is_available(), reason="invisible-watermark not installed")
+pytestmark = pytest.mark.skipif(not is_available(), reason="detect extra not installed")
 
 
 def _base_image() -> np.ndarray:
@@ -61,6 +60,20 @@ class TestHelpers:
 
 
 class TestDetect:
+    def test_in_tree_decoder_matches_upstream(self, tmp_path: Path):
+        from imwatermark import WatermarkDecoder
+
+        from remove_ai_watermarks.dwt_dct import decode_dwt_dct
+        from remove_ai_watermarks.image_io import imread
+
+        path = _write_bits_watermark(tmp_path, _BITS_48["Stable Diffusion XL"])
+        image = imread(path)
+        assert image is not None
+
+        upstream = np.asarray(WatermarkDecoder("bits", 48).decode(image, "dwtDct"), dtype=bool)
+        ours = np.asarray(decode_dwt_dct(image, wm_len=48), dtype=bool)
+        assert np.array_equal(ours, upstream)
+
     def test_detects_sdxl(self, tmp_path: Path):
         path = _write_bits_watermark(tmp_path, _BITS_48["Stable Diffusion XL"])
         assert detect_invisible_watermark(path) == "Stable Diffusion XL"

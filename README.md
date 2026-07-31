@@ -32,9 +32,24 @@ Remove AI provenance marks from images you generated yourself:
 | Run visible, invisible, and metadata removal | `all` | Recommended |
 | Process a directory | `batch` | Depends on mode |
 
+## Installation modes
+
+| Need | Install |
+| --- | --- |
+| Metadata inspection and stripping | `remove-ai-watermarks` |
+| Visible detection and removal | `remove-ai-watermarks[visible]` |
+| Torch-free DWT-DCT detection | `remove-ai-watermarks[detect]` |
+| Diffusion removal | `remove-ai-watermarks[diffusion]` |
+| Every production feature | `remove-ai-watermarks[all]` |
+
+Lower-level and specialized extras include `pixels`, `heif`, `trustmark`,
+`migan`, `lama`, `esrgan`, and `qwen-zimage`. The
+[installation guide](docs/installation.md#feature-extras) documents their exact
+dependency composition and model requirements.
+
 ## Quick start
 
-Install the core CLI:
+Install the metadata-focused default CLI:
 
 ```bash
 uv tool install remove-ai-watermarks
@@ -46,7 +61,13 @@ Inspect an image:
 remove-ai-watermarks identify image.png
 ```
 
-Remove a known visible mark and AI metadata:
+For visible watermark removal, install the pixel dependencies:
+
+```bash
+uv tool install --force "remove-ai-watermarks[visible]"
+```
+
+Then remove a known visible mark and AI metadata:
 
 ```bash
 remove-ai-watermarks visible image.png -o clean.png
@@ -61,7 +82,7 @@ remove-ai-watermarks metadata image.png --remove -o clean.png
 For invisible watermark removal, install the diffusion dependencies:
 
 ```bash
-uv tool install --force "remove-ai-watermarks[gpu]"
+uv tool install --force "remove-ai-watermarks[diffusion]"
 remove-ai-watermarks invisible image.png -o clean.png
 ```
 
@@ -129,8 +150,9 @@ remove-ai-watermarks erase image.png \
 
 ### Use a learned fill backend
 
-The core install uses OpenCV inpainting when no learned backend is installed.
-For more difficult backgrounds:
+The `visible` extra uses OpenCV inpainting when no learned backend is installed.
+For more difficult backgrounds, the learned-backend extras include the same
+pixel dependencies automatically:
 
 ```bash
 uv tool install --force "remove-ai-watermarks[migan]"
@@ -196,6 +218,8 @@ See [supported signals](docs/supported-signals.md) and
 [known limitations](docs/known-limitations.md) for the full technical boundary.
 
 ## Python API
+
+The visible-removal API requires `remove-ai-watermarks[visible]`.
 
 ```python
 import remove_ai_watermarks as raiw

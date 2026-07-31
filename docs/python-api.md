@@ -3,7 +3,16 @@
 Use the high level API for normal application integration. Low level detector
 and pipeline modules are intended for maintainers and specialized workflows.
 
+Dependency groups are identical for the CLI and Python API. The default install
+covers metadata extraction, normalization, verdict logic, and stripping.
+Array/pixel APIs use `pixels`; visible removal uses `visible`; DWT-DCT detection
+uses `detect`; and diffusion removal uses `diffusion`. Add `heif` independently
+when path-based pixel APIs must decode HEIC, HEIF, or AVIF. See the complete
+[feature-extra matrix](installation.md#feature-extras).
+
 ## Remove visible marks
+
+Install `remove-ai-watermarks[visible]` before using the visible-removal API.
 
 ```python
 import remove_ai_watermarks as raiw
@@ -67,6 +76,9 @@ result, removed = raiw.remove_visible(image, backend="cv2")
 ```
 
 ## Inspect provenance
+
+The default installation evaluates file metadata. Add `visible`, `detect`, or
+`trustmark` to enable the corresponding optional pixel signals.
 
 Get the vendor keys used by visible removal:
 
@@ -171,6 +183,9 @@ undecodable input through unchanged, so its return alone must not be presented
 as proof that metadata was removed.
 
 ## Remove invisible watermarks
+
+Install `remove-ai-watermarks[diffusion]` for the standard pipelines or
+`remove-ai-watermarks[qwen-zimage]` for the CUDA-only high-fidelity profile.
 
 ```python
 from pathlib import Path

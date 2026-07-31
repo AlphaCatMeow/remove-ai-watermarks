@@ -238,7 +238,7 @@ class TestQwenKwargs:
     """_build_qwen_kwargs is pure (no torch); guards the Qwen-Image call shape.
 
     watermark_remover imports torch under a try/except, so the module (and this pure
-    helper) imports fine in the core+dev CI env where torch is absent.
+    helper) imports fine in the default+dev CI env where torch is absent.
     """
 
     def test_uses_true_cfg_not_guidance_scale(self):
@@ -431,7 +431,7 @@ class TestAvailability:
 
     def test_watermark_removal_available(self):
         # Reflects the actual environment: True iff torch + diffusers (the gpu
-        # extra) are importable. The core+dev CI env has no diffusers, so this
+        # extra) are importable. The default+dev CI env has no diffusers, so this
         # must not assume the full stack is present.
         import importlib.util
 

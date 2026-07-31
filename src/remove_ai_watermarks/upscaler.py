@@ -4,7 +4,7 @@ Mirrors ``region_eraser``'s optional-backend pattern: ``is_available()`` guards 
 ``spandrel`` import, a lazy singleton (double-checked lock) holds the loaded model, and
 the weights download on first use (cached by ``torch.hub``) -- they are never bundled.
 
-The DEFAULT upscaler stays Lanczos (cv2, no deps); this is opt-in via the ``esrgan``
+The DEFAULT upscaler stays Lanczos (cv2, no model download); this is opt-in via the ``esrgan``
 extra and feeds the ``--upscaler esrgan`` path. ``spandrel`` is a pure model-loader
 (MIT) with NO basicsr dependency -- it pulls only torch/torchvision/safetensors/numpy/
 einops -- so it sidesteps the basicsr / ``torchvision.transforms.functional_tensor``

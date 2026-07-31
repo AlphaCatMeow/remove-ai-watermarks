@@ -6,15 +6,15 @@ Read this reference for environment setup, dependency recovery, CI behavior, and
 
 - Use `uv sync --frozen --extra dev` and add only the feature extras needed for the task.
 - Do not use `uv pip install` for development tools. It can re-resolve `uv.lock` outside the compatible ML dependency set.
-- A core-only sync removes GPU packages by design. Package imports remain light through lazy exports; only removal paths should require the heavy stack.
-- On an unreliable connection, sync the needed `dev` and `gpu` extras and run the lint, type, and test commands directly instead of downloading every optional learned backend.
+- A default-only sync removes every pixel and model package by design. Package imports remain light through lazy exports.
+- On an unreliable connection, sync `dev` plus only the required feature extras, such as `diffusion`, and run the checks directly instead of downloading every optional learned backend.
 - Run `uv` from the repository root or it may create a bare environment without the project dependencies.
 
 The optional TrustMark decoder downloads weights into its installed package directory. After pruning that extra, a leftover weights directory can make availability checks see an empty namespace package. If Pyright reports an unknown `TrustMark` import and `find_spec("trustmark")` returns a loader-less spec, remove that regenerable remnant from the active virtual environment and resync.
 
 ## CI
 
-`.github/workflows/test.yml` runs Ruff and a cross-platform supported-Python test matrix with core plus development dependencies. GPU and model-running tests skip in that matrix; metadata, identification, visible removal, and the OpenCV eraser remain covered across operating systems.
+`.github/workflows/test.yml` runs Ruff and a cross-platform supported-Python test matrix with default plus development dependencies. Diffusion and model-running tests skip in that matrix; metadata, identification, visible removal, the DWT-DCT decoder, and the OpenCV eraser remain covered across operating systems.
 
 Keep `uv.lock` compatible with `uv sync --frozen`. Dependency pull-request checks use GitHub's merge result against current `main`; if `main` moves, merge it locally and rerun the full gate because a newer linter can expose stale directives in later code.
 

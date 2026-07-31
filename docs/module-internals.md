@@ -144,6 +144,11 @@ metadata extraction from verdict logic:
 - `identify` preserves the path-based API and adds the optional registered
   visible-mark and open invisible-watermark decoders after extraction.
 
+The `detect` extra composes the shared `pixels` runtime with PyWavelets. Its
+in-tree [`dwt_dct.py`](../src/remove_ai_watermarks/dwt_dct.py) decoder preserves
+the upstream matrix algorithm without installing Torch or non-headless OpenCV.
+The upstream MIT notice ships inside the wheel under `licenses/`.
+
 `is_ai_generated` is `True` or `None`; absence of evidence is not reported as a
 human-made verdict. `ai_source_kind` distinguishes fully generated content from
 AI-enhanced composites when the source metadata provides that distinction.
@@ -379,7 +384,8 @@ Contracts:
 - `to_bgr` normalizes grayscale and alpha-bearing arrays.
 - `read_bgr_and_alpha` and `write_bgr_with_alpha` preserve the alpha plane.
 - `imwrite` returns a success flag; every caller must check it.
-- HEIC, HEIF, and AVIF fall back to Pillow plus `pillow-heif`.
+- HEIC, HEIF, and AVIF pixel reads fall back to Pillow plus `pillow-heif` from
+  the independent `heif` extra. Metadata scanning does not require that plugin.
 - A visible no-op can preserve the original file bytes.
 
 Regression coverage:

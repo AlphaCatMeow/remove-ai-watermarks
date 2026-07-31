@@ -18,9 +18,9 @@ class TestIsAvailable:
         assert isinstance(result, bool)
 
     def test_available_reflects_dependencies(self):
-        """is_available() is True iff torch + diffusers (the gpu extra) import.
+        """is_available() is True iff torch + diffusers (the diffusion extra) import.
 
-        Must not assume the full stack: the core+dev CI env has no diffusers.
+        Must not assume the full stack: the default+dev CI env has no diffusers.
         """
         import importlib.util
 
@@ -212,7 +212,7 @@ class TestCannyControlImage:
 
     def test_edge_map_is_3channel_rgb(self):
         if not is_available():
-            pytest.skip("gpu extra (torch/diffusers) not installed")
+            pytest.skip("diffusion extra (torch/diffusers) not installed")
         import numpy as np
 
         from remove_ai_watermarks.noai.watermark_remover import WatermarkRemover

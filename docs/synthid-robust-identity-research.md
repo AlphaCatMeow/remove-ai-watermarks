@@ -224,7 +224,7 @@ from the test set + this doc).
 
 ## 6. Integration cost (rough)
 
-- New deps: `diffusers` already in the gpu extra; PhotoMaker ships as a `.bin`
+- New deps: `diffusers` already in the diffusion extra; PhotoMaker ships as a `.bin`
   loaded via `pipeline.load_photomaker_adapter(...)`. The OpenCLIP encoder is the
   same one diffusers already pulls. No new heavy pip dep.
 - Weight download: PhotoMaker-V1 weights are ~3 GB. Add to the Modal HF volume
