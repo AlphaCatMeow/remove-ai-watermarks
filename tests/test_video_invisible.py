@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+import threading
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
@@ -12,6 +14,55 @@ from remove_ai_watermarks.video_synthid import DEFAULT_VIDEO_SYNTHID_NOISE_STD
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+def test_encoder_redirects_large_stderr_while_frames_are_streaming(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    diagnostic = "synthetic ffmpeg diagnostic"
+    tail_diagnostic = "synthetic ffmpeg diagnostic tail"
+    caplog.set_level("INFO", logger=video_encoding.__name__)
+    command = [
+        sys.executable,
+        "-c",
+        (
+            "import sys; "
+            f"sys.stderr.buffer.write({diagnostic.encode()!r} + b'x' * 262144 + {tail_diagnostic.encode()!r}); "
+            "sys.stderr.buffer.flush(); "
+            "sys.stdin.buffer.read(); "
+            "raise SystemExit(7)"
+        ),
+    ]
+    encoder = video_encoding.start_raw_video_encoder(command)
+    write_finished = threading.Event()
+    write_errors: list[Exception] = []
+
+    def write_frames() -> None:
+        try:
+            encoder.stdin.write(b"f" * 262144)
+            encoder.stdin.flush()
+        except Exception as exc:  # pragma: no cover - mutation cleanup path
+            write_errors.append(exc)
+        finally:
+            write_finished.set()
+
+    writer = threading.Thread(target=write_frames)
+    writer.start()
+    try:
+        assert write_finished.wait(5), "stderr backpressure blocked the frame producer"
+        assert write_errors == []
+        with pytest.raises(RuntimeError, match=diagnostic):
+            video_encoding.finish_raw_video_encoder(
+                encoder,
+                tmp_path / "unused.mp4",
+                operation="synthetic encode",
+            )
+        assert "ffmpeg stderr truncated" in caplog.text
+        assert tail_diagnostic in caplog.text
+    finally:
+        video_encoding.abort_raw_video_encoder(encoder)
+        writer.join(timeout=5)
 
 
 def test_availability_requires_both_optional_packages(monkeypatch: pytest.MonkeyPatch) -> None:

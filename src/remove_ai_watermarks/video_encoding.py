@@ -13,16 +13,17 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Sequence
+    from typing import BinaryIO
 
 log = logging.getLogger(__name__)
 
+_FFMPEG_STDERR_LIMIT = 64 * 1024
+_FFMPEG_STDERR_TRUNCATION = b"\n...[ffmpeg stderr truncated]...\n"
 _PIXEL_FORMATS = frozenset({"yuv420p", "yuv422p", "yuv444p"})
-_VIDEO_FILTER_THREADS = 1
-_VIDEO_ENCODER_THREADS = 2
 _PIXEL_FORMAT_ALIASES = {
     "yuvj420p": "yuv420p",
     "yuvj422p": "yuv422p",
@@ -81,6 +82,53 @@ class VideoEncodeProfile:
     start_pts: int | None = None
     source_pixel_format: str | None = None
     component_depth: int | None = None
+
+
+@dataclass
+class _RawVideoEncoder:
+    """Running ffmpeg process with diagnostics redirected outside a pipe."""
+
+    process: subprocess.Popen[bytes]
+    stdin: BinaryIO
+    _stderr_buffer: BinaryIO
+
+    def poll(self) -> int | None:
+        return self.process.poll()
+
+    def kill(self) -> None:
+        self.process.kill()
+
+    def wait(self) -> int:
+        return self.process.wait()
+
+    def collect_stderr(self) -> str:
+        """Return bounded ffmpeg diagnostics and release the temporary file."""
+        if self._stderr_buffer.closed:
+            raise RuntimeError("ffmpeg diagnostics have already been collected")
+        try:
+            self._stderr_buffer.seek(0, os.SEEK_END)
+            size = self._stderr_buffer.tell()
+            if size <= _FFMPEG_STDERR_LIMIT:
+                self._stderr_buffer.seek(0)
+                raw_stderr = self._stderr_buffer.read()
+            else:
+                payload_limit = _FFMPEG_STDERR_LIMIT - len(_FFMPEG_STDERR_TRUNCATION)
+                head_size = payload_limit // 2
+                tail_size = payload_limit - head_size
+                self._stderr_buffer.seek(0)
+                head = self._stderr_buffer.read(head_size)
+                self._stderr_buffer.seek(-tail_size, os.SEEK_END)
+                tail = self._stderr_buffer.read(tail_size)
+                raw_stderr = head + _FFMPEG_STDERR_TRUNCATION + tail
+            return raw_stderr.decode("utf-8", errors="replace")
+        finally:
+            self._stderr_buffer.close()
+
+    def discard_stderr(self) -> None:
+        """Release the diagnostic buffer after an abort."""
+        if self._stderr_buffer.closed:
+            return
+        self._stderr_buffer.close()
 
 
 def _known_value(value: object, allowed: frozenset[str]) -> str | None:
@@ -306,8 +354,6 @@ def raw_video_command(
     )
     command = [
         ffmpeg,
-        "-filter_threads",
-        str(_VIDEO_FILTER_THREADS),
         "-y",
         "-loglevel",
         "error",
@@ -320,8 +366,6 @@ def raw_video_command(
         "-map",
         "1:a?",
         *_video_codec_args(output.suffix.lower(), crf=crf, profile=profile),
-        "-threads:v",
-        str(_VIDEO_ENCODER_THREADS),
         *_profile_args(profile),
         "-c:a",
         "copy",
@@ -344,40 +388,49 @@ def raw_video_command(
     return command
 
 
-def start_raw_video_encoder(command: list[str]) -> subprocess.Popen[bytes]:
+def start_raw_video_encoder(command: list[str]) -> _RawVideoEncoder:
     """Start ffmpeg and validate its raw-frame pipes."""
     log.info("Starting ffmpeg video encode: command=%s", command)
-    process = subprocess.Popen(  # noqa: S603
-        command,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
+    stderr_buffer = cast(
+        "BinaryIO",
+        tempfile.TemporaryFile(mode="w+b"),  # noqa: SIM115 - encoder owns the lifetime
     )
-    if process.stdin is None or process.stderr is None:
+    try:
+        process = subprocess.Popen(  # noqa: S603
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=stderr_buffer,
+        )
+    except Exception:
+        stderr_buffer.close()
+        raise
+    if process.stdin is None:
         process.kill()
         process.wait()
-        raise RuntimeError("Could not open ffmpeg pipes")
-    return process
+        stderr_buffer.close()
+        raise RuntimeError("Could not open ffmpeg input pipe")
+    return _RawVideoEncoder(process, cast("BinaryIO", process.stdin), stderr_buffer)
 
 
 def finish_raw_video_encoder(
-    process: subprocess.Popen[bytes],
+    process: _RawVideoEncoder,
     output: Path,
     *,
     operation: str,
 ) -> None:
     """Close the frame stream and raise when ffmpeg rejects the encode."""
-    if process.stdin is None or process.stderr is None:
-        raise RuntimeError("ffmpeg pipes are unavailable")
     process.stdin.close()
-    stderr = process.stderr.read().decode("utf-8", errors="replace")
     return_code = process.wait()
+    stderr = process.collect_stderr()
     log.info("ffmpeg %s finished: status=%s stderr=%s", operation, return_code, stderr)
     if return_code != 0:
         raise RuntimeError(f"ffmpeg failed to encode {output}: {stderr.strip()[:500]}")
 
 
-def abort_raw_video_encoder(process: subprocess.Popen[bytes]) -> None:
+def abort_raw_video_encoder(process: _RawVideoEncoder) -> None:
     """Stop an incomplete ffmpeg encode."""
-    process.kill()
+    if process.poll() is None:
+        process.kill()
     process.wait()
+    process.discard_stderr()

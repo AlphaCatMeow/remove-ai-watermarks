@@ -1950,30 +1950,6 @@ class TestVideoVisibleScan:
 
 
 class TestVideoVisibleEncoding:
-    @pytest.mark.parametrize("suffix", [".mp4", ".webm"])
-    def test_encoder_bounds_codec_threads(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        suffix: str,
-    ):
-        from remove_ai_watermarks import video_encoding
-
-        monkeypatch.setattr(video_encoding.shutil, "which", lambda _name: "/usr/bin/ffmpeg")
-        command = video_encoding.raw_video_command(
-            tmp_path / "source.mp4",
-            tmp_path / f"clean{suffix}",
-            width=12,
-            height=8,
-            fps=24.0,
-            strip_metadata=True,
-            crf=14,
-            profile=video_encoding.VideoEncodeProfile(),
-        )
-
-        assert command[1:3] == ["-filter_threads", "1"]
-        assert command[command.index("-threads:v") + 1] == "2"
-
     @staticmethod
     def _patch_single_frame_encode(
         monkeypatch: pytest.MonkeyPatch,
@@ -2007,6 +1983,12 @@ class TestVideoVisibleEncoding:
 
             def poll(self) -> int:
                 return 1
+
+            def wait(self) -> int:
+                return 1
+
+            def discard_stderr(self) -> None:
+                pass
 
         targets: list[Path] = []
 

@@ -149,13 +149,15 @@ regeneration. It centralizes container codecs, optional audio stream copying,
 metadata/chapter policy, encode-failure reporting, and atomic same-directory
 publication. Each mapped stream is allowed to reach its own end, so a copied
 audio tail is not shortened to the frame-input duration.
-Both the raw-BGR and timestamped-NUT stdin modes run the implicit pixel-format
-filter graph on one thread and cap the video encoder at two threads. A Linux
-full-clip trace showed ffmpeg creating an oversized execution pool and severely
-delaying frame-pipe ingestion on a constrained hosted runner. The bounded
-filter and codec pools avoid that scheduling collapse while leaving audio stream
-copy independent. Command regressions cover both supported video codecs; the
-real Linux full-clip CI job guards process completion.
+Both the raw-BGR and timestamped-NUT stdin modes redirect ffmpeg stderr to a
+temporary file while frames are written. Waiting to read diagnostics until
+after stdin closed allowed stderr backpressure to stop ffmpeg's frame reads,
+which in turn blocked the producer before it could close stdin. The file consumes
+no pipe capacity or RAM while ffmpeg runs; completion reports a bounded head and
+tail when diagnostics are unusually large. Aborts release it even when ffmpeg
+has already exited. A real subprocess regression writes diagnostics beyond pipe
+capacity while streaming frames, checks bounded failure reporting, and the Linux
+full-clip CI job guards the complete path.
 `probe_video_encode_profile` reads the first source video stream with ffprobe
 and preserves the supported properties that survive the 8-bit BGR boundary:
 `yuv420p`/`yuv422p`/`yuv444p` chroma sampling, recognized color tags, encoder

@@ -323,9 +323,6 @@ def encode_video_frames(
         )
     )
     frame_pipe = process.stdin
-    if frame_pipe is None:
-        abort_raw_video_encoder(process)
-        raise RuntimeError("Could not open ffmpeg input pipe")
     try:
         for frame in frames:
             if frame.shape[:2] != (height, width):
@@ -333,8 +330,7 @@ def encode_video_frames(
             frame_pipe.write(frame.tobytes())
         finish_raw_video_encoder(process, output, operation="SynthID removal encode")
     except Exception:
-        if process.poll() is None:
-            abort_raw_video_encoder(process)
+        abort_raw_video_encoder(process)
         raise
 
 
@@ -393,9 +389,6 @@ def regenerate_video_candidate(
             )
         )
         frame_pipe = process.stdin
-        if frame_pipe is None:
-            abort_raw_video_encoder(process)
-            raise RuntimeError("Could not open ffmpeg input pipe")
         frame_count = 0
         squared_error = 0.0
         pixel_count = 0
@@ -462,8 +455,7 @@ def regenerate_video_candidate(
                 operation="SynthID removal encode",
             )
         except Exception:
-            if process.poll() is None:
-                abort_raw_video_encoder(process)
+            abort_raw_video_encoder(process)
             raise
 
         mse = squared_error / pixel_count

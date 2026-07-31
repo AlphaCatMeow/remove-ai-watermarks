@@ -1363,9 +1363,6 @@ def encode_clean_video(
             )
         )
         frame_pipe = process.stdin
-        if frame_pipe is None:
-            abort_raw_video_encoder(process)
-            raise RuntimeError("Could not open ffmpeg input pipe")
 
         capture = cv2.VideoCapture(str(source))
         if not capture.isOpened():
@@ -1436,8 +1433,7 @@ def encode_clean_video(
             if timestamped_writer is not None:
                 with suppress(Exception):
                     timestamped_writer.close()
-            if process.poll() is None:
-                abort_raw_video_encoder(process)
+            abort_raw_video_encoder(process)
             raise
         finally:
             capture.release()
