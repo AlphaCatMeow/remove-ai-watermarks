@@ -128,6 +128,10 @@ def test_encoder_command_discards_metadata_and_copies_audio(
         "colorprim=bt709:transfer=bt709:colormatrix=bt709:range=limited"
     )
     assert "pipe:0" in command
+    assert command.index(str(source)) < command.index("pipe:0")
+    assert command[command.index("-map") + 1] == "1:v:0"
+    second_map = command.index("-map", command.index("-map") + 1)
+    assert command[second_map + 1] == "0:a?"
     assert "-shortest" not in command
 
 

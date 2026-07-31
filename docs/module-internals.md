@@ -158,6 +158,10 @@ tail when diagnostics are unusually large. Aborts release it even when ffmpeg
 has already exited. A real subprocess regression writes diagnostics beyond pipe
 capacity while streaming frames, checks bounded failure reporting, and the Linux
 full-clip CI job guards the complete path.
+The finite source file is opened before the frame pipe, so ffmpeg can initialize
+the copied audio stream before producer backpressure is possible. Stream and
+metadata mappings are source-indexed accordingly; regressions assert the input
+order and both map targets.
 `probe_video_encode_profile` reads the first source video stream with ffprobe
 and preserves the supported properties that survive the 8-bit BGR boundary:
 `yuv420p`/`yuv422p`/`yuv444p` chroma sampling, recognized color tags, encoder
