@@ -55,11 +55,12 @@ manual Homebrew formula update is the fallback when its automation is blocked.
 
 The conda job uses the published artifact rather than a locally built archive
 as the hash source and commits the resulting recipe change to `main`. Runtime
-dependency mapping remains review-controlled: keep it aligned with the core
-dependencies in `pyproject.toml`, and document any conda-forge package that is
-unavailable and must be omitted. PyPI's version-split PyAV dependency maps to
-`av >=16` in conda: the solver selects the Python-3.10-compatible build or the
-current line according to the environment.
+dependency mapping remains review-controlled: keep it aligned with the default
+metadata dependencies in `pyproject.toml`, do not copy optional pixel extras
+into the default recipe, and document any conda-forge package that is
+unavailable and must be omitted.
+The optional `video` extra carries PyAV with Python-version-specific bounds; it
+does not belong in the default metadata-focused conda recipe.
 
 ## Source distribution boundary
 

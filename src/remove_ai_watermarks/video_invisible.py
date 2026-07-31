@@ -120,7 +120,7 @@ def load_video_vae_runtime(
     if device not in {"auto", "cuda", "mps", "cpu"}:
         raise ValueError("device must be auto, cuda, mps, or cpu")
     if not is_available():
-        raise RuntimeError("Video SynthID regeneration requires the gpu extra")
+        raise RuntimeError("Video SynthID regeneration requires the diffusion extra")
 
     import torch
     from diffusers import AutoencoderKL

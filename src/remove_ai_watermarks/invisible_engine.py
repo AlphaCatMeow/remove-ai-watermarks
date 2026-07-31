@@ -4,7 +4,7 @@ Wraps the vendored noai-watermark code for removing invisible AI watermarks
 (SynthID, StableSignature, TreeRing) via diffusion-based regeneration.
 
 This module requires the 'gpu' extra dependencies:
-    uv pip install 'remove-ai-watermarks[gpu]'
+    uv pip install 'remove-ai-watermarks[diffusion]'
 """
 
 # cv2/torch boundary: this engine wraps cv2 (resize/imwrite/cvtColor) and the
@@ -226,7 +226,7 @@ class InvisibleEngine:
                 input size, so this is a transparent quality boost; it adds time
                 and memory on small inputs. Ignored on a min > max misconfig.
             upscaler: How to upscale a small input to the ``min_resolution`` floor:
-                ``"lanczos"`` (default, cv2, no deps) or ``"esrgan"`` (Real-ESRGAN
+                ``"lanczos"`` (default, cv2, no model download) or ``"esrgan"`` (Real-ESRGAN
                 via the ``esrgan`` extra). Only applies when UPscaling (the floor
                 case); a ``max_resolution`` downscale always uses Lanczos. Falls back
                 to Lanczos if the extra is absent.

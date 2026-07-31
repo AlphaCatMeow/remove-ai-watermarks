@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import itertools
 import json
 import logging
 import re
@@ -17,6 +18,7 @@ import struct
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
     from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -374,6 +376,53 @@ def has_ai_metadata(image_path: Path) -> bool:
     return xai_signature(image_path)
 
 
+def aigc_label_from_metadata(data: bytes, candidates: tuple[str, ...] = ()) -> dict[str, str] | None:
+    """Parse a China TC260 AI-labeling block from already collected metadata."""
+    import html
+    import json
+    from typing import cast
+
+    def _parse(text: str, *, require_tc260_field: bool) -> dict[str, str] | None:
+        if require_tc260_field:
+            return parse_tc260_aigc_json(text.encode("utf-8"))
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            return None
+        if not isinstance(parsed, dict):
+            return None
+        return {str(k): str(v) for k, v in cast("dict[object, object]", parsed).items()}
+
+    for candidate in candidates:
+        if result := _parse(candidate, require_tc260_field=True):
+            return result
+
+    match = re.search(
+        rb'<TC260:AIGC>(.*?)</TC260:AIGC>|TC260:AIGC\s*=\s*"(.*?)"',
+        data,
+        re.DOTALL,
+    )
+    if match:
+        body = match.group(1) if match.group(1) is not None else match.group(2)
+        return _parse(html.unescape(body.decode("utf-8", "replace")), require_tc260_field=False)
+
+    text = data.decode("latin-1")
+    for needle in ('"AIGC"', "AIGC{"):
+        start = text.find(needle)
+        if start == -1:
+            continue
+        brace = text.find("{", start)
+        if brace == -1:
+            continue
+        try:
+            _, end = json.JSONDecoder().raw_decode(text, brace)
+        except ValueError:
+            continue
+        if result := _parse(text[brace:end], require_tc260_field=True):
+            return result
+    return None
+
+
 def aigc_label(image_path: Path) -> dict[str, str] | None:
     """Parse a China TC260 AI-labeling block, if present.
 
@@ -383,6 +432,7 @@ def aigc_label(image_path: Path) -> dict[str, str] | None:
       (as written by Doubao / ByteDance), read via PIL;
     - a native MP4/MOV ``AIGC`` key in ``moov.udta.meta.keys`` whose matching
       ``ilst`` item carries the raw JSON object;
+    - a native MKV/WebM ``AIGC`` simple tag carrying the raw JSON object;
     - a native AVI ``LIST/INFO/AIGC`` chunk or FLV
       ``script.onMetaData.AIGC`` string carrying the raw JSON object;
     - an XMP ``<TC260:AIGC>{...}</TC260:AIGC>`` block (HTML-entity encoded text),
@@ -400,21 +450,6 @@ def aigc_label(image_path: Path) -> dict[str, str] | None:
     if they carry at least one known TC260 field (``TC260_AIGC_FIELDS``); the
     namespaced XMP element is unambiguous, so any JSON object is accepted.
     """
-    import html
-
-    def _parse(text: str, *, require_tc260_field: bool) -> dict[str, str] | None:
-        if require_tc260_field:
-            return parse_tc260_aigc_json(text.encode("utf-8"))
-        try:
-            parsed = json.loads(text)
-        except ValueError:
-            return None
-        if not isinstance(parsed, dict):
-            return None
-        return {str(k): str(v) for k, v in cast("dict[object, object]", parsed).items()}
-
-    # PNG tEXt chunk keyed "AIGC" with raw JSON (Doubao and other China gens).
-    # The key is generic, so require a TC260 field to avoid a false positive.
     try:
         from PIL import Image
 
@@ -423,7 +458,8 @@ def aigc_label(image_path: Path) -> dict[str, str] | None:
     except Exception as exc:
         logger.debug("PIL could not open %s for AIGC chunk scan: %s", image_path, exc)
         value = None
-    if isinstance(value, str) and (result := _parse(value, require_tc260_field=True)):
+
+    if isinstance(value, str) and (result := aigc_label_from_metadata(b"", (value,))):
         return result
 
     # Native MP4/MOV TC260 metadata (TC260-PG-20257A): the ``AIGC`` key lives
@@ -432,18 +468,18 @@ def aigc_label(image_path: Path) -> dict[str, str] | None:
     # ``mdat`` is found without loading or scanning the media payload.
     from remove_ai_watermarks.noai.isobmff import tc260_aigc_payloads
 
-    for payload in tc260_aigc_payloads(image_path):
-        if result := _parse(payload.decode("utf-8", "replace"), require_tc260_field=True):
-            return result
+    isobmff_candidates = tuple(payload.decode("utf-8", "replace") for payload in tc260_aigc_payloads(image_path))
+    if result := aigc_label_from_metadata(b"", isobmff_candidates):
+        return result
 
     # Native MKV/WebM TC260 metadata: ``Segment.Tags.Tag.SimpleTag`` carries
     # ``TagName=AIGC`` and the raw JSON in ``TagString``. The EBML walker seeks
     # over clusters and reads only bounded metadata values.
     from remove_ai_watermarks.noai.ebml import tc260_aigc_payloads as ebml_tc260_aigc_payloads
 
-    for payload in ebml_tc260_aigc_payloads(image_path):
-        if result := _parse(payload.decode("utf-8", "replace"), require_tc260_field=True):
-            return result
+    ebml_candidates = tuple(payload.decode("utf-8", "replace") for payload in ebml_tc260_aigc_payloads(image_path))
+    if result := aigc_label_from_metadata(b"", ebml_candidates):
+        return result
 
     # Native AVI and FLV TC260 metadata. Both readers walk their container
     # structures and skip media payloads instead of relying on a raw substring
@@ -457,51 +493,12 @@ def aigc_label(image_path: Path) -> dict[str, str] | None:
         from remove_ai_watermarks.noai.flv import tc260_aigc_payloads as flv_tc260_aigc_payloads
 
         legacy_payloads = flv_tc260_aigc_payloads(image_path)
-    for payload in legacy_payloads:
-        if result := _parse(payload.decode("utf-8", "replace"), require_tc260_field=True):
-            return result
+    legacy_candidates = tuple(payload.decode("utf-8", "replace") for payload in legacy_payloads)
+    if result := aigc_label_from_metadata(b"", legacy_candidates):
+        return result
 
-    # XMP TC260:AIGC, namespaced (unambiguous) in either serialization RDF allows:
-    # an element  <TC260:AIGC>{...}</TC260:AIGC>  or an attribute  TC260:AIGC="{...}"
-    # (the attribute form is what PicWish writes). Both are HTML-entity encoded.
     data = scan_head(image_path)
-    match = re.search(
-        rb'<TC260:AIGC>(.*?)</TC260:AIGC>|TC260:AIGC\s*=\s*"(.*?)"',
-        data,
-        re.DOTALL,
-    )
-    if match:
-        body = match.group(1) if match.group(1) is not None else match.group(2)
-        return _parse(html.unescape(body.decode("utf-8", "replace")), require_tc260_field=False)
-
-    # Generic raw-JSON forms the PNG-chunk and XMP paths above both miss, each
-    # gated on a TC260 field: the ``"AIGC":{...}`` key wrapper (as written into
-    # JPEG EXIF UserComment) and the bare ``AIGC{...}`` blob (the label glued
-    # straight to its JSON, no key wrapper, in a JPEG APP segment near the JFIF
-    # header). `raw_decode` brace-matches the inner object (respecting nested
-    # braces / quoted strings); `_parse` applies the same dict coercion + TC260
-    # gate as the PNG-chunk path. A non-matching hit (no TC260 field, or an
-    # undecodable brace) must FALL THROUGH to the next form, never short-circuit:
-    # a quoted ``"AIGC"`` can appear later in an XMP packet while the real label
-    # is a bare ``AIGC{...}`` blob earlier in the file, so an unconditional return
-    # on the quoted form would shadow the bare form.
-    text = data.decode("latin-1")
-    for needle in ('"AIGC"', "AIGC{"):
-        start = text.find(needle)
-        if start == -1:
-            continue
-        # First brace at/after the needle: the object brace for ``"AIGC":{`` and
-        # the glued brace (at start+4) for the bare ``AIGC{`` -- one search covers both.
-        brace = text.find("{", start)
-        if brace == -1:
-            continue
-        try:
-            _, end = json.JSONDecoder().raw_decode(text, brace)
-        except ValueError:
-            continue
-        if result := _parse(text[brace:end], require_tc260_field=True):
-            return result
-    return None
+    return aigc_label_from_metadata(data)
 
 
 # C2PA "Durable Content Credentials" manifest repositories (C2PA 2.4). When the
@@ -595,6 +592,16 @@ def _read_file_tail(image_path: Path, size: int) -> bytes:
         return b""
 
 
+def samsung_genai_in(data: bytes) -> int | None:
+    """Return Samsung's non-zero ``genAIType`` from collected metadata bytes."""
+    if _SAMSUNG_EDITOR_MARKER not in data:
+        return None
+    match = _SAMSUNG_GENAI_RE.search(data)
+    if match is None:
+        return None
+    return int(match.group(1)) or None
+
+
 def samsung_genai(image_path: Path) -> int | None:
     """Return Samsung's non-zero ``genAIType`` value if the image carries the
     Galaxy AI editing marker, else None.
@@ -619,12 +626,17 @@ def samsung_genai(image_path: Path) -> int | None:
             oversize = False
         if oversize:
             data = _read_file_tail(image_path, _QUICK_SCAN_BYTES)
-    if _SAMSUNG_EDITOR_MARKER not in data:
+    return samsung_genai_in(data)
+
+
+def iptc_ai_system_in(data: bytes) -> str | None:
+    """Return an IPTC 2025.1 AI-disclosure note from collected metadata bytes."""
+    if not any(marker in data for marker in IPTC_AI_FIELD_MARKERS):
         return None
-    m = _SAMSUNG_GENAI_RE.search(data)
-    if m is None:
-        return None
-    return int(m.group(1)) or None
+    match = re.search(rb"AISystemUsed[=:\s]*[\"'>]\s*([^<\"']{1,120})", data)
+    if match and (value := match.group(1).decode("utf-8", "replace").strip()):
+        return value
+    return "fields present"
 
 
 def iptc_ai_system(image_path: Path) -> str | None:
@@ -637,13 +649,7 @@ def iptc_ai_system(image_path: Path) -> str | None:
     extractable, otherwise the literal ``"fields present"``. Container-agnostic
     raw-byte scan; handles both XMP element and attribute serializations.
     """
-    data = scan_head(image_path)
-    if not any(marker in data for marker in IPTC_AI_FIELD_MARKERS):
-        return None
-    match = re.search(rb"AISystemUsed[=:\s]*[\"'>]\s*([^<\"']{1,120})", data)
-    if match and (value := match.group(1).decode("utf-8", "replace").strip()):
-        return value
-    return "fields present"
+    return iptc_ai_system_in(scan_head(image_path))
 
 
 def synthid_source(image_path: Path) -> str | None:
@@ -686,6 +692,20 @@ def synthid_source(image_path: Path) -> str | None:
     return ", ".join(matched) if matched else None
 
 
+def generator_from_metadata(candidates: Iterable[str], scan: bytes = b"") -> str | None:
+    """Return a known AI generator from collected EXIF, PNG, or XMP values."""
+    from remove_ai_watermarks.noai.constants import AI_GENERATOR_TOKENS
+
+    creator_tools = (
+        match.group(1).decode("latin1", "replace")
+        for match in re.finditer(rb"CreatorTool[>\"'=\s]{1,4}([^<\"']{1,80})", scan)
+    )
+    for value in itertools.chain(candidates, creator_tools):
+        if any(token in value.lower() for token in AI_GENERATOR_TOKENS):
+            return value.strip()
+    return None
+
+
 def exif_generator(image_path: Path) -> str | None:
     """Return an AI-generator name from the EXIF ``Software`` / XMP ``CreatorTool``
     field (or a PNG text chunk), if it matches a known generator (see
@@ -698,10 +718,6 @@ def exif_generator(image_path: Path) -> str | None:
     chunks rather than EXIF. Only AI tokens match, so ordinary editors (plain
     "Adobe Photoshop", "GIMP") are not flagged.
     """
-    import re
-
-    from remove_ai_watermarks.noai.constants import AI_GENERATOR_TOKENS
-
     candidates: list[str] = []
 
     # EXIF Software / Artist / ImageDescription (0th IFD) via PIL exif bytes,
@@ -736,18 +752,12 @@ def exif_generator(image_path: Path) -> str | None:
     except Exception as exc:  # unopenable format / malformed EXIF
         logger.debug("EXIF generator read failed for %s: %s", image_path, exc)
 
-    # XMP CreatorTool: text, container-agnostic (covers HEIF/JXL via raw scan).
     try:
         head = scan_head(image_path)
-        for match in re.finditer(rb"CreatorTool[>\"'=\s]{1,4}([^<\"']{1,80})", head):
-            candidates.append(match.group(1).decode("latin1", "replace"))
     except Exception as exc:
         logger.debug("XMP CreatorTool scan failed for %s: %s", image_path, exc)
-
-    for value in candidates:
-        if any(token in value.lower() for token in AI_GENERATOR_TOKENS):
-            return value.strip()
-    return None
+        head = b""
+    return generator_from_metadata(candidates, head)
 
 
 # xAI / Grok EXIF signature scheme. A 64+ char base64 blob after "Signature:"
@@ -757,7 +767,7 @@ _XAI_SIGNATURE_RE = re.compile(r"Signature:\s*[A-Za-z0-9+/=]{64,}")
 _UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
 
 
-def _is_xai_signature_pair(description: str, artist: str) -> bool:
+def xai_signature_pair(description: str, artist: str) -> bool:
     """True if an EXIF (ImageDescription, Artist) pair is xAI/Grok's scheme."""
     return _XAI_SIGNATURE_RE.match(description) is not None and _UUID_RE.fullmatch(artist) is not None
 
@@ -793,7 +803,7 @@ def xai_signature(image_path: Path) -> bool:
         logger.debug("xAI-signature EXIF read failed for %s: %s", image_path, exc)
         return False
 
-    return _is_xai_signature_pair(
+    return xai_signature_pair(
         _exif_text(tags, piexif.ImageIFD.ImageDescription), _exif_text(tags, piexif.ImageIFD.Artist)
     )
 
@@ -848,9 +858,7 @@ def _ai_exif_targets(loaded: dict[str, Any]) -> list[tuple[str, int, bytes, str]
             targets.append((ifd_key, tag, value, name))
 
     # (a) xAI / Grok: the Signature blob and the UUID Artist go together.
-    if _is_xai_signature_pair(
-        _exif_text(ifd0, piexif.ImageIFD.ImageDescription), _exif_text(ifd0, piexif.ImageIFD.Artist)
-    ):
+    if xai_signature_pair(_exif_text(ifd0, piexif.ImageIFD.ImageDescription), _exif_text(ifd0, piexif.ImageIFD.Artist)):
         add("0th", ifd0, piexif.ImageIFD.ImageDescription, "ImageDescription")
         add("0th", ifd0, piexif.ImageIFD.Artist, "Artist")
     # (b) known AI generator token in a 0th text tag.

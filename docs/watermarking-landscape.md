@@ -33,7 +33,7 @@ Grok JPEG downloads (Aurora model) carry **no C2PA, no XMP, no SynthID, no IPTC*
 **Stripped on removal too:** `remove_ai_metadata` calls `_scrub_ai_exif` on
 JPEG EXIF, which deletes the xAI Signature and UUID Artist pair plus supported
 AI generator values while retaining unrelated camera and editor EXIF. The
-shared `_is_xai_signature_pair` helper is the single source of truth for the
+shared `xai_signature_pair` helper is the single source of truth for the
 pair. On the ISOBMFF path, `blank_ai_exif_tokens` provides the corresponding
 in-place scrub for supported EXIF values, TC260 AIGC blocks, and the xAI pair.
 - **China TC260 AIGC label (caught by `AIGC_MARKERS` / `metadata.aigc_label`, surfaced by `identify` as the `aigc` signal):** China-served generators embed an XMP `<TC260:AIGC>{"Label":"1","ContentProducer":...}` block — China's mandatory AI-content labeling (TC260 namespace `tc260.org.cn/ns/AIGC`).

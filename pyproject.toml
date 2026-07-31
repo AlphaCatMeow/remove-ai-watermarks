@@ -1,7 +1,7 @@
 [project]
 name = "remove-ai-watermarks"
-version = "0.20.2"
-description = "Remove visible and invisible AI watermarks from images and provenance metadata from media containers"
+version = "0.22.0"
+description = "AI watermark remover for visible, invisible, and provenance marks in images and video"
 readme = "README.md"
 requires-python = ">=3.10.1"
 license = {text = "Apache-2.0"}
@@ -46,15 +46,7 @@ classifiers = [
 ]
 dependencies = [
     "pillow>=10.0.0",
-    # HEIC/AVIF pixel decode for the removal path (iPhone photos, modern exports):
-    # OpenCV cannot decode these containers, so image_io.imread falls back to Pillow
-    # and pillow-heif (bundled libheif, prebuilt wheels) registers the HEIF+AVIF
-    # openers. The metadata path already handles them via a plugin-free binary scan;
-    # this closes the same gap for the pixel path so `visible`/`all` work on them.
-    "pillow-heif>=0.13.0",
     "piexif>=1.1.3",
-    "numpy>=1.24.0",
-    "opencv-python-headless>=4.8.0",
     "click>=8.0.0",
     "python-dotenv>=1.0.0",
     # Official C2PA reader (Content Authenticity Initiative, MIT/Apache-2.0). The
@@ -64,16 +56,36 @@ dependencies = [
     # import is light (no torch/numpy) so it fits the dependency-light identify
     # host. Prebuilt wheels cover the full CI matrix (linux/macos/windows).
     "c2pa-python>=0.35.0",
-    # Timestamped NUT bridge for processed video frames. Rawvideo pipes carry no
-    # per-frame PTS, so this is what lets the existing system-ffmpeg encoder
-    # preserve VFR timing without buffering a frame sequence on disk. PyAV 18
-    # requires Python 3.11; the 16.x wheel line still covers Python 3.10.
-    "av>=16,<17; python_version < '3.11'",
-    "av>=18,<19; python_version >= '3.11'",
 ]
 
 [project.optional-dependencies]
-gpu = [
+pixels = [
+    "numpy>=1.24.0",
+    "opencv-python-headless>=4.8.0",
+]
+# Optional HEIC/AVIF pixel decode. Metadata scanning handles these containers
+# without this plugin; combine `heif` with any pixel feature only when needed.
+heif = [
+    "pillow-heif>=0.13.0",
+]
+visible = ["remove-ai-watermarks[pixels]"]
+# Video visible removal uses the shared pixel runtime. PyAV packetizes processed
+# VFR frames with explicit PTS before system ffmpeg encodes them. PyAV 18 requires
+# Python 3.11; the 16.x wheel line still covers Python 3.10.
+video = [
+    "remove-ai-watermarks[visible]",
+    "av>=16,<17; python_version < '3.11'",
+    "av>=18,<19; python_version >= '3.11'",
+]
+# Open DWT-DCT watermarks used by Stable Diffusion / SDXL / FLUX. The in-tree
+# decoder avoids the upstream invisible-watermark package's mandatory torch and
+# non-headless OpenCV dependencies.
+detect = [
+    "remove-ai-watermarks[pixels]",
+    "PyWavelets>=1.1.1",
+]
+diffusion = [
+    "remove-ai-watermarks[pixels]",
     "torch>=2.0.0",
     # The default PyPI torch wheel is a CPU/CUDA build. To drive an Intel GPU
     # (Arc / Data Center) via ``--device xpu`` you need an XPU-enabled torch
@@ -81,7 +93,7 @@ gpu = [
     # XPU build). Install that build first, then this extra (torch is then
     # already satisfied and won't be re-pulled):
     #   pip install torch --index-url https://download.pytorch.org/whl/xpu
-    #   pip install 'remove-ai-watermarks[gpu]'
+    #   pip install 'remove-ai-watermarks[diffusion]'
     # uv users can target the ``pytorch-xpu`` index declared under [tool.uv]:
     #   uv pip install torch --index-url https://download.pytorch.org/whl/xpu
     "diffusers>=0.38.0",
@@ -101,22 +113,12 @@ gpu = [
 ]
 # Full two-stage high-fidelity profile: Qwen-Image-2512 Lightning + DiffSynth
 # Canny ControlNet for the frame, then SAM-masked Z-Image Turbo face repair.
-# CUDA-only and intentionally separate from the normal gpu extra because the
+# CUDA-only and intentionally separate from the normal diffusion extra because the
 # additional model stack and DiffSynth runtime are large.
 qwen-zimage = [
-    "remove-ai-watermarks[gpu]",
+    "remove-ai-watermarks[diffusion]",
     "diffsynth>=2.0.17,<3",
     "torchvision>=0.20.0",
-]
-# Open invisible-watermark (imwatermark) decoder for detecting the DWT-DCT
-# watermarks embedded by Stable Diffusion / SDXL / FLUX. Optional because it
-# pulls non-headless opencv AND torch (invisible-watermark declares torch a hard
-# dependency, and WatermarkDecoder eagerly imports rivaGan -> torch at import
-# time, so the dwtDct-only detect path still needs torch present even though it
-# never runs on GPU). So `detect` alone pulls torch -- no need to add `gpu` for
-# detection. identify() guards the import and skips the signal when absent.
-detect = [
-    "invisible-watermark>=0.2.0",
 ]
 # Adobe TrustMark decoder -- the open, keyless watermark behind Adobe Durable
 # Content Credentials (soft-binding alg ``com.adobe.trustmark.P``). Optional
@@ -130,6 +132,7 @@ trustmark = [
 # cached by huggingface_hub; it is never bundled in this repo. The default cv2
 # eraser backend needs none of this.
 lama = [
+    "remove-ai-watermarks[visible]",
     "onnxruntime>=1.16.0",
     "huggingface-hub>=0.20.0",
 ]
@@ -139,6 +142,7 @@ lama = [
 # memory-tight learned tier (vs big-LaMa's ~4.7 GB). Select it explicitly when
 # LaMa, the quality-first `auto` choice, is too large. Same runtime as `lama`.
 migan = [
+    "remove-ai-watermarks[visible]",
     "onnxruntime>=1.16.0",
     "huggingface-hub>=0.20.0",
 ]
@@ -152,12 +156,16 @@ migan = [
 # weights are fetched with torch.hub (bundled with spandrel's torch), so no extra
 # download dependency is needed.
 esrgan = [
+    "remove-ai-watermarks[pixels]",
     "spandrel>=0.3.0",
 ]
 dev = [
+    "remove-ai-watermarks[video]",
+    "remove-ai-watermarks[detect]",
     "pytest>=8.0.0",
     "pytest-cov>=4.1.0",
     "pytest-xdist>=3.5.0",
+    "packaging>=24.0",
     "ruff>=0.4.0",
     "pyright>=1.1.0",
     "invisible-watermark>=0.2.0",
@@ -166,11 +174,11 @@ dev = [
     "uv-outdated>=0.1.0; python_version >= '3.12'",
     "uv-secure>=0.12.0; python_version >= '3.12'",
 ]
-all = ["remove-ai-watermarks[gpu,detect,trustmark,lama,migan,dev]"]
+all = ["remove-ai-watermarks[video,heif,detect,trustmark,diffusion,qwen-zimage,lama,migan,esrgan]"]
 
 # PyTorch Intel-GPU (XPU) wheel index. ``explicit = true`` keeps it inert for
 # the default CPU/CUDA install: uv consults it only when a torch install
-# explicitly targets it (see the ``gpu`` extra comment), so it does not alter
+# explicitly targets it (see the ``diffusion`` extra comment), so it does not alter
 # the locked CPU/CUDA resolution. Linux/Windows only -- no macOS XPU build.
 [[tool.uv.index]]
 name = "pytorch-xpu"

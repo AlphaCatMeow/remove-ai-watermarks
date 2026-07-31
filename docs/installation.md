@@ -2,14 +2,16 @@
 
 Python 3.10.1 or newer is required.
 
-## Core install
+## Default metadata mode
 
-The core package provides:
+The default package provides:
 
 - provenance inspection;
-- visible watermark removal with OpenCV;
-- manual region erasing with OpenCV;
 - AI metadata inspection and removal.
+
+It installs Pillow, piexif, and c2pa-python for reading metadata directly from
+files. It does not install NumPy, OpenCV, pillow-heif, Torch, diffusion models,
+or invisible-watermark decoders.
 
 Install it as an isolated command with uv:
 
@@ -29,12 +31,44 @@ You can also install the Homebrew package on macOS or Linux:
 brew install wiltodelta/tap/remove-ai-watermarks
 ```
 
-## Invisible watermark removal
+## Visible watermark removal
 
-Diffusion based removal needs the `gpu` extra:
+Visible mark detection, OpenCV inpainting, and manual region erasing need the
+`visible` extra:
 
 ```bash
-uv tool install --force "remove-ai-watermarks[gpu]"
+uv tool install --force "remove-ai-watermarks[visible]"
+```
+
+Add `heif` only when the pixel path must decode HEIC, HEIF, or AVIF:
+
+```bash
+uv tool install --force "remove-ai-watermarks[visible,heif]"
+```
+
+## Video processing
+
+Video metadata inspection and stripping work with the default package. Stable
+visible-mark identification and removal, full video cleaning, and visible/all
+batch modes need the `video` extra:
+
+```bash
+uv tool install --force "remove-ai-watermarks[video]"
+```
+
+The extra includes the visible pixel runtime and PyAV for preserving variable
+frame timestamps. Video SynthID regeneration also needs the diffusion stack:
+
+```bash
+uv tool install --force "remove-ai-watermarks[video,diffusion]"
+```
+
+## Invisible watermark removal
+
+Diffusion based removal needs the `diffusion` extra:
+
+```bash
+uv tool install --force "remove-ai-watermarks[diffusion]"
 ```
 
 The code supports CUDA, XPU, MPS, and CPU devices. A GPU is recommended because
@@ -46,28 +80,78 @@ For the CUDA only Qwen Image plus Z-Image profile:
 uv tool install --force "remove-ai-watermarks[qwen-zimage]"
 ```
 
-The `qwen-zimage` extra includes the normal `gpu` dependencies.
+The `qwen-zimage` extra includes the normal `diffusion` dependencies.
 
-## Optional features
+## Feature extras
 
-Install only what you need:
+Extras are composable. Install only the capabilities and file formats the
+application actually uses:
 
-| Extra | Adds |
-| --- | --- |
-| `migan` | MI-GAN ONNX fill backend |
-| `lama` | big-LaMa ONNX fill backend |
-| `detect` | Open DWT-DCT watermark decoder used by `identify` |
-| `trustmark` | Adobe TrustMark decoder |
-| `esrgan` | Real-ESRGAN upscaling before diffusion |
-| `qwen-zimage` | CUDA only Qwen Image plus Z-Image pipeline |
+| Extra | Capability | Automatically includes | Torch or model download |
+| --- | --- | --- | --- |
+| `pixels` | Shared BGR array and image-processing runtime | NumPy, headless OpenCV | No |
+| `heif` | HEIC, HEIF, and AVIF pixel decoding | pillow-heif | No |
+| `visible` | Visible mark detection, OpenCV inpainting, and manual erasing | `pixels` | No |
+| `video` | Visible video identification/removal and timestamp preservation | `visible`, PyAV | No |
+| `detect` | Open DWT-DCT detection for Stable Diffusion, SDXL, and FLUX | `pixels`, PyWavelets | No |
+| `trustmark` | Adobe TrustMark detection | trustmark | Yes |
+| `diffusion` | Diffusion-based invisible watermark removal | `pixels`, Torch, Diffusers | Yes |
+| `migan` | MI-GAN ONNX fill backend | `visible`, ONNX Runtime | Model download, no Torch |
+| `lama` | big-LaMa ONNX fill backend | `visible`, ONNX Runtime | Model download, no Torch |
+| `esrgan` | Real-ESRGAN upscaling before diffusion | `pixels`, spandrel | Yes |
+| `qwen-zimage` | CUDA-only Qwen Image plus Z-Image pipeline | `diffusion`, DiffSynth | Yes |
+| `all` | Every production feature | All rows above | Yes |
+| `dev` | Tests, linting, typing, and upstream parity checks | `visible`, `detect`, upstream invisible-watermark | Yes, for parity tests |
 
-Example:
+Dependency composition:
+
+```mermaid
+flowchart LR
+    visible --> pixels
+    video --> visible
+    detect --> pixels
+    diffusion --> pixels
+    migan --> visible
+    lama --> visible
+    esrgan --> pixels
+    qwen["qwen-zimage"] --> diffusion
+    heif
+    trustmark
+```
+
+`heif` and `trustmark` are independent branches. Combine them explicitly with
+another feature when required. The `all` bundle contains every production
+branch but never includes `dev`.
+
+Examples:
 
 ```bash
+# Metadata plus torch-free DWT-DCT detection
+uv tool install --force "remove-ai-watermarks[detect]"
+
+# Visible removal with HEIC/AVIF support and MI-GAN
+uv tool install --force "remove-ai-watermarks[migan,heif]"
+
+# Visible video removal with preserved timestamps
+uv tool install --force "remove-ai-watermarks[video]"
+
+# DWT-DCT and TrustMark detection without diffusion removal
+uv tool install --force "remove-ai-watermarks[detect,trustmark]"
+
+# Every production capability
+uv tool install --force "remove-ai-watermarks[all]"
+
+# An arbitrary minimal combination
 uv tool install --force "remove-ai-watermarks[migan,detect]"
 ```
 
-Some optional models download their weights on first use.
+`heif` stays independent so applications that only process PNG, JPEG, or WebP
+do not install libheif. `detect` uses the in-tree torch-free decoder and does
+not install the upstream `invisible-watermark` package. Optional models download
+their weights on first use.
+
+The old `gpu` and `remove` aliases are intentionally not provided. Use
+`diffusion` and `visible` respectively.
 
 ## Install from the repository
 
@@ -81,7 +165,7 @@ Add the feature groups required for your work:
 
 ```bash
 uv sync --frozen --extra dev
-uv sync --frozen --extra dev --extra gpu
+uv sync --frozen --extra dev --extra diffusion
 ```
 
 Run commands from the repository root:
@@ -133,4 +217,4 @@ found. A missing signal does not prove that the image is clean. If you know the
 image came from a relevant generator, use `--force`.
 
 If the CLI reports that diffusion dependencies are unavailable, install the
-`gpu` extra.
+`diffusion` extra. Video SynthID removal needs both `video` and `diffusion`.

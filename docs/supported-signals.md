@@ -54,7 +54,7 @@ independent frame fill.
 
 | Backend | Install | Behavior |
 | --- | --- | --- |
-| `cv2` | Core package | Classical OpenCV inpainting |
+| `cv2` | `remove-ai-watermarks[visible]` | Classical OpenCV inpainting |
 | `migan` | `remove-ai-watermarks[migan]` | MI-GAN through ONNX Runtime; practical learned CPU video tier |
 | `lama` | `remove-ai-watermarks[lama]` | big-LaMa through ONNX Runtime; offline video quality tier |
 | `auto` | Depends on installed extras | Selects LaMa, then MI-GAN, then OpenCV |
@@ -92,6 +92,9 @@ Pixel based image commands discover these extensions:
 - WebP;
 - HEIC and HEIF;
 - AVIF.
+
+HEIC, HEIF, and AVIF pixel decoding requires the independent `heif` extra in
+addition to the selected pixel feature. Metadata scanning does not.
 
 Metadata inspection and removal additionally have container paths for:
 

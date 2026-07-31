@@ -192,7 +192,7 @@ _upscaler_option = click.option(
     "--upscaler",
     type=click.Choice(["lanczos", "esrgan"]),
     default="lanczos",
-    help="How to upscale a small input to the --min-resolution floor: lanczos (default, cv2, no deps) or "
+    help="How to upscale a small input to the --min-resolution floor: lanczos (default, cv2, no model) or "
     "esrgan (Real-ESRGAN via the 'esrgan' extra; better detail, slower on CPU). Best for photo/texture "
     "content -- as a generic GAN with no face/glyph prior it can degrade faces (diffusion mitigates) and "
     "thin text, so lanczos stays the default. Falls back to lanczos if the extra is absent. Only when upscaling.",
@@ -340,7 +340,7 @@ _visible_backend_option = click.option(
     default="auto",
     help="Fill backend for visible-mark removal (localize -> fill). auto: best available, "
     "LaMa > MI-GAN > cv2 (a learned backend needs the 'lama' or 'migan' extra; else cv2, "
-    "with a warning). cv2: classical inpaint (no deps, smears texture). migan: MI-GAN ONNX "
+    "with a warning). cv2: classical inpaint (no model download, smears texture). migan: MI-GAN ONNX "
     "(light, ~1 GB, the memory-tight pick). lama: big-LaMa ONNX (best quality, ~4.7 GB).",
 )
 
@@ -809,7 +809,7 @@ def _parse_region(spec: str) -> tuple[int, int, int, int]:
     "--backend",
     type=click.Choice(["cv2", "migan", "lama"]),
     default="cv2",
-    help="Inpaint backend. cv2: instant, no deps. migan: light ONNX MI-GAN, ~1 GB RAM, "
+    help="Inpaint backend. cv2: instant, no model download. migan: light ONNX MI-GAN, ~1 GB RAM, "
     "near-LaMa quality (extra 'migan'). lama: big-LaMa, best quality but ~4.7 GB RAM (extra 'lama').",
 )
 @click.option("--inpaint-method", type=click.Choice(["telea", "ns"]), default="telea", help="cv2 inpaint method.")
@@ -950,13 +950,14 @@ def cmd_invisible(
     """Remove invisible AI watermarks (SynthID, StableSignature, TreeRing).
 
     Uses diffusion-based regeneration. Requires GPU for reasonable speed.
-    Requires the [gpu] extra: pip install 'remove-ai-watermarks[gpu]'
+    Requires the [diffusion] extra: pip install 'remove-ai-watermarks[diffusion]'
     """
     from remove_ai_watermarks.invisible_engine import is_available as invisible_available
 
     if not invisible_available():
         console.print(
-            "Error: GPU dependencies not installed.\n  Install them with: pip install 'remove-ai-watermarks[gpu]'"
+            "Error: Diffusion dependencies not installed.\n"
+            "  Install them with: pip install 'remove-ai-watermarks[diffusion]'"
         )
         raise SystemExit(1)
 
@@ -1707,7 +1708,7 @@ def cmd_all(
             synthid_skipped = True
             console.print(
                 "    Warning: Skipped - GPU dependencies not installed.\n"
-                "    Install them with: pip install 'remove-ai-watermarks[gpu]'"
+                "    Install them with: pip install 'remove-ai-watermarks[diffusion]'"
             )
         elif _should_skip_invisible_scrub(force, source):
             # No locally-detectable invisible watermark -> skip the destructive
@@ -1813,7 +1814,7 @@ def cmd_all(
             "  visible mark and metadata were stripped.\n"
             "\n"
             "  Install the extra and rerun to remove it:\n"
-            "    pip install 'remove-ai-watermarks[gpu]'\n"
+            "    pip install 'remove-ai-watermarks[diffusion]'\n"
             "  ====================================================================="
         )
         raise SystemExit(1)
@@ -2175,7 +2176,7 @@ def cmd_batch(
             f"\n  WARNING: the invisible (SynthID) watermark was NOT removed on "
             f"{synthid_skipped_count} image(s) -- the GPU dependencies are not installed, "
             f"so those outputs still carry the invisible watermark.\n"
-            f"  Install the extra and rerun: pip install 'remove-ai-watermarks[gpu]'"
+            f"  Install the extra and rerun: pip install 'remove-ai-watermarks[diffusion]'"
         )
 
     # Non-zero exit so a wrapping service detects an incomplete/failed run (batch used

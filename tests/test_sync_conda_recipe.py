@@ -43,7 +43,7 @@ def test_update_recipe_rejects_ambiguous_recipe() -> None:
         update_recipe(duplicate, version="2.0.0", sha256=_NEW_SHA)
 
 
-def test_repository_recipe_includes_timestamp_bridge() -> None:
-    recipe = Path("packaging/conda/recipe.yaml").read_text()
+def test_repository_recipe_stays_metadata_only() -> None:
+    recipe = Path("packaging/conda/recipe.yaml").read_text(encoding="utf-8")
 
-    assert "    - av >=16\n" in recipe
+    assert "    - av >=16\n" not in recipe

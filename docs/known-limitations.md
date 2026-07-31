@@ -11,7 +11,8 @@ superseded experiments live in the research archive listed in
 Visible removal changes only the selected mask, but the hidden pixels still
 have to be reconstructed.
 
-- OpenCV is fast and dependency free. It works well on flat backgrounds but
+- OpenCV is fast and requires no model download. It works well on flat
+  backgrounds but
   can smear texture or repeated structure.
 - MI-GAN is a lighter learned backend. It can improve natural texture but may
   ghost or invent structure.
@@ -200,11 +201,13 @@ The metadata path recognizes JPEG XL containers, but the visible and diffusion
 image paths do not list `.jxl` as a supported pixel format because the package
 does not include a JPEG XL pixel decoder.
 
-### HEIC, HEIF, and AVIF use a Pillow fallback
+### HEIC, HEIF, and AVIF pixel decoding uses an optional Pillow fallback
 
 OpenCV does not decode these formats in the project. `image_io.imread` falls
-back to Pillow with `pillow-heif`. A corrupt or truncated file may still fail to
-decode.
+back to Pillow with `pillow-heif` when the `heif` extra is installed alongside
+a pixel feature. The
+default metadata path scans these containers without that plugin. A corrupt or
+truncated file may still fail to decode.
 
 ### Some metadata removal requires ffmpeg
 

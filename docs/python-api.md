@@ -3,7 +3,17 @@
 Use the high level API for normal application integration. Low level detector
 and pipeline modules are intended for maintainers and specialized workflows.
 
+Dependency groups are identical for the CLI and Python API. The default install
+covers metadata extraction, normalization, verdict logic, and stripping.
+Array/pixel APIs use `pixels`; visible removal uses `visible`; DWT-DCT detection
+uses `detect`; diffusion removal uses `diffusion`; and visible video processing
+uses `video`. Video SynthID removal combines `video` and `diffusion`. Add `heif`
+independently when path-based pixel APIs must decode HEIC, HEIF, or AVIF. See
+the complete [feature-extra matrix](installation.md#feature-extras).
+
 ## Remove visible marks
+
+Install `remove-ai-watermarks[visible]` before using the visible-removal API.
 
 ```python
 import remove_ai_watermarks as raiw
@@ -68,6 +78,9 @@ result, removed = raiw.remove_visible(image, backend="cv2")
 
 ## Inspect provenance
 
+The default installation evaluates file metadata. Add `visible`, `detect`, or
+`trustmark` to enable the corresponding optional pixel signals.
+
 Get the vendor keys used by visible removal:
 
 ```python
@@ -88,8 +101,8 @@ print(report.platform)
 print(report.signals)
 ```
 
-Use `check_visible=False` and `check_invisible=False` for metadata only
-inspection:
+Use `check_visible=False` and `check_invisible=False` for metadata-only
+inspection through the compatible path-based API:
 
 ```python
 report = identify(
@@ -98,6 +111,48 @@ report = identify(
     check_invisible=False,
 )
 ```
+
+Extraction and detection are also available as separate steps. This is useful
+when a file-reading worker collects the metadata once and another component
+evaluates the resulting evidence:
+
+```python
+from remove_ai_watermarks.identify import (
+    extract_provenance_evidence,
+    identify_from_evidence,
+)
+
+evidence = extract_provenance_evidence(Path("input.png"))
+report = identify_from_evidence(evidence)
+```
+
+If metadata was collected by another component, normalize its nested record
+without reopening the original file:
+
+```python
+from remove_ai_watermarks.identify import (
+    evidence_from_metadata_record,
+    identify_from_evidence,
+)
+
+record = {
+    "pil": {"info:parameters": "Steps: 20, Sampler: Euler"},
+    "exif": {"0th": {"Software": "Stable Diffusion"}},
+}
+evidence = evidence_from_metadata_record(record, path=Path("input.png"))
+report = identify_from_evidence(evidence)
+```
+
+The normalizer recursively preserves text and byte values. It also decodes
+strings prefixed with `hex:` and fields named `base64` or ending in
+`_base64`. Diagnostic values under `error` and `kind` are ignored because they
+describe the collector rather than the source file. Pass a C2PA manifest-store
+dictionary in `record["c2pa_store"]`, or through the explicit
+`c2pa_manifest_store` argument.
+
+`identify_from_evidence` does not reopen the source file. It evaluates metadata
+only; registered visible marks and pixel-backed invisible watermarks remain in
+the path-based `identify` call.
 
 ## Strip metadata
 
@@ -131,6 +186,8 @@ as proof that metadata was removed.
 ## Identify and clean video
 
 The high level video API supports MP4, MOV, M4V, WebM, MKV, AVI, and FLV:
+metadata-only calls work with the default install, while visible identification,
+removal, and the complete pipeline require `remove-ai-watermarks[video]`.
 
 ```python
 import remove_ai_watermarks as raiw
@@ -211,6 +268,9 @@ reads `script.onMetaData.AIGC`; both use the same verified ffmpeg stream-copy
 removal path.
 
 ## Remove video SynthID
+
+Install `remove-ai-watermarks[video,diffusion]` before using the video SynthID
+API.
 
 ```python
 import remove_ai_watermarks as raiw
@@ -319,6 +379,9 @@ sources raise `RuntimeError` before encoding instead of being silently reduced
 to 8-bit SDR.
 
 ## Remove invisible watermarks
+
+Install `remove-ai-watermarks[diffusion]` for the standard pipelines or
+`remove-ai-watermarks[qwen-zimage]` for the CUDA-only high-fidelity profile.
 
 ```python
 from pathlib import Path

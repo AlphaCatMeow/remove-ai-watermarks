@@ -43,7 +43,7 @@ from remove_ai_watermarks.noai.constants import (
 
 logger = logging.getLogger(__name__)
 
-# Official C2PA reader (c2pa-python, a core dependency). It is the primary,
+# Official C2PA reader (c2pa-python, a default dependency). It is the primary,
 # spec-tracking manifest parser; the hand-rolled caBX/CBOR scanner below stays as
 # a fallback for synthetic/partial blobs the validator rejects. The import is
 # guarded so a partially-broken install degrades to the byte-scan rather than
@@ -189,9 +189,8 @@ def _active_manifest(store: dict[str, Any]) -> dict[str, Any]:
     return cast("dict[str, Any]", active) if isinstance(active, dict) else {}
 
 
-def _info_from_store_json(store_json: str) -> dict[str, Any]:
-    """Build the C2PA info dict from a c2pa-python manifest-store JSON string."""
-    store_bytes = store_json.encode("utf-8")
+def _info_from_store(store: dict[str, Any], store_bytes: bytes) -> dict[str, Any]:
+    """Build normalized C2PA info from one parsed manifest store."""
     c2pa_info: dict[str, Any] = {
         "has_c2pa": True,
         "type": "C2PA (Coalition for Content Provenance and Authenticity)",
@@ -202,19 +201,50 @@ def _info_from_store_json(store_json: str) -> dict[str, Any]:
     # registry scan that runs on the raw caBX chunk applies unchanged here.
     _populate_registry_fields(store_bytes, c2pa_info)
 
-    try:
-        parsed: Any = json.loads(store_json)
-    except (ValueError, TypeError):
-        return c2pa_info
-    if not isinstance(parsed, dict):
-        return c2pa_info
-    store = cast("dict[str, Any]", parsed)
     if generator := _claim_generator_from_store(store):
         c2pa_info["claim_generator"] = generator
     sig: Any = _active_manifest(store).get("signature_info")
     if isinstance(sig, dict) and (time := cast("dict[str, Any]", sig).get("time")):
         c2pa_info["timestamp"] = str(time)
     return c2pa_info
+
+
+def _info_from_store_json(store_json: str) -> dict[str, Any]:
+    """Build the C2PA info dict from a c2pa-python manifest-store JSON string."""
+    store_bytes = store_json.encode("utf-8")
+    try:
+        parsed: Any = json.loads(store_json)
+    except (ValueError, TypeError):
+        parsed = {}
+    store = cast("dict[str, Any]", parsed) if isinstance(parsed, dict) else {}
+    return _info_from_store(store, store_bytes)
+
+
+def c2pa_info_from_manifest_store(store: str | dict[str, Any]) -> dict[str, Any]:
+    """Build normalized C2PA evidence from an externally collected manifest store.
+
+    ``store`` may be the JSON string returned by ``c2pa.Reader.json()`` or its
+    decoded dictionary form. This is the non-file-backed counterpart to
+    :func:`extract_c2pa_info`.
+    """
+    if isinstance(store, dict):
+        parsed = store
+        try:
+            store_json = json.dumps(store, ensure_ascii=False)
+        except (TypeError, ValueError):
+            return {}
+    else:
+        store_json = store
+        try:
+            decoded: Any = json.loads(store_json)
+        except (TypeError, ValueError):
+            return {}
+        if not isinstance(decoded, dict):
+            return {}
+        parsed = cast("dict[str, Any]", decoded)
+    if not store_json or not parsed or parsed.get("error"):
+        return {}
+    return _info_from_store(parsed, store_json.encode("utf-8"))
 
 
 def extract_c2pa_info(image_path: Path) -> dict[str, Any]:

@@ -476,8 +476,9 @@ class WatermarkRemover:
         """Turn off the diffusers default invisible watermarker on an SDXL pipeline.
 
         diffusers embeds an open "Stable Diffusion XL" DWT-DCT invisible watermark on
-        EVERY SDXL output whenever ``invisible-watermark`` is installed (the ``detect``
-        extra). A watermark REMOVER must not re-stamp a detectable AI watermark, or the
+        EVERY SDXL output whenever ``invisible-watermark`` is installed (kept as a
+        development parity dependency). A watermark REMOVER must not re-stamp a
+        detectable AI watermark, or the
         cleaned output re-reads as AI (``identify`` -> "Open invisible watermark: Stable
         Diffusion XL"). Shared by both SDXL loaders; the ``ControlNetModel`` sub-model
         and the Qwen loader never call it (only the pipeline accepts the kwarg).

@@ -501,6 +501,17 @@ def _regeneration_metrics(
     )
 
 
+class TestVideoDependencies:
+    def test_visible_runtime_reports_video_extra(self, monkeypatch):
+        from remove_ai_watermarks import optional_deps
+        from remove_ai_watermarks.video import _require_video_runtime
+
+        monkeypatch.setattr(optional_deps, "module_available", lambda *_names: False)
+
+        with pytest.raises(RuntimeError, match=r"remove-ai-watermarks\[video\]"):
+            _require_video_runtime()
+
+
 class TestVideoMetadataApi:
     def test_top_level_api_is_lazy_exported(self):
         import remove_ai_watermarks as raiw

@@ -34,6 +34,14 @@ _REGENERATED_VIDEO_EXTENSIONS: frozenset[str] = _ISOBMFF_VIDEO_EXTENSIONS
 _EBML_MAGIC = b"\x1aE\xdf\xa3"
 
 
+def _require_video_runtime() -> None:
+    """Raise with the public install command when a video runtime is absent."""
+    from remove_ai_watermarks.optional_deps import module_available
+
+    if not module_available("cv2", "numpy", "av"):
+        raise RuntimeError("Video pixel processing requires remove-ai-watermarks[video]")
+
+
 @dataclass(frozen=True)
 class VideoMetadataReport:
     """AI metadata found in one supported video container."""
@@ -345,7 +353,6 @@ def identify_video(
     watermarks such as video SynthID have no public local decoder.
     """
     from remove_ai_watermarks.metadata import get_ai_metadata
-    from remove_ai_watermarks.video_visible import scan_video_marks
 
     source_path = _video_source(source)
     markers = get_ai_metadata(source_path)
@@ -354,6 +361,9 @@ def identify_video(
     total_frames: int | None = None
 
     if check_visible:
+        _require_video_runtime()
+        from remove_ai_watermarks.video_visible import scan_video_marks
+
         scans = scan_video_marks(
             source_path,
             VIDEO_VISIBLE_MARKS,
@@ -438,6 +448,8 @@ def remove_video_visible(
     published atomically. When no stable mark is found, no output is written
     and ``output`` in the result is ``None``.
     """
+    _require_video_runtime()
+
     from remove_ai_watermarks.metadata import get_ai_metadata
     from remove_ai_watermarks.video_visible import encode_clean_video, scan_video_marks
     from remove_ai_watermarks.watermark_registry import resolve_backend
@@ -526,6 +538,7 @@ def remove_video_all(
     if include_invisible and source_path.suffix.lower() not in _REGENERATED_VIDEO_EXTENSIONS:
         supported = ", ".join(sorted(_REGENERATED_VIDEO_EXTENSIONS))
         raise ValueError(f"Video SynthID regeneration requires one of: {supported}")
+    _require_video_runtime()
     detected_metadata = get_ai_metadata(source_path)
 
     with TemporaryDirectory(prefix=f".{source_path.stem}-video-all-", dir=source_path.parent) as temp_dir:
@@ -619,6 +632,8 @@ def remove_video_batch(
         raise ValueError("Unsupported fill backend; expected auto, cv2, migan, or lama")
     if include_invisible and mode != "all":
         raise ValueError("The invisible video stage is available only in all mode")
+    if mode != "metadata":
+        _require_video_runtime()
 
     output_path = (
         Path(output_directory)
@@ -768,12 +783,14 @@ def remove_video_invisible(
     rechecked with Google's verifier when the caller needs a per-file verdict.
     """
     from remove_ai_watermarks.metadata import get_ai_metadata
-    from remove_ai_watermarks.video_invisible import regenerate_video_candidate
 
     source_path = _video_source(source)
     if source_path.suffix.lower() not in _REGENERATED_VIDEO_EXTENSIONS:
         supported = ", ".join(sorted(_REGENERATED_VIDEO_EXTENSIONS))
         raise ValueError(f"Video SynthID regeneration requires one of: {supported}")
+    _require_video_runtime()
+    from remove_ai_watermarks.video_invisible import regenerate_video_candidate
+
     clean_output = Path(output) if output is not None else source_path.with_stem(source_path.stem + "_clean")
     output_path = _video_output(
         source_path,

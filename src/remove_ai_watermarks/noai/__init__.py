@@ -7,7 +7,7 @@ is exposed **lazily** via PEP 562 ``__getattr__``: importing a light submodule
 (e.g. ``noai.c2pa`` / ``noai.constants`` from ``identify``) must NOT eagerly pull
 ``watermark_remover``, which imports torch + diffusers at module top. Keeping this
 lazy is what lets ``import remove_ai_watermarks.identify`` stay cheap (~36 MB, no
-torch) even in a full install where the ``gpu``/``detect`` extras are present --
+torch) even in a full install where the ``diffusion`` extra is present --
 otherwise the mere presence of torch in the env inflated identify to ~420 MB and
 risked OOM on a 512 MB host.
 """

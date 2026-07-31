@@ -6,6 +6,7 @@ against the real committed C2PA / IPTC fixtures in data/fixtures/provenance/.
 
 from __future__ import annotations
 
+import base64
 import json
 import subprocess
 import sys
@@ -16,14 +17,18 @@ from unittest.mock import patch
 import pytest
 
 from remove_ai_watermarks.identify import (
+    ProvenanceEvidence,
     ProvenanceReport,
     _ai_tools_in,
     _attribute_platform,
     _integrity_clashes,
     _issuers_in,
     _vendor_of,
+    evidence_from_metadata_record,
+    extract_provenance_evidence,
     has_invisible_target,
     identify,
+    identify_from_evidence,
 )
 from remove_ai_watermarks.watermark_registry import GEMINI_SPARKLE_TRUST_CONF
 
@@ -31,6 +36,129 @@ from remove_ai_watermarks.watermark_registry import GEMINI_SPARKLE_TRUST_CONF
 _SPARKLE_TARGET = "remove_ai_watermarks.gemini_engine.detect_sparkle_confidence"
 
 SAMPLES_DIR = Path(__file__).resolve().parent.parent / "data" / "fixtures" / "provenance"
+
+
+class TestProvenanceEvidence:
+    def test_external_metadata_record_builds_equivalent_evidence(self, tmp_path: Path):
+        path = tmp_path / "external.jpg"
+        signature = "A" * 64
+        artist = "c8045292-06d2-4c7d-b4f0-4f93b94e4801"
+        record = {
+            "pil": {"info:parameters": "Steps: 20, Sampler: Euler"},
+            "exif": {
+                "0th": {
+                    "ImageDescription": f"Signature: {signature}",
+                    "Artist": artist,
+                }
+            },
+        }
+
+        evidence = evidence_from_metadata_record(record, path=path)
+        report = identify_from_evidence(evidence)
+
+        assert evidence.path == path
+        assert evidence.ai_metadata["parameters"] == "Steps: 20, Sampler: Euler"
+        assert evidence.xai_signature is True
+        assert report.is_ai_generated is True
+        assert {signal.name for signal in report.signals} >= {"gen_params", "xai_signature"}
+
+    def test_external_scanner_diagnostics_do_not_create_c2pa_evidence(self, tmp_path: Path):
+        path = tmp_path / "plain.jpg"
+        record = {
+            "c2pa_store": {"error": "ManifestNotFound: no JUMBF data found"},
+            "jpeg": {
+                "segments": [
+                    {
+                        "marker": "APP11",
+                        "kind": "c2pa_or_jumbf",
+                        "base64": "AAA=",
+                    }
+                ]
+            },
+        }
+
+        report = identify_from_evidence(evidence_from_metadata_record(record, path=path))
+
+        assert report.is_ai_generated is None
+        assert report.signals == []
+        assert report.watermarks == []
+
+    def test_external_scanner_raw_bytes_still_create_c2pa_evidence(self, tmp_path: Path):
+        path = tmp_path / "signed.jpg"
+        manifest = b"jumb c2pa OpenAI trainedAlgorithmicMedia"
+        record = {
+            "jpeg": {
+                "segments": [
+                    {
+                        "marker": "APP11",
+                        "kind": "c2pa_or_jumbf",
+                        "base64": base64.b64encode(manifest).decode(),
+                    }
+                ]
+            }
+        }
+
+        report = identify_from_evidence(evidence_from_metadata_record(record, path=path))
+
+        assert report.is_ai_generated is True
+        assert report.platform == "OpenAI (ChatGPT / gpt-image / DALL-E / Sora)"
+        assert [signal.name for signal in report.signals] == ["c2pa"]
+
+    def test_external_generator_bytes_are_normalized(self, tmp_path: Path):
+        evidence = evidence_from_metadata_record(
+            {"exif": {"0th": {"Software": b"NovelAI"}}},
+            path=tmp_path / "external.png",
+        )
+
+        assert evidence.exif_generator == "NovelAI"
+
+    @pytest.mark.parametrize(
+        "filename",
+        [
+            "chatgpt-1.png",
+            "chatgpt-2.png",
+            "doubao-1.png",
+            "firefly-1.png",
+            "flux-1.jpg",
+            "flux-1.png",
+            "grok-1.jpg",
+            "mj-1.png",
+        ],
+    )
+    def test_metadata_only_identify_matches_extracted_evidence(self, filename: str):
+        path = SAMPLES_DIR / filename
+
+        direct = identify(path, check_visible=False, check_invisible=False)
+        evidence = extract_provenance_evidence(path)
+        extracted = identify_from_evidence(evidence)
+
+        assert isinstance(evidence, ProvenanceEvidence)
+        assert extracted == direct
+
+    def test_identify_from_evidence_does_not_read_the_source(self, monkeypatch, tmp_path: Path):
+        path = tmp_path / "generated.jpg"
+        path.write_bytes(b"\xff\xd8\xff\xe1jumbc2paOpenAI DALL-E trainedAlgorithmicMedia\xff\xd9")
+        evidence = extract_provenance_evidence(path)
+
+        def fail_if_called(*args, **kwargs):
+            raise AssertionError("identify_from_evidence must not read the source file")
+
+        monkeypatch.setattr("remove_ai_watermarks.identify.extract_c2pa_info", fail_if_called)
+        monkeypatch.setattr("remove_ai_watermarks.identify.get_ai_metadata", fail_if_called)
+        monkeypatch.setattr("remove_ai_watermarks.identify.scan_head", fail_if_called)
+        monkeypatch.setattr("remove_ai_watermarks.identify.iptc_ai_system", fail_if_called)
+        monkeypatch.setattr("remove_ai_watermarks.identify.aigc_label", fail_if_called)
+        monkeypatch.setattr("remove_ai_watermarks.identify.exif_generator", fail_if_called)
+        monkeypatch.setattr("remove_ai_watermarks.identify.xai_signature", fail_if_called)
+        monkeypatch.setattr("remove_ai_watermarks.identify.huggingface_job", fail_if_called)
+        monkeypatch.setattr("remove_ai_watermarks.identify.samsung_genai", fail_if_called)
+        monkeypatch.setattr("builtins.open", fail_if_called)
+        monkeypatch.setattr(Path, "open", fail_if_called)
+
+        report = identify_from_evidence(evidence)
+
+        assert report.is_ai_generated is True
+        assert any(signal.name == "c2pa" for signal in report.signals)
 
 
 # ── Pure attribution logic (no file IO) ─────────────────────────────
@@ -662,6 +790,15 @@ class TestIdentifyVisibleTextMarks:
             identify(tmp_clean_png, check_visible=True, check_invisible=False)
         assert mock_imread.call_count == 1
 
+    def test_missing_pixel_extra_preserves_metadata_verdict(self, tmp_png_with_ai_metadata: Path):
+        import remove_ai_watermarks.image_io as image_io
+
+        with patch.object(image_io, "imread", side_effect=ModuleNotFoundError("No module named 'cv2'")):
+            report = identify(tmp_png_with_ai_metadata, check_visible=True, check_invisible=False)
+
+        assert report.is_ai_generated is True
+        assert report.confidence == "high"
+
 
 # ── Caveats and serialization ───────────────────────────────────────
 
@@ -869,7 +1006,7 @@ class TestIdentifyC2paDevice:
 from remove_ai_watermarks.invisible_watermark import is_available as _wm_available  # noqa: E402
 
 
-@pytest.mark.skipif(not _wm_available(), reason="invisible-watermark not installed")
+@pytest.mark.skipif(not _wm_available(), reason="detect extra not installed")
 class TestIdentifyInvisibleWatermark:
     def _sdxl_watermarked(self, tmp_path: Path) -> Path:
         import cv2
