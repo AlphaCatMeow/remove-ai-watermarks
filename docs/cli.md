@@ -210,7 +210,15 @@ must also remain anchored instead of drifting with a scene object. Matching
 provider provenance may relax the visual score only for registered
 provenance-aware marks; metadata alone never creates a detection.
 
-The video stream is transcoded and the original audio stream is copied.
+`--mark auto` is the default. It evaluates all providers in one decode pass and
+selects the first stable match in specificity order: Sora, Veo, Seedance, Dola,
+Hailuo, then Kling. Their confidence scores are independently calibrated and
+are not compared across providers. Pass an explicit `--mark` to scan only that
+provider.
+
+The video stream is transcoded and the complete original audio stream is
+copied without truncating an audio tail that extends beyond the final video
+frame.
 Supported input and output containers are MP4, MOV, M4V, WebM, MKV, AVI, and
 FLV; the output extension must match the input. The default `cv2` backend is
 fast but can smear structured backgrounds. Select `--backend migan` or
@@ -220,7 +228,8 @@ installed backend.
 AI metadata is stripped from the encoded output by default. Use
 `--keep-metadata` to retain mapped container metadata. When no temporally stable
 mark is found, the command writes no output and exits with the no-visible-mark
-status.
+status. The final path is replaced atomically only after ffmpeg completes, so a
+failed encode does not overwrite an existing result.
 
 ## Remove invisible watermarks
 

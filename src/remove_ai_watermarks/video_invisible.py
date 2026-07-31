@@ -13,11 +13,8 @@ from __future__ import annotations
 # pyright: reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false, reportMissingTypeStubs=false, reportMissingImports=false, reportArgumentType=false, reportAssignmentType=false, reportReturnType=false, reportCallIssue=false, reportIndexIssue=false, reportOperatorIssue=false, reportOptionalMemberAccess=false, reportOptionalCall=false, reportOptionalSubscript=false, reportOptionalOperand=false, reportAttributeAccessIssue=false, reportPrivateImportUsage=false, reportPrivateUsage=false, reportInvalidTypeForm=false
 import logging
 import math
-import os
-import tempfile
 from dataclasses import dataclass
 from importlib.util import find_spec
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import cv2
@@ -25,6 +22,7 @@ import numpy as np
 
 from remove_ai_watermarks.video_encoding import (
     abort_raw_video_encoder,
+    atomic_video_output,
     finish_raw_video_encoder,
     raw_video_command,
     start_raw_video_encoder,
@@ -39,6 +37,7 @@ from remove_ai_watermarks.video_synthid import (
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
+    from pathlib import Path
 
 log = logging.getLogger(__name__)
 
@@ -405,15 +404,7 @@ def regenerate_video_candidate(
     vae.eval()
     vae.enable_slicing()
 
-    output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        prefix=f".{output.stem}-",
-        suffix=output.suffix,
-        dir=output.parent,
-        delete=False,
-    ) as stream:
-        temporary_output = Path(stream.name)
-    try:
+    with atomic_video_output(output) as temporary_output:
         process = start_raw_video_encoder(
             raw_video_command(
                 source,
@@ -499,7 +490,7 @@ def regenerate_video_candidate(
             raise
 
         mse = squared_error / pixel_count
-        metrics = RegenerationMetrics(
+        return RegenerationMetrics(
             frames=frame_count,
             fps=effective_fps,
             width=size[0],
@@ -507,7 +498,3 @@ def regenerate_video_candidate(
             psnr_db=math.inf if mse == 0.0 else 20.0 * math.log10(255.0 / math.sqrt(mse)),
             temporal_residual_ratio=temporal_candidate / max(temporal_baseline, 1e-6),
         )
-        os.replace(temporary_output, output)
-    finally:
-        temporary_output.unlink(missing_ok=True)
-    return metrics

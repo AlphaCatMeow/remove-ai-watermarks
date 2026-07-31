@@ -125,7 +125,9 @@ use the verified ffmpeg stream-copy path for removal.
 [`video_encoding.py`](../src/remove_ai_watermarks/video_encoding.py) owns the
 raw-BGR ffmpeg command and pipe lifecycle shared by visible removal and
 invisible regeneration. It centralizes container codecs, optional audio stream
-copying, metadata/chapter policy, and encode-failure reporting.
+copying, metadata/chapter policy, encode-failure reporting, and atomic
+same-directory publication. Each mapped stream is allowed to reach its own end,
+so a copied audio tail is not shortened to the raw-video input duration.
 
 [`video_invisible.py`](../src/remove_ai_watermarks/video_invisible.py)
 implements the oracle-gated video SynthID candidate engine. It samples frames
@@ -160,6 +162,14 @@ reject recurring scene texture. All fixed-mark searches are bounded to the
 expected lower-frame area and calibrated independently. A strong relocated Veo
 diamond may bypass the known layout anchors, but weak free-corner matches never
 enter the temporal arbiter.
+
+The default `auto` route decodes each frame once, shares its grayscale and
+normalized representations across all detectors, and caches resized synthetic
+template features for the fixed stream geometry. Provider confidence scales
+are not comparable: selection applies each provider's temporal arbiter and
+takes the first stable result in specificity order (`sora`, `veo`, `seedance`,
+`dola`, `hailuo`, `kling`). An explicit mark uses the same scan path with one
+candidate.
 
 Every per-frame result is untrusted. The provider-specific stabilization
 wrappers share one recurrence implementation, while retaining separate visual

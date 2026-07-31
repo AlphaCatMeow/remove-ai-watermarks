@@ -3,14 +3,36 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
+import tempfile
+from contextlib import contextmanager
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from pathlib import Path
+    from collections.abc import Generator
 
 log = logging.getLogger(__name__)
+
+
+@contextmanager
+def atomic_video_output(output: Path) -> Generator[Path]:
+    """Yield a sibling temporary path and publish it only after success."""
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        prefix=f".{output.stem}-",
+        suffix=output.suffix,
+        dir=output.parent,
+        delete=False,
+    ) as stream:
+        temporary_output = Path(stream.name)
+    try:
+        yield temporary_output
+        os.replace(temporary_output, output)
+    finally:
+        temporary_output.unlink(missing_ok=True)
 
 
 def _video_codec_args(suffix: str, *, crf: int) -> list[str]:
@@ -61,7 +83,6 @@ def raw_video_command(
         "-1" if strip_metadata else "1",
         "-map_chapters",
         "-1" if strip_metadata else "1",
-        "-shortest",
     ]
     if output.suffix.lower() in {".mp4", ".mov", ".m4v"}:
         command.extend(["-movflags", "+faststart"])

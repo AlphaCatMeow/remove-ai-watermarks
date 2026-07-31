@@ -22,8 +22,10 @@ from remove_ai_watermarks.video_synthid import (
 
 if TYPE_CHECKING:
     from remove_ai_watermarks.video_invisible import RegenerationMetrics
+    from remove_ai_watermarks.video_visible import VideoScan
 
 VIDEO_EXTENSIONS: frozenset[str] = frozenset({".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi", ".flv"})
+VIDEO_VISIBLE_MARKS = ("sora", "veo", "seedance", "dola", "hailuo", "kling")
 _ISOBMFF_VIDEO_EXTENSIONS: frozenset[str] = frozenset({".mp4", ".mov", ".m4v"})
 _EBML_VIDEO_EXTENSIONS: frozenset[str] = frozenset({".webm", ".mkv"})
 _RIFF_VIDEO_EXTENSIONS: frozenset[str] = frozenset({".avi"})
@@ -182,17 +184,20 @@ def remove_video_visible(
     source: str | Path,
     output: str | Path | None = None,
     *,
-    mark: str = "sora",
+    mark: str = "auto",
     backend: str = "cv2",
     strip_metadata: bool = True,
 ) -> VideoVisibleResult:
     """Remove a supported visible AI wordmark from a video.
 
-    Supported marks are ``sora``, ``veo``, ``seedance``, ``dola``, ``hailuo``,
-    and ``kling``. The full sequence is scanned before pixels change, and only
-    recurring candidates are accepted. Audio is copied without re-encoding;
-    video is transcoded because the pixels change. When no stable mark is found,
-    no output is written and ``output`` in the result is ``None``.
+    ``mark="auto"`` scans every supported provider in one decode pass and selects
+    the first stable match in specificity order. Explicit marks are ``sora``,
+    ``veo``, ``seedance``, ``dola``, ``hailuo``, and ``kling``. The full
+    sequence is scanned before pixels change, and only recurring candidates are
+    accepted. Complete audio is copied without re-encoding; video is transcoded
+    because the pixels change. Completed output is published atomically. When
+    no stable mark is found, no output is written and ``output`` in the result
+    is ``None``.
     """
     from remove_ai_watermarks.metadata import get_ai_metadata
     from remove_ai_watermarks.video_visible import (
@@ -200,12 +205,7 @@ def remove_video_visible(
         has_bytedance_video_provenance,
         has_sora_provenance,
         has_veo_provenance,
-        scan_dola_video,
-        scan_hailuo_video,
-        scan_kling_video,
-        scan_seedance_video,
-        scan_sora_video,
-        scan_veo_video,
+        scan_video_marks,
         stabilize_dola_localizations,
         stabilize_hailuo_localizations,
         stabilize_kling_localizations,
@@ -215,56 +215,98 @@ def remove_video_visible(
     )
     from remove_ai_watermarks.watermark_registry import resolve_backend
 
-    if mark not in {"sora", "veo", "seedance", "dola", "hailuo", "kling"}:
-        raise ValueError("Unsupported visible video mark; expected sora, veo, seedance, dola, hailuo, or kling")
+    if mark not in {"auto", *VIDEO_VISIBLE_MARKS}:
+        raise ValueError("Unsupported visible video mark; expected auto, sora, veo, seedance, dola, hailuo, or kling")
     if backend not in {"auto", "cv2", "migan", "lama"}:
         raise ValueError("Unsupported fill backend; expected auto, cv2, migan, or lama")
 
     source_path = _video_source(source)
     output_path = _video_output(source_path, output, operation="visible watermark removal")
     markers = get_ai_metadata(source_path)
-    if mark == "sora":
-        scan = scan_sora_video(source_path)
-        regions = stabilize_sora_localizations(
-            scan.detections,
-            provenance=has_sora_provenance(markers),
+
+    def removal_plan(
+        selected_mark: str,
+        selected_scan: VideoScan,
+    ) -> tuple[list[tuple[int, int, int, int] | None], float, Literal["box", "veo"]]:
+        if selected_mark == "sora":
+            return (
+                stabilize_sora_localizations(
+                    selected_scan.detections,
+                    provenance=has_sora_provenance(markers),
+                ),
+                0.28,
+                "box",
+            )
+        if selected_mark == "veo":
+            return (
+                stabilize_veo_localizations(
+                    selected_scan.detections,
+                    provenance=has_veo_provenance(markers),
+                ),
+                0.18,
+                "veo",
+            )
+        if selected_mark == "seedance":
+            return (
+                stabilize_seedance_localizations(
+                    selected_scan.detections,
+                    provenance=has_bytedance_video_provenance(markers),
+                ),
+                0.0,
+                "box",
+            )
+        if selected_mark == "dola":
+            return (
+                stabilize_dola_localizations(
+                    selected_scan.detections,
+                    provenance=has_bytedance_video_provenance(markers),
+                ),
+                0.20,
+                "box",
+            )
+        if selected_mark == "hailuo":
+            return stabilize_hailuo_localizations(selected_scan.detections), 0.12, "box"
+        return stabilize_kling_localizations(selected_scan.detections), 0.12, "box"
+
+    candidate_marks = VIDEO_VISIBLE_MARKS if mark == "auto" else (mark,)
+    scans = scan_video_marks(source_path, candidate_marks)
+    selected: (
+        tuple[
+            str,
+            VideoScan,
+            list[tuple[int, int, int, int] | None],
+            float,
+            Literal["box", "veo"],
+        ]
+        | None
+    ) = None
+    for candidate_mark in candidate_marks:
+        candidate_scan = scans[candidate_mark]
+        candidate_regions, candidate_padding, candidate_mask_style = removal_plan(
+            candidate_mark,
+            candidate_scan,
         )
-        padding_fraction = 0.28
-        mask_style = "box"
-    elif mark == "veo":
-        scan = scan_veo_video(source_path)
-        regions = stabilize_veo_localizations(
-            scan.detections,
-            provenance=has_veo_provenance(markers),
+        if any(region is not None for region in candidate_regions):
+            selected = (
+                candidate_mark,
+                candidate_scan,
+                candidate_regions,
+                candidate_padding,
+                candidate_mask_style,
+            )
+            break
+    if selected is None:
+        scan = scans[candidate_marks[0]]
+        return VideoVisibleResult(
+            source=source_path,
+            output=None,
+            mark=mark,
+            total_frames=len(scan.detections),
+            detected_frames=0,
+            removed_frames=0,
+            remaining_metadata=markers if strip_metadata else {},
         )
-        padding_fraction = 0.18
-        mask_style = "veo"
-    elif mark == "seedance":
-        scan = scan_seedance_video(source_path)
-        regions = stabilize_seedance_localizations(
-            scan.detections,
-            provenance=has_bytedance_video_provenance(markers),
-        )
-        padding_fraction = 0.0
-        mask_style = "box"
-    elif mark == "dola":
-        scan = scan_dola_video(source_path)
-        regions = stabilize_dola_localizations(
-            scan.detections,
-            provenance=has_bytedance_video_provenance(markers),
-        )
-        padding_fraction = 0.20
-        mask_style = "box"
-    elif mark == "hailuo":
-        scan = scan_hailuo_video(source_path)
-        regions = stabilize_hailuo_localizations(scan.detections)
-        padding_fraction = 0.12
-        mask_style = "box"
-    else:
-        scan = scan_kling_video(source_path)
-        regions = stabilize_kling_localizations(scan.detections)
-        padding_fraction = 0.12
-        mask_style = "box"
+    mark, scan, regions, padding_fraction, mask_style = selected
     detected_frames = sum(region is not None for region in regions)
     if detected_frames == 0:
         return VideoVisibleResult(

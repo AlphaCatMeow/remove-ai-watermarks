@@ -28,6 +28,7 @@ from remove_ai_watermarks.noai.watermark_profiles import (
     strength_default_help,
     vendor_for_strength,
 )
+from remove_ai_watermarks.video import VIDEO_VISIBLE_MARKS
 from remove_ai_watermarks.video_synthid import (
     DEFAULT_VIDEO_SYNTHID_FPS,
     DEFAULT_VIDEO_SYNTHID_LONG_SIDE,
@@ -1240,9 +1241,9 @@ def cmd_video_invisible(
 )
 @click.option(
     "--mark",
-    type=click.Choice(["sora", "veo", "seedance", "dola", "hailuo", "kling"]),
-    default="sora",
-    help="Visible AI mark to remove.",
+    type=click.Choice(["auto", *VIDEO_VISIBLE_MARKS]),
+    default="auto",
+    help="Visible AI mark to remove. Auto scans every supported provider in one decode pass.",
 )
 @click.option(
     "--backend",
@@ -1281,7 +1282,8 @@ def cmd_video_visible(
         console.print(f"  FAILED: {len(result.remaining_metadata)} AI metadata marker(s) survived in {result.output}")
         raise SystemExit(1)
     console.print(
-        f"  Removed {mark} watermark from {result.removed_frames}/{result.total_frames} frames -> {result.output}"
+        f"  Removed {result.mark} watermark from "
+        f"{result.removed_frames}/{result.total_frames} frames -> {result.output}"
     )
 
 

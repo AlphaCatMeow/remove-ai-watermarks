@@ -55,6 +55,7 @@ def test_encoder_command_discards_metadata_and_copies_audio(
     audio_codec_index = command.index("-c:a")
     assert command[audio_codec_index + 1] == "copy"
     assert "pipe:0" in command
+    assert "-shortest" not in command
 
 
 def test_stream_batches_consumes_only_one_batch_ahead() -> None:

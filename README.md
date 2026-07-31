@@ -96,13 +96,17 @@ remove-ai-watermarks video visible kling.mp4 --mark kling -o kling_clean.mp4
 This path scans the complete sequence before changing pixels. It accepts only a
 mark that repeats at a stable position across adjacent frames, then reuses the
 same OpenCV, MI-GAN, or LaMa fill backends as image removal. Audio is copied
-without re-encoding; the video stream is transcoded because its pixels change.
+without re-encoding and is allowed to reach its natural end; the video stream
+is transcoded because its pixels change. The default `--mark auto` scans all
+providers in one decode pass and selects the first stable match in the
+specificity order shown below. Pass an explicit mark to restrict detection to
+one provider.
 Sora covers the moving Sora 2 mascot and wordmark. Veo covers both the current
 four-point diamond and the legacy `Veo` text. Seedance covers the fixed boxed
 `AI` label, Dola covers the fixed `Dola AI` text, Hailuo covers the composite
 `MINIMAX | hailuo AI` label, and Kling covers the bottom-right `KLING AI`
-label with its version suffix. No output is written when no stable mark is
-found.
+label with its version suffix. A completed encode is published atomically. No
+output is written when no stable mark is found.
 
 Generate a video SynthID candidate:
 
@@ -112,7 +116,8 @@ remove-ai-watermarks video invisible input.mp4 -o candidate.mp4
 ```
 
 This path regenerates the complete sequence with one latent-noise field shared
-across time, copies audio, and strips source metadata. It cannot verify
+across time, copies complete audio, strips source metadata, and publishes the
+completed encode atomically. It cannot verify
 Google's proprietary pixel watermark locally. The command therefore labels
 every output `UNVERIFIED` and prints the exact Gemini Flash verification
 prompt.
@@ -266,7 +271,8 @@ print(removed)
 report = raiw.inspect_video_metadata("input.mp4")
 cleaned = raiw.remove_video_metadata("input.mp4")
 candidate = raiw.remove_video_invisible("input.mp4", "candidate.mp4")
-visible = raiw.remove_video_visible("sora.mp4", "sora_clean.mp4")
+visible = raiw.remove_video_visible("input.mp4", "clean.mp4")
+print(visible.mark)
 veo = raiw.remove_video_visible("veo.mp4", "veo_clean.mp4", mark="veo")
 seedance = raiw.remove_video_visible(
     "seedance.mp4",

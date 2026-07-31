@@ -215,6 +215,11 @@ drifting with a scene object. Kling also requires a bright low-saturation
 candidate near the expected frame edge. Provider provenance can recover
 low-contrast runs only after visual evidence exists for the marks that define a
 provenance prior, so metadata alone does not erase a clean API export.
+The default auto-router evaluates all detectors in one decode pass but does not
+rank their raw confidence values. Those scores are provider-specific and known
+to cross-match in some layouts, so the router applies the independent temporal
+policies and selects the first stable result in specificity order. Use an
+explicit mark when the provider is already known.
 Historical Sora Turbo exports use a small OpenAI swirl in the corner rather
 than the moving mascot-and-wordmark design; that earlier variant is not
 detected by the `sora` video mark. Hailuo and Kling coverage is specific to the
@@ -223,17 +228,19 @@ silhouette. Other provider video labels are not supported yet. Google video
 SynthID has a candidate-producing VAE path, while other proprietary invisible
 video watermarks have no registered attack.
 
-Visible removal transcodes the video stream and copies audio. Its frame-local
-fill is not a motion-aware video inpainting model. OpenCV can leave a visible
-smear where the mark overlaps a hard edge or structured texture, and the smear
-can vary over time. MI-GAN and LaMa improve individual frames but do not
-guarantee temporal coherence. The Veo diamond uses a shape mask to limit damage
-outside the symbol. Seedance fills the full localized box because a synthetic
-outline mask left part of the real translucent border visible in an end-to-end
-check. OpenCV may therefore soften texture inside that small box; use MI-GAN or
-LaMa when reconstruction quality matters. The current encoder also emits a
-constant-frame-rate output at the decoded stream rate, so variable-frame-rate
-preservation is not yet guaranteed.
+Visible removal transcodes the video stream and copies the complete audio
+stream without shortening an audio tail. Completed visible and invisible
+encodes are published atomically, so an encode failure preserves an existing
+output. Its frame-local fill is not a motion-aware video inpainting model.
+OpenCV can leave a visible smear where the mark overlaps a hard edge or
+structured texture, and the smear can vary over time. MI-GAN and LaMa improve
+individual frames but do not guarantee temporal coherence. The Veo diamond
+uses a shape mask to limit damage outside the symbol. Seedance fills the full
+localized box because a synthetic outline mask left part of the real
+translucent border visible in an end-to-end check. OpenCV may therefore soften
+texture inside that small box; use MI-GAN or LaMa when reconstruction quality
+matters. The current encoder also emits a constant-frame-rate output at the
+decoded stream rate, so variable-frame-rate preservation is not yet guaranteed.
 
 Native TC260 metadata in MP4/MOV is supported at its normative
 `moov.udta.meta.keys/ilst` placement, including non-faststart files whose

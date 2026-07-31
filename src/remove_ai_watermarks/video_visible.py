@@ -11,8 +11,8 @@ requires the candidate to recur at the same location across adjacent frames.
 This keeps isolated lookalikes in clean videos from becoming removal masks.
 
 Video pixels are decoded with OpenCV and encoded with the system ``ffmpeg``.
-Audio is stream-copied from the source. The video stream must be transcoded
-because visible-mark removal changes pixels.
+Complete audio is stream-copied from the source. The video stream must be
+transcoded because visible-mark removal changes pixels.
 """
 
 # cv2/numpy boundary: these packages do not expose usable types for many array
@@ -32,8 +32,10 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+from remove_ai_watermarks.video import VIDEO_VISIBLE_MARKS
 from remove_ai_watermarks.video_encoding import (
     abort_raw_video_encoder,
+    atomic_video_output,
     finish_raw_video_encoder,
     raw_video_command,
     start_raw_video_encoder,
@@ -103,6 +105,15 @@ class VideoScan:
     height: int
     fps: float
     detections: tuple[FrameLocalization, ...]
+
+
+@dataclass(frozen=True)
+class _PreparedFrame:
+    """Frame representations shared by every detector in one scan pass."""
+
+    gray: NDArray[Any]
+    normalized_gray: NDArray[Any]
+    normalized_scale: float
 
 
 def _scalable_default_font(size: int) -> ImageFont.ImageFont | ImageFont.FreeTypeFont:
@@ -291,6 +302,43 @@ def _top_hat(gray: NDArray[Any]) -> NDArray[Any]:
     return cv2.morphologyEx(gray, cv2.MORPH_TOPHAT, kernel)
 
 
+@lru_cache(maxsize=1)
+def _template_sources() -> dict[str, NDArray[Any]]:
+    """Return every immutable synthetic template by detector-local key."""
+    sora_word, sora_icon = _sora_templates()
+    veo_diamond, veo_text = _veo_templates()
+    sources = {
+        "sora-word": sora_word,
+        "sora-icon": sora_icon,
+        "veo-diamond": veo_diamond,
+        "veo-text": veo_text,
+        "seedance": _seedance_template(),
+        "dola": _dola_template(),
+        "hailuo": _hailuo_template(),
+        "kling-logo": _kling_logo_template(),
+    }
+    sources.update({f"kling-{index}": template for index, template in enumerate(_kling_templates())})
+    return sources
+
+
+@lru_cache(maxsize=512)
+def _resized_template_feature(
+    template_key: str,
+    width: int,
+    height: int,
+    kernel_size: int,
+) -> tuple[NDArray[Any], NDArray[Any]]:
+    """Resize one template and cache its invariant top-hat representation."""
+    template = cv2.resize(
+        _template_sources()[template_key],
+        (width, height),
+        interpolation=cv2.INTER_AREA,
+    )
+    kernel = np.ones((kernel_size, kernel_size), dtype=np.uint8)
+    feature = cv2.morphologyEx(template, cv2.MORPH_TOPHAT, kernel)
+    return template, feature
+
+
 def _normalized_gray(image_bgr: NDArray[Any]) -> tuple[NDArray[Any], float]:
     gray = image_bgr if image_bgr.ndim == 2 else cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
     height, width = gray.shape[:2]
@@ -305,6 +353,13 @@ def _normalized_gray(image_bgr: NDArray[Any]) -> tuple[NDArray[Any], float]:
             interpolation=cv2.INTER_AREA,
         )
     return gray, scale
+
+
+def _prepare_frame(image_bgr: NDArray[Any]) -> _PreparedFrame:
+    """Compute the shared grayscale representations for one decoded frame."""
+    gray = image_bgr if image_bgr.ndim == 2 else cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    normalized_gray, normalized_scale = _normalized_gray(gray)
+    return _PreparedFrame(gray, normalized_gray, normalized_scale)
 
 
 def _expanded_region(
@@ -328,7 +383,12 @@ def _expanded_region(
     return x, y, max(1, width), max(1, height)
 
 
-def detect_sora_frame(image_bgr: NDArray[Any], *, frame_index: int = 0) -> FrameLocalization:
+def detect_sora_frame(
+    image_bgr: NDArray[Any],
+    *,
+    frame_index: int = 0,
+    prepared: _PreparedFrame | None = None,
+) -> FrameLocalization:
     """Locate the strongest synthetic Sora-wordmark match in one frame.
 
     The returned candidate is intentionally untrusted. Call
@@ -339,7 +399,8 @@ def detect_sora_frame(image_bgr: NDArray[Any], *, frame_index: int = 0) -> Frame
         return FrameLocalization(frame_index, 0.0, None)
 
     frame_height, frame_width = image_bgr.shape[:2]
-    gray, scale = _normalized_gray(image_bgr)
+    prepared = prepared or _prepare_frame(image_bgr)
+    gray, scale = prepared.normalized_gray, prepared.normalized_scale
     normalized_height, normalized_width = gray.shape[:2]
     feature = _top_hat(gray)
     best_confidence = 0.0
@@ -347,17 +408,19 @@ def detect_sora_frame(image_bgr: NDArray[Any], *, frame_index: int = 0) -> Frame
 
     for template_index, base_template in enumerate(_sora_templates()):
         icon_only = template_index == 1
+        template_key = "sora-icon" if icon_only else "sora-word"
         for relative_height in _SORA_RELATIVE_HEIGHTS:
             template_height = max(16, round(min(normalized_height, normalized_width) * relative_height))
             template_width = max(1, round(base_template.shape[1] * template_height / base_template.shape[0]))
             if template_height >= normalized_height or template_width >= normalized_width:
                 continue
-            template = cv2.resize(
-                base_template,
-                (template_width, template_height),
-                interpolation=cv2.INTER_AREA,
+            _, template_feature = _resized_template_feature(
+                template_key,
+                template_width,
+                template_height,
+                7,
             )
-            scores = cv2.matchTemplate(feature, _top_hat(template), cv2.TM_CCOEFF_NORMED)
+            scores = cv2.matchTemplate(feature, template_feature, cv2.TM_CCOEFF_NORMED)
             _, confidence, _, location = cv2.minMaxLoc(scores)
             if confidence <= best_confidence:
                 continue
@@ -381,6 +444,7 @@ def _match_template(
     *,
     region: Region,
     kernel_size: int,
+    template_feature: NDArray[Any] | None = None,
 ) -> tuple[float, Region | None]:
     """Match one synthetic silhouette inside a bounded frame region."""
     x, y, width, height = region
@@ -390,7 +454,8 @@ def _match_template(
         return 0.0, None
     kernel = np.ones((kernel_size, kernel_size), dtype=np.uint8)
     feature = cv2.morphologyEx(roi, cv2.MORPH_TOPHAT, kernel)
-    template_feature = cv2.morphologyEx(template, cv2.MORPH_TOPHAT, kernel)
+    if template_feature is None:
+        template_feature = cv2.morphologyEx(template, cv2.MORPH_TOPHAT, kernel)
     scores = cv2.matchTemplate(feature, template_feature, cv2.TM_CCOEFF_NORMED)
     _, confidence, _, location = cv2.minMaxLoc(scores)
     return float(confidence), (
@@ -441,7 +506,7 @@ def _bounded_region(
 
 def _detect_fixed_mark(
     image_bgr: NDArray[Any],
-    template: NDArray[Any],
+    template_key: str,
     *,
     relative_heights: tuple[float, ...],
     search_origin: tuple[float, float],
@@ -467,19 +532,23 @@ def _detect_fixed_mark(
         normalized_height - search_y,
     )
     matches: list[tuple[float, Region]] = []
+    base_template = _template_sources()[template_key]
     for relative_height in relative_heights:
         template_height = max(6, round(short_side * relative_height))
-        template_width = max(1, round(template.shape[1] * template_height / template.shape[0]))
-        resized = cv2.resize(
-            template,
-            (template_width, template_height),
-            interpolation=cv2.INTER_AREA,
+        template_width = max(1, round(base_template.shape[1] * template_height / base_template.shape[0]))
+        kernel_size = max(3, round(template_height * kernel_fraction) | 1)
+        resized, template_feature = _resized_template_feature(
+            template_key,
+            template_width,
+            template_height,
+            kernel_size,
         )
         confidence, candidate = _match_template(
             gray,
             resized,
             region=search_region,
-            kernel_size=max(3, round(template_height * kernel_fraction) | 1),
+            kernel_size=kernel_size,
+            template_feature=template_feature,
         )
         if candidate is not None and confidence > 0:
             matches.append((confidence, candidate))
@@ -509,38 +578,56 @@ def _detect_fixed_mark(
     )
 
 
-def detect_seedance_frame(image_bgr: NDArray[Any], *, frame_index: int = 0) -> FrameLocalization:
+def detect_seedance_frame(
+    image_bgr: NDArray[Any],
+    *,
+    frame_index: int = 0,
+    prepared: _PreparedFrame | None = None,
+) -> FrameLocalization:
     """Locate the strongest fixed Seedance boxed-AI candidate."""
     return _detect_fixed_mark(
         image_bgr,
-        _seedance_template(),
+        "seedance",
         relative_heights=(0.065, 0.075, 0.085, 0.095, 0.105),
         search_origin=(0.68, 0.72),
         kernel_fraction=0.12,
+        normalized=None if prepared is None else (prepared.normalized_gray, prepared.normalized_scale),
         frame_index=frame_index,
     )
 
 
-def detect_dola_frame(image_bgr: NDArray[Any], *, frame_index: int = 0) -> FrameLocalization:
+def detect_dola_frame(
+    image_bgr: NDArray[Any],
+    *,
+    frame_index: int = 0,
+    prepared: _PreparedFrame | None = None,
+) -> FrameLocalization:
     """Locate the strongest fixed Dola AI text candidate."""
     return _detect_fixed_mark(
         image_bgr,
-        _dola_template(),
+        "dola",
         relative_heights=_DOLA_RELATIVE_HEIGHTS,
         search_origin=(0.65, 0.85),
         kernel_fraction=0.50,
+        normalized=None if prepared is None else (prepared.normalized_gray, prepared.normalized_scale),
         frame_index=frame_index,
     )
 
 
-def detect_hailuo_frame(image_bgr: NDArray[Any], *, frame_index: int = 0) -> FrameLocalization:
+def detect_hailuo_frame(
+    image_bgr: NDArray[Any],
+    *,
+    frame_index: int = 0,
+    prepared: _PreparedFrame | None = None,
+) -> FrameLocalization:
     """Locate the strongest fixed MINIMAX/Hailuo composite-label candidate."""
     detection = _detect_fixed_mark(
         image_bgr,
-        _hailuo_template(),
+        "hailuo",
         relative_heights=_HAILUO_RELATIVE_HEIGHTS,
         search_origin=(0.28, 0.76),
         kernel_fraction=0.18,
+        normalized=None if prepared is None else (prepared.normalized_gray, prepared.normalized_scale),
         frame_index=frame_index,
     )
     if detection.region is None:
@@ -563,17 +650,23 @@ def detect_hailuo_frame(image_bgr: NDArray[Any], *, frame_index: int = 0) -> Fra
     )
 
 
-def detect_kling_frame(image_bgr: NDArray[Any], *, frame_index: int = 0) -> FrameLocalization:
+def detect_kling_frame(
+    image_bgr: NDArray[Any],
+    *,
+    frame_index: int = 0,
+    prepared: _PreparedFrame | None = None,
+) -> FrameLocalization:
     """Locate the fixed Kling wordmark core and include its version suffix."""
     if image_bgr.size == 0:
         return FrameLocalization(frame_index, 0.0, None)
     frame_height, frame_width = image_bgr.shape[:2]
-    normalized = _normalized_gray(image_bgr)
+    prepared = prepared or _prepare_frame(image_bgr)
+    normalized = prepared.normalized_gray, prepared.normalized_scale
     expanded: list[FrameLocalization] = []
-    for template in _kling_templates():
+    for template_index, _template in enumerate(_kling_templates()):
         detection = _detect_fixed_mark(
             image_bgr,
-            template,
+            f"kling-{template_index}",
             relative_heights=_KLING_RELATIVE_HEIGHTS,
             search_origin=(0.64, 0.84),
             kernel_fraction=0.18,
@@ -615,7 +708,7 @@ def detect_kling_frame(image_bgr: NDArray[Any], *, frame_index: int = 0) -> Fram
 
     logo = _detect_fixed_mark(
         image_bgr,
-        _kling_logo_template(),
+        "kling-logo",
         relative_heights=tuple(value / 1000 for value in range(20, 61, 3)),
         search_origin=(0.62, 0.90),
         kernel_fraction=0.18,
@@ -664,15 +757,20 @@ def detect_kling_frame(image_bgr: NDArray[Any], *, frame_index: int = 0) -> Fram
     return best
 
 
-def detect_veo_frame(image_bgr: NDArray[Any], *, frame_index: int = 0) -> FrameLocalization:
+def detect_veo_frame(
+    image_bgr: NDArray[Any],
+    *,
+    frame_index: int = 0,
+    prepared: _PreparedFrame | None = None,
+) -> FrameLocalization:
     """Locate the strongest current-diamond or legacy-text Veo candidate."""
     if image_bgr.size == 0:
         return FrameLocalization(frame_index, 0.0, None)
 
     frame_height, frame_width = image_bgr.shape[:2]
-    gray = image_bgr if image_bgr.ndim == 2 else cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    gray = (prepared or _prepare_frame(image_bgr)).gray
     short_scale = min(frame_height, frame_width) / _VEO_REFERENCE_SHORT_SIDE
-    diamond_base, text_base = _veo_templates()
+    _, text_base = _veo_templates()
     best_confidence = 0.0
     best_region: Region | None = None
 
@@ -680,10 +778,12 @@ def detect_veo_frame(image_bgr: NDArray[Any], *, frame_index: int = 0) -> FrameL
     for base_size, right_margin, bottom_margin in _VEO_DIAMOND_PROFILES:
         diamond_size = max(16, round(base_size * short_scale))
         diamond_sizes.add(diamond_size)
-        template = cv2.resize(
-            diamond_base,
-            (diamond_size, diamond_size),
-            interpolation=cv2.INTER_AREA,
+        kernel_size = max(3, round(7 * short_scale) | 1)
+        template, template_feature = _resized_template_feature(
+            "veo-diamond",
+            diamond_size,
+            diamond_size,
+            kernel_size,
         )
         expected_x = round(frame_width - (right_margin + base_size) * short_scale)
         expected_y = round(frame_height - (bottom_margin + base_size) * short_scale)
@@ -696,7 +796,8 @@ def detect_veo_frame(image_bgr: NDArray[Any], *, frame_index: int = 0) -> FrameL
             gray,
             template,
             region=(search_x, search_y, search_width, search_height),
-            kernel_size=max(3, round(7 * short_scale) | 1),
+            kernel_size=kernel_size,
+            template_feature=template_feature,
         )
         if confidence > best_confidence:
             best_confidence = confidence
@@ -710,16 +811,19 @@ def detect_veo_frame(image_bgr: NDArray[Any], *, frame_index: int = 0) -> FrameL
     corner_y = round(frame_height * 0.65)
     corner_region = (corner_x, corner_y, frame_width - corner_x, frame_height - corner_y)
     for diamond_size in diamond_sizes:
-        template = cv2.resize(
-            diamond_base,
-            (diamond_size, diamond_size),
-            interpolation=cv2.INTER_AREA,
+        kernel_size = max(3, round(7 * short_scale) | 1)
+        template, template_feature = _resized_template_feature(
+            "veo-diamond",
+            diamond_size,
+            diamond_size,
+            kernel_size,
         )
         confidence, candidate = _match_template(
             gray,
             template,
             region=corner_region,
-            kernel_size=max(3, round(7 * short_scale) | 1),
+            kernel_size=kernel_size,
+            template_feature=template_feature,
         )
         if confidence >= 0.70 and confidence > best_confidence:
             best_confidence = confidence
@@ -736,16 +840,19 @@ def detect_veo_frame(image_bgr: NDArray[Any], *, frame_index: int = 0) -> FrameL
     text_heights = sorted({max(5, round(height * short_scale)) for height in range(8, 22)})
     for text_height in text_heights:
         text_width = max(1, round(text_base.shape[1] * text_height / text_base.shape[0]))
-        template = cv2.resize(
-            text_base,
-            (text_width, text_height),
-            interpolation=cv2.INTER_AREA,
+        kernel_size = max(3, round(3 * short_scale) | 1)
+        template, template_feature = _resized_template_feature(
+            "veo-text",
+            text_width,
+            text_height,
+            kernel_size,
         )
         confidence, candidate = _match_template(
             gray,
             template,
             region=text_region,
-            kernel_size=max(3, round(3 * short_scale) | 1),
+            kernel_size=kernel_size,
+            template_feature=template_feature,
         )
         if confidence > best_confidence:
             best_confidence = confidence
@@ -959,11 +1066,11 @@ def _stabilize_localizations(
     return accepted
 
 
-def _scan_video(
+def _scan_video_detectors(
     source: Path,
-    detector: Any,
-) -> VideoScan:
-    """Decode a video once and collect one untrusted candidate per frame."""
+    detectors: dict[str, Any],
+) -> dict[str, VideoScan]:
+    """Decode once and collect one untrusted candidate per detector and frame."""
     capture = cv2.VideoCapture(str(source))
     if not capture.isOpened():
         raise RuntimeError(f"OpenCV could not decode video: {source}")
@@ -974,7 +1081,7 @@ def _scan_video(
         capture.release()
         raise RuntimeError(f"Video has invalid stream geometry or frame rate: {source}")
 
-    detections: list[FrameLocalization] = []
+    detections: dict[str, list[FrameLocalization]] = {mark: [] for mark in detectors}
     frame_index = 0
     while True:
         ok, frame = capture.read()
@@ -983,12 +1090,56 @@ def _scan_video(
         if frame.shape[:2] != (height, width):
             capture.release()
             raise RuntimeError(f"Video changes frame dimensions at frame {frame_index}: {source}")
-        detections.append(detector(frame, frame_index=frame_index))
+        prepared = _prepare_frame(frame)
+        for mark, detector in detectors.items():
+            detections[mark].append(
+                detector(
+                    frame,
+                    frame_index=frame_index,
+                    prepared=prepared,
+                )
+            )
         frame_index += 1
     capture.release()
-    if not detections:
+    if frame_index == 0:
         raise RuntimeError(f"Video contains no decodable frames: {source}")
-    return VideoScan(width, height, fps, tuple(detections))
+    return {mark: VideoScan(width, height, fps, tuple(mark_detections)) for mark, mark_detections in detections.items()}
+
+
+def _scan_video(
+    source: Path,
+    detector: Any,
+) -> VideoScan:
+    """Decode a video once and collect one untrusted candidate per frame."""
+    return _scan_video_detectors(source, {"selected": detector})["selected"]
+
+
+def scan_video_marks(
+    source: Path,
+    marks: tuple[str, ...] = VIDEO_VISIBLE_MARKS,
+) -> dict[str, VideoScan]:
+    """Decode once and collect candidates for every requested provider mark."""
+    detectors = dict(
+        zip(
+            VIDEO_VISIBLE_MARKS,
+            (
+                detect_sora_frame,
+                detect_veo_frame,
+                detect_seedance_frame,
+                detect_dola_frame,
+                detect_hailuo_frame,
+                detect_kling_frame,
+            ),
+            strict=True,
+        )
+    )
+    unsupported = sorted(set(marks) - detectors.keys())
+    if unsupported:
+        raise ValueError(f"Unsupported visible video mark: {', '.join(unsupported)}")
+    return _scan_video_detectors(
+        source,
+        {mark: detectors[mark] for mark in marks},
+    )
 
 
 def scan_sora_video(source: Path) -> VideoScan:
@@ -1075,65 +1226,65 @@ def encode_clean_video(
     padding_fraction: float = 0.28,
     mask_style: Literal["box", "veo"] = "box",
 ) -> int:
-    """Decode again, fill accepted regions, and encode video while copying audio."""
+    """Decode again, fill accepted regions, and atomically encode with complete audio."""
     from remove_ai_watermarks.watermark_registry import fill, resolve_backend
 
     if len(regions) != len(scan.detections):
         raise ValueError("Temporal localization count does not match the scanned frame count")
 
-    output.parent.mkdir(parents=True, exist_ok=True)
-    process = start_raw_video_encoder(
-        raw_video_command(
-            source,
-            output,
-            width=scan.width,
-            height=scan.height,
-            fps=scan.fps,
-            strip_metadata=strip_metadata,
-            crf=14,
+    with atomic_video_output(output) as temporary_output:
+        process = start_raw_video_encoder(
+            raw_video_command(
+                source,
+                temporary_output,
+                width=scan.width,
+                height=scan.height,
+                fps=scan.fps,
+                strip_metadata=strip_metadata,
+                crf=14,
+            )
         )
-    )
-    frame_pipe = process.stdin
-    if frame_pipe is None:
-        abort_raw_video_encoder(process)
-        raise RuntimeError("Could not open ffmpeg input pipe")
-
-    capture = cv2.VideoCapture(str(source))
-    if not capture.isOpened():
-        abort_raw_video_encoder(process)
-        raise RuntimeError(f"OpenCV could not reopen video for removal: {source}")
-
-    removed_frames = 0
-    resolved_backend: Literal["cv2", "migan", "lama"] = resolve_backend(backend)
-    try:
-        for frame_index, region in enumerate(regions):
-            ok, frame = capture.read()
-            if not ok:
-                raise RuntimeError(f"Video ended while reading frame {frame_index}: {source}")
-            if region is not None:
-                frame = fill(
-                    frame,
-                    _mask_for_region(
-                        frame,
-                        region,
-                        padding_fraction=padding_fraction,
-                        mask_style=mask_style,
-                    ),
-                    backend=resolved_backend,
-                )
-                removed_frames += 1
-            frame_pipe.write(frame.tobytes())
-        finish_raw_video_encoder(
-            process,
-            output,
-            operation="visible-watermark encode",
-        )
-    except Exception:
-        if process.poll() is None:
+        frame_pipe = process.stdin
+        if frame_pipe is None:
             abort_raw_video_encoder(process)
-        raise
-    finally:
-        capture.release()
+            raise RuntimeError("Could not open ffmpeg input pipe")
+
+        capture = cv2.VideoCapture(str(source))
+        if not capture.isOpened():
+            abort_raw_video_encoder(process)
+            raise RuntimeError(f"OpenCV could not reopen video for removal: {source}")
+
+        removed_frames = 0
+        resolved_backend: Literal["cv2", "migan", "lama"] = resolve_backend(backend)
+        try:
+            for frame_index, region in enumerate(regions):
+                ok, frame = capture.read()
+                if not ok:
+                    raise RuntimeError(f"Video ended while reading frame {frame_index}: {source}")
+                if region is not None:
+                    frame = fill(
+                        frame,
+                        _mask_for_region(
+                            frame,
+                            region,
+                            padding_fraction=padding_fraction,
+                            mask_style=mask_style,
+                        ),
+                        backend=resolved_backend,
+                    )
+                    removed_frames += 1
+                frame_pipe.write(frame.tobytes())
+            finish_raw_video_encoder(
+                process,
+                temporary_output,
+                operation="visible-watermark encode",
+            )
+        except Exception:
+            if process.poll() is None:
+                abort_raw_video_encoder(process)
+            raise
+        finally:
+            capture.release()
 
     return removed_frames
 

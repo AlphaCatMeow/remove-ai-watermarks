@@ -174,8 +174,8 @@ if result.remaining_metadata:
 
 `remove_video_invisible` supports MP4, MOV, and M4V. It regenerates the complete
 video through a VAE in bounded batches, shares one seeded latent-noise field
-across all frames, streams pixels to ffmpeg, copies audio, and strips source
-metadata. The default output is
+across all frames, streams pixels to ffmpeg, copies complete audio, strips
+source metadata, and publishes atomically. The default output is
 `input_synthid_candidate.mp4`; a distinct same-container output is required.
 
 The returned `VideoInvisibleResult` includes output geometry, frame rate, frame
@@ -191,13 +191,15 @@ Flash's built-in content verification before treating it as watermark-negative.
 import remove_ai_watermarks as raiw
 
 result = raiw.remove_video_visible(
-    "sora.mp4",
-    "sora_clean.mp4",
+    "input.mp4",
+    "clean.mp4",
     backend="cv2",
     strip_metadata=True,
 )
 if result.output is None:
-    print("No temporally stable Sora mark was found")
+    print("No temporally stable supported mark was found")
+else:
+    print(result.mark)
 
 veo_result = raiw.remove_video_visible(
     "veo.mp4",
@@ -228,18 +230,24 @@ kling_result = raiw.remove_video_visible(
 
 `remove_video_visible` scans the complete video before writing output. It
 combines synthetic multi-scale visual matching with temporal consistency, so an
-isolated lookalike in one frame is not enough to authorize inpainting. The
-supported `mark` values are `sora`, `veo`, `seedance`, `dola`, `hailuo`, and
-`kling`. The Veo detector recognizes the current four-point diamond and the
+isolated lookalike in one frame is not enough to authorize inpainting.
+`mark="auto"` is the default: it evaluates all providers in one decode pass and
+selects the first stable match in specificity order (`sora`, `veo`, `seedance`,
+`dola`, `hailuo`, `kling`). Provider confidence values are calibrated
+independently and are not compared across detectors. Pass one of those explicit
+values to restrict the scan to a single provider. The Veo detector recognizes
+the current four-point diamond and the
 legacy `Veo` text. Seedance recognizes the boxed `AI` label, Dola recognizes
 its compact text label, Hailuo recognizes the composite MINIMAX/Hailuo label,
 and Kling recognizes its bottom-right logo, wordmark, and version suffix. Each
 variant has an independent synthetic silhouette and calibrated temporal policy.
 
-The returned `VideoVisibleResult` records the total, detected, and removed frame
-counts plus any AI metadata that survived the output encode. The function
-returns `output=None` and writes no file when no stable mark is selected. Video
-pixels are transcoded through ffmpeg while the source audio stream is copied.
+The returned `VideoVisibleResult` records the selected `mark`, the total,
+detected, and removed frame counts, plus any AI metadata that survived the
+output encode. The function returns `output=None` and writes no file when no
+stable mark is selected. Video pixels are transcoded through ffmpeg while the
+complete source audio stream is copied. A failed encode preserves any existing
+output; only a completed result is published atomically.
 
 ## Remove invisible watermarks
 

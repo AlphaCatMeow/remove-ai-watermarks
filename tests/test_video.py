@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 from typing import TYPE_CHECKING
 
 import cv2
@@ -1018,7 +1019,249 @@ class TestAdditionalProviderTemporalArbiter:
         assert stabilize(strong) == [box] * 12
 
 
+class TestVideoVisibleScan:
+    def test_auto_prepares_each_frame_once_for_every_detector(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from remove_ai_watermarks import video_visible
+        from remove_ai_watermarks.video_visible import FrameLocalization, scan_video_marks
+
+        frame = np.zeros((8, 12, 3), dtype=np.uint8)
+
+        class FakeCapture:
+            def __init__(self) -> None:
+                self._read = False
+
+            def isOpened(self) -> bool:
+                return True
+
+            def get(self, property_id: int) -> float:
+                return {
+                    video_visible.cv2.CAP_PROP_FRAME_WIDTH: 12.0,
+                    video_visible.cv2.CAP_PROP_FRAME_HEIGHT: 8.0,
+                    video_visible.cv2.CAP_PROP_FPS: 24.0,
+                }[property_id]
+
+            def read(self) -> tuple[bool, np.ndarray | None]:
+                if self._read:
+                    return False, None
+                self._read = True
+                return True, frame
+
+            def release(self) -> None:
+                pass
+
+        prepared_ids: list[int] = []
+
+        def fake_detector(
+            _frame: np.ndarray,
+            *,
+            frame_index: int,
+            prepared: object,
+        ) -> FrameLocalization:
+            assert prepared is not None
+            prepared_ids.append(id(prepared))
+            return FrameLocalization(frame_index, 0.0, None)
+
+        monkeypatch.setattr(video_visible.cv2, "VideoCapture", lambda _path: FakeCapture())
+        for detector_name in (
+            "detect_sora_frame",
+            "detect_veo_frame",
+            "detect_seedance_frame",
+            "detect_dola_frame",
+            "detect_hailuo_frame",
+            "detect_kling_frame",
+        ):
+            monkeypatch.setattr(video_visible, detector_name, fake_detector)
+
+        scans = scan_video_marks(
+            tmp_path / "synthetic.mp4",
+            ("sora", "veo", "seedance", "dola", "hailuo", "kling"),
+        )
+
+        assert set(scans) == {"sora", "veo", "seedance", "dola", "hailuo", "kling"}
+        assert len(prepared_ids) == 6
+        assert len(set(prepared_ids)) == 1
+
+
+class TestVideoVisibleEncoding:
+    @staticmethod
+    def _patch_single_frame_encode(
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        encoded_bytes: bytes,
+        fail: bool,
+    ) -> tuple[object, list[Path]]:
+        from remove_ai_watermarks import video_visible, watermark_registry
+
+        frame = np.full((8, 8, 3), 32, dtype=np.uint8)
+
+        class FakeCapture:
+            def __init__(self) -> None:
+                self._read = False
+
+            def isOpened(self) -> bool:
+                return True
+
+            def read(self) -> tuple[bool, np.ndarray | None]:
+                if self._read:
+                    return False, None
+                self._read = True
+                return True, frame.copy()
+
+            def release(self) -> None:
+                pass
+
+        class FakeProcess:
+            def __init__(self) -> None:
+                self.stdin = io.BytesIO()
+
+            def poll(self) -> int:
+                return 1
+
+        targets: list[Path] = []
+
+        def fake_command(_source: Path, target: Path, **_kwargs: object) -> list[str]:
+            targets.append(target)
+            return ["ffmpeg", str(target)]
+
+        def fake_finish(_process: object, target: Path, **_kwargs: object) -> None:
+            target.write_bytes(encoded_bytes)
+            if fail:
+                raise RuntimeError("synthetic encode failure")
+
+        process = FakeProcess()
+        monkeypatch.setattr(video_visible.cv2, "VideoCapture", lambda _path: FakeCapture())
+        monkeypatch.setattr(video_visible, "raw_video_command", fake_command)
+        monkeypatch.setattr(video_visible, "start_raw_video_encoder", lambda _command: process)
+        monkeypatch.setattr(video_visible, "finish_raw_video_encoder", fake_finish)
+        monkeypatch.setattr(watermark_registry, "resolve_backend", lambda _backend: "cv2")
+        return process, targets
+
+    def test_publishes_completed_encode_atomically(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from remove_ai_watermarks.video_visible import FrameLocalization, VideoScan, encode_clean_video
+
+        source = tmp_path / "source.mp4"
+        source.write_bytes(b"source")
+        output = tmp_path / "clean.mp4"
+        scan = VideoScan(8, 8, 24.0, (FrameLocalization(0, 0.0, None),))
+        _process, targets = self._patch_single_frame_encode(
+            monkeypatch,
+            encoded_bytes=b"complete",
+            fail=False,
+        )
+
+        encode_clean_video(
+            source,
+            output,
+            scan,
+            [None],
+            backend="cv2",
+            strip_metadata=True,
+        )
+
+        assert output.read_bytes() == b"complete"
+        assert targets[0] != output
+        assert targets[0].suffix == output.suffix
+        assert not targets[0].exists()
+
+    def test_failed_encode_preserves_existing_output(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from remove_ai_watermarks.video_visible import FrameLocalization, VideoScan, encode_clean_video
+
+        source = tmp_path / "source.mp4"
+        source.write_bytes(b"source")
+        output = tmp_path / "clean.mp4"
+        output.write_bytes(b"previous")
+        scan = VideoScan(8, 8, 24.0, (FrameLocalization(0, 0.0, None),))
+        _process, targets = self._patch_single_frame_encode(
+            monkeypatch,
+            encoded_bytes=b"partial",
+            fail=True,
+        )
+
+        with pytest.raises(RuntimeError, match="synthetic encode failure"):
+            encode_clean_video(
+                source,
+                output,
+                scan,
+                [None],
+                backend="cv2",
+                strip_metadata=True,
+            )
+
+        assert output.read_bytes() == b"previous"
+        assert not targets[0].exists()
+
+
 class TestVideoVisibleApi:
+    def test_auto_prefers_specific_sora_run_over_hailuo_cross_match(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from remove_ai_watermarks import video_visible
+        from remove_ai_watermarks.video import remove_video_visible
+        from remove_ai_watermarks.video_visible import FrameLocalization, VideoScan
+
+        source = _video_with_c2pa(tmp_path / "source.mp4")
+        output = tmp_path / "clean.mp4"
+        sora_box = (4, 4, 20, 8)
+        hailuo_box = (30, 40, 28, 12)
+        sora_scan = VideoScan(
+            width=64,
+            height=64,
+            fps=24.0,
+            detections=tuple(FrameLocalization(index, 0.66, sora_box) for index in range(12)),
+        )
+        hailuo_scan = VideoScan(
+            width=64,
+            height=64,
+            fps=24.0,
+            detections=tuple(FrameLocalization(index, 0.35, hailuo_box) for index in range(12)),
+        )
+
+        def fake_scan(_source: Path, marks: tuple[str, ...]):
+            assert marks == ("sora", "veo", "seedance", "dola", "hailuo", "kling")
+            return {
+                "sora": sora_scan,
+                "veo": sora_scan,
+                "seedance": sora_scan,
+                "dola": sora_scan,
+                "hailuo": hailuo_scan,
+                "kling": sora_scan,
+            }
+
+        monkeypatch.setattr(video_visible, "scan_video_marks", fake_scan)
+
+        def fake_encode(
+            _source: Path,
+            target: Path,
+            _scan: VideoScan,
+            regions: list[tuple[int, int, int, int] | None],
+            **kwargs: object,
+        ) -> int:
+            assert regions == [sora_box] * 12
+            assert kwargs["padding_fraction"] == 0.28
+            target.write_bytes(_MP4_FTYP + _box(b"mdat", _VIDEO_PAYLOAD))
+            return 12
+
+        monkeypatch.setattr(video_visible, "encode_clean_video", fake_encode)
+
+        result = remove_video_visible(source, output)
+
+        assert result.output == output
+        assert result.mark == "sora"
+
     def test_removes_stable_sora_run_and_writes_output(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         from remove_ai_watermarks import video_visible
         from remove_ai_watermarks.video import remove_video_visible
@@ -1033,7 +1276,11 @@ class TestVideoVisibleApi:
             fps=24.0,
             detections=tuple(FrameLocalization(index, 0.66, box) for index in range(5)),
         )
-        monkeypatch.setattr(video_visible, "scan_sora_video", lambda _source: scan)
+        monkeypatch.setattr(
+            video_visible,
+            "scan_video_marks",
+            lambda _source, marks: {"sora": scan} if marks == ("sora",) else {},
+        )
 
         def fake_encode(
             _source: Path,
@@ -1048,7 +1295,7 @@ class TestVideoVisibleApi:
 
         monkeypatch.setattr(video_visible, "encode_clean_video", fake_encode)
 
-        result = remove_video_visible(source, output)
+        result = remove_video_visible(source, output, mark="sora")
 
         assert result.output == output
         assert result.detected_frames == 5
@@ -1072,9 +1319,13 @@ class TestVideoVisibleApi:
                 FrameLocalization(2, 0.70, (1, 30, 20, 8)),
             ),
         )
-        monkeypatch.setattr(video_visible, "scan_sora_video", lambda _source: scan)
+        monkeypatch.setattr(
+            video_visible,
+            "scan_video_marks",
+            lambda _source, marks: {"sora": scan} if marks == ("sora",) else {},
+        )
 
-        result = remove_video_visible(source, output)
+        result = remove_video_visible(source, output, mark="sora")
 
         assert result.output is None
         assert result.removed_frames == 0
@@ -1098,7 +1349,11 @@ class TestVideoVisibleApi:
             fps=24.0,
             detections=tuple(FrameLocalization(index, 0.60, box) for index in range(12)),
         )
-        monkeypatch.setattr(video_visible, "scan_veo_video", lambda _source: scan)
+        monkeypatch.setattr(
+            video_visible,
+            "scan_video_marks",
+            lambda _source, marks: {"veo": scan} if marks == ("veo",) else {},
+        )
 
         def fake_encode(
             _source: Path,
@@ -1123,12 +1378,12 @@ class TestVideoVisibleApi:
         assert result.removed_frames == 12
 
     @pytest.mark.parametrize(
-        ("mark", "scan_name", "mask_style"),
+        ("mark", "mask_style"),
         [
-            ("seedance", "scan_seedance_video", "box"),
-            ("dola", "scan_dola_video", "box"),
-            ("hailuo", "scan_hailuo_video", "box"),
-            ("kling", "scan_kling_video", "box"),
+            ("seedance", "box"),
+            ("dola", "box"),
+            ("hailuo", "box"),
+            ("kling", "box"),
         ],
     )
     def test_dispatches_fixed_mark_detectors(
@@ -1136,7 +1391,6 @@ class TestVideoVisibleApi:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         mark: str,
-        scan_name: str,
         mask_style: str,
     ):
         from remove_ai_watermarks import video_visible
@@ -1152,7 +1406,11 @@ class TestVideoVisibleApi:
             fps=24.0,
             detections=tuple(FrameLocalization(index, 0.60, box) for index in range(12)),
         )
-        monkeypatch.setattr(video_visible, scan_name, lambda _source: scan)
+        monkeypatch.setattr(
+            video_visible,
+            "scan_video_marks",
+            lambda _source, marks: {mark: scan} if marks == (mark,) else {},
+        )
 
         def fake_encode(
             _source: Path,
@@ -1182,7 +1440,7 @@ class TestVideoVisibleCli:
 
         assert result.exit_code == 0, result.output
         assert "temporally stable" in result.output
-        assert "sora|veo|seedance|dola|hailuo|kling" in result.output
+        assert "auto|sora|veo|seedance|dola|hailuo|kling" in result.output
 
     def test_reports_removed_frames(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         from remove_ai_watermarks import video

@@ -41,7 +41,10 @@ when you can select the affected area yourself.
 | `kling` | Kling swirl, `KLING AI`, version, and optional `PRO` suffix | Fixed bottom-right edge | Combines a synthetic logo rescue with font variants, an edge gate, a white-label gate, and anchored temporal recurrence. |
 
 Use `video visible` for this registry. It is separate from the image `visible`
-command because selection is made over a sequence rather than one raster.
+command because selection is made over a sequence rather than one raster. Its
+default `auto` mode scans all six entries in one decode pass and selects the
+first temporally stable match in table order; an explicit mark restricts the
+scan to that row.
 
 ## Fill backends
 
