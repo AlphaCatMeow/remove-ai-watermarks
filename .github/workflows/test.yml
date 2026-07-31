@@ -48,7 +48,7 @@ jobs:
   video-e2e:
     name: video full-clip end-to-end
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
@@ -61,4 +61,5 @@ jobs:
       - name: Run full-clip video test
         run: >-
           uv run pytest -vv
+          -o faulthandler_timeout=60
           tests/test_video.py::TestVideoVisibleFullClip
