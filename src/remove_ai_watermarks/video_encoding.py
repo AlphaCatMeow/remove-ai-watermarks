@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 _PIXEL_FORMATS = frozenset({"yuv420p", "yuv422p", "yuv444p"})
+_VIDEO_FILTER_THREADS = 1
 _VIDEO_ENCODER_THREADS = 2
 _PIXEL_FORMAT_ALIASES = {
     "yuvj420p": "yuv420p",
@@ -305,6 +306,8 @@ def raw_video_command(
     )
     command = [
         ffmpeg,
+        "-filter_threads",
+        str(_VIDEO_FILTER_THREADS),
         "-y",
         "-loglevel",
         "error",

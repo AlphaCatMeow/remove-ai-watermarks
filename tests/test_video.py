@@ -1971,6 +1971,7 @@ class TestVideoVisibleEncoding:
             profile=video_encoding.VideoEncodeProfile(),
         )
 
+        assert command[1:3] == ["-filter_threads", "1"]
         assert command[command.index("-threads:v") + 1] == "2"
 
     @staticmethod
