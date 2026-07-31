@@ -1950,6 +1950,34 @@ class TestVideoVisibleScan:
 
 
 class TestVideoVisibleEncoding:
+    def test_raw_pipe_input_disables_redundant_ffmpeg_probing(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from remove_ai_watermarks import video_encoding
+
+        monkeypatch.setattr(video_encoding.shutil, "which", lambda _name: "/usr/bin/ffmpeg")
+        command = video_encoding.raw_video_command(
+            tmp_path / "source.mp4",
+            tmp_path / "clean.mp4",
+            width=12,
+            height=8,
+            fps=24.0,
+            strip_metadata=True,
+            crf=14,
+            profile=video_encoding.VideoEncodeProfile(),
+        )
+
+        pipe_position = command.index("pipe:0")
+        assert command[pipe_position - 5 : pipe_position] == [
+            "-analyzeduration",
+            "0",
+            "-probesize",
+            "32",
+            "-i",
+        ]
+
     @staticmethod
     def _patch_single_frame_encode(
         monkeypatch: pytest.MonkeyPatch,

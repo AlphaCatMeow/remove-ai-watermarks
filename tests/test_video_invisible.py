@@ -102,7 +102,16 @@ def test_timestamped_encoder_reads_nut_and_passes_pts_through(
     )
 
     assert "-copyts" in command
-    assert command[command.index("-f") : command.index("-f") + 4] == ["-f", "nut", "-i", "pipe:0"]
+    assert command[command.index("-f") : command.index("-f") + 8] == [
+        "-f",
+        "nut",
+        "-analyzeduration",
+        "0",
+        "-probesize",
+        "32",
+        "-i",
+        "pipe:0",
+    ]
     assert command[command.index("-fps_mode") + 1] == "passthrough"
     assert command[command.index("-avoid_negative_ts") + 1] == "disabled"
     assert command[command.index("-enc_time_base:v") + 1] == "1/90000"
