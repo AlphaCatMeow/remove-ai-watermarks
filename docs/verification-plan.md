@@ -216,6 +216,43 @@ for the wrong reason reads exactly like success.
 the control passes -- but that is Google's claim about their own decoder, not our
 measurement, so it is a hypothesis to test, not a reason to skip the control.
 
+### D4. Video candidates require a matched transcode control
+
+Video experiments add frame sampling, resizing, frame-rate conversion, and a
+final video codec around the actual attack. `scripts/video_synthid_sweep.py`
+therefore emits `control.mp4` from the same selected frames and encoder settings
+as every VAE candidate.
+
+Verify the control first in a new Gemini chat by invoking `@synthid` and using
+the supported built-in content-verification question. Continue only when the
+provider oracle still detects SynthID in it. Verify each candidate in its own
+new chat. A generic response that discusses visual clues or metadata is not an
+oracle result. Do not ask the chat model to reinterpret or second-guess the
+built-in verdict; that follow-up is ordinary model reasoning. Record only the
+explicit built-in SynthID verification verdict in the generated CSV.
+
+The harness shares one latent-noise field across the sequence to avoid adding
+independent frame noise. Its temporal-residual metric is a fidelity check, not a
+watermark detector.
+
+The 2026-07-29 two-carrier calibration produced genuine built-in verifier
+results: both matched controls were positive, the stronger candidate
+was negative on both carriers, and a weaker candidate was negative on one. On
+2026-07-30, adversarial follow-up prompts returned `UNAVAILABLE` after asking
+ordinary Gemini to ignore and reinterpret the detector result. Those follow-ups
+were mistakenly treated as a stricter oracle; they were not detector reruns.
+The implementation remains exposed as `video invisible` and
+`remove_video_invisible`. Its oracle-certified default is the product operating
+point. A fresh control-positive, candidate-negative pair remains an optional
+per-file audit after provider changes or for unusually important files.
+
+The 2026-07-31 full-clip check added a public eight-second Veo carrier. The
+source and the complete `0.10` product output were both detected, proving the
+surrounding resize / frame-rate / codec path had not silenced the oracle. The
+complete `0.15` product output was not detected, so `0.15` became the default.
+The tracked source and output hashes, fidelity metrics, and verdicts are in
+`data/evaluations/video-synthid-oracle.csv`; generated media remains untracked.
+
 ## Tier E -- robustness and adversarial inputs
 
 Malformed and hostile inputs, including truncated files:
@@ -276,6 +313,43 @@ separately, outside this repo.
 ## Local end-to-end verification
 
 Run `scripts/real_examples_e2e.py` against representative local inputs before releases that affect image handling. The script must read from `.local-eval/`, write only untracked temporary output, and report behavior without exposing dataset provenance or aggregate private measurements.
+
+The cheap video seam is covered automatically by
+`TestVideoVisibleFullClip::test_removes_complete_clip_and_preserves_sequence_and_audio`.
+It constructs a full synthetic Sora-like MP4 with AAC audio and C2PA
+provenance, then exercises detection, temporal arbitration, OpenCV fill, real
+ffmpeg encoding, metadata stripping, audio stream copy, and atomic publication
+through the public API. A separately encoded clean control supplies the paired
+frame-to-frame deltas inside the filled region, so the gate detects temporal
+flicker rather than treating all output motion as an error. The default
+motion-compensated fill must score strictly below a separately encoded
+frame-local opt-out on the median paired error, while its high-percentile error
+cannot regress. The dedicated Linux CI job installs ffmpeg explicitly. Keep real-provider and learned-backend
+sequence evaluation local because those inputs or model downloads do not
+belong in the core matrix.
+
+The local real-provider audit runs one complete clip for every registered video
+mark. OpenCV and MI-GAN must remove every accepted frame, leave the second-pass
+detector quiet, preserve source stream starts and duration, and copy AAC
+packets exactly when present. Run one complete LaMa clip to verify wiring and
+resource tier; its CPU throughput makes a six-provider online matrix
+counterproductive. Store generated outputs and the detailed CSV only under
+`.local-eval/`.
+
+The same full-clip gate runs the public metadata-only path against its real MP4
+and verifies unchanged file size, decoded frames, stream properties, and AAC
+packets. A separate synthetic large-`mdat` test rejects full-source
+`read_bytes()`, hashes the copied media payload, and mutation-checks both C2PA
+and TC260 survival.
+
+A companion full-clip VFR case alternates three frame durations, runs the
+public visible-removal API, and compares every output display timestamp to the
+source within one source time-base tick. Its source starts at a non-zero PTS,
+so the test also verifies retained video/audio stream offsets, container
+duration, and copied AAC identity. Mutations that disable the timestamped NUT
+bridge or reset its start PTS must fail this gate.
+A separate constant-rate clip with the same non-zero start guards the
+start-offset routing without relying on the VFR branch.
 
 ## Standing gap
 

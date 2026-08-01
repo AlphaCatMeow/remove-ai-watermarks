@@ -20,7 +20,7 @@ import struct
 import tracemalloc
 
 from remove_ai_watermarks import metadata
-from remove_ai_watermarks.noai import c2pa, isobmff
+from remove_ai_watermarks._internal import c2pa, isobmff
 
 PNG_SIG = b"\x89PNG\r\n\x1a\n"
 _HUGE = 0x7FFFFFFF  # ~2 GiB declared length on a tiny file

@@ -104,6 +104,14 @@ class TestProvenanceEvidence:
         assert report.platform == "OpenAI (ChatGPT / gpt-image / DALL-E / Sora)"
         assert [signal.name for signal in report.signals] == ["c2pa"]
 
+    def test_external_generator_bytes_are_normalized(self, tmp_path: Path):
+        evidence = evidence_from_metadata_record(
+            {"exif": {"0th": {"Software": b"NovelAI"}}},
+            path=tmp_path / "external.png",
+        )
+
+        assert evidence.exif_generator == "NovelAI"
+
     @pytest.mark.parametrize(
         "filename",
         [
@@ -710,7 +718,7 @@ class TestSparkleDetectRemoveAlignment:
 
 
 class TestIdentifyImportIsLight:
-    """`import identify` must stay torch-free (lazy noai/__init__): the package
+    """`import identify` must stay torch-free (lazy _internal/__init__): the package
     is deployed on a 512 MB host where eagerly pulling torch/diffusers OOMs."""
 
     def test_import_identify_does_not_pull_torch(self):

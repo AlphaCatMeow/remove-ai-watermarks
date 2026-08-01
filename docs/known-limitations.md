@@ -80,6 +80,44 @@ For important outputs:
 Provider systems can change, so a result verified on one file, seed, or version
 is not a permanent certification.
 
+### Video SynthID removal is lossy and content-dependent
+
+The `video invisible` command and `remove_video_invisible` API regenerate video
+pixels through a VAE. The shipped `noise_std=0.15` profile is oracle-certified,
+but Google does not publish a local decoder for arbitrary runtime outputs. A
+quiet metadata scan, paired PSNR, and the temporal-residual metric are fidelity
+measurements, not independent SynthID verdicts.
+
+The control must use the same clip, frame rate, dimensions, and final codec as
+the candidates. The separate `scripts/video_synthid_sweep.py` harness produces
+that matched control. If the control is not detected by the matching provider
+oracle, the experiment cannot attribute a quiet candidate to regeneration.
+
+The 2026-07-29 two-clip calibration used Gemini's built-in content verifier:
+both matched controls were SynthID-positive, the stronger candidate was
+negative on both carriers, and a weaker candidate was negative on one. A
+2026-07-30 adversarial follow-up incorrectly asked the ordinary chat model to
+reinterpret the verifier while excluding every other input; its `UNAVAILABLE`
+answer was not another detector run and does not invalidate the original
+built-in results. The calibrated default remains content-dependent; a fresh
+source-positive, output-negative pair is an optional audit for unusually
+important files or after provider changes.
+
+The 2026-07-31 full-clip check used the public eight-second Veo off-road sample.
+The source was detected across the full clip, the complete product path at
+`noise_std=0.10` remained detected, and `0.15` returned no SynthID detection.
+The default was raised to `0.15`. At 512 px / 12 fps, the accepted candidate
+measured 25.39 dB paired PSNR and a 1.058 motion-compensated temporal-residual
+ratio. This is one carrier, not a universal guarantee; hashes and exact verdicts
+are tracked in `data/evaluations/video-synthid-oracle.csv`.
+
+The shipped engine streams sampled frames in bounded batches, computes its
+fidelity metrics incrementally, and pipes regenerated pixels directly to
+ffmpeg. Its frame and latent memory is therefore bounded by `--batch-size`
+rather than clip duration. Runtime still grows linearly with duration, and the
+separate multi-candidate research sweep deliberately retains its short sampled
+prefix so it can reuse identical latents across candidate strengths.
+
 ### Strength is content and seed dependent
 
 For SDXL and ControlNet, the CLI resolves an unset strength from the detected
@@ -95,7 +133,7 @@ or a different random seed may change the verifier result.
 
 The base Qwen and `qwen-zimage` profiles have profile specific strength
 behavior. Consult `remove-ai-watermarks invisible --help` and the source of
-[`watermark_profiles.py`](../src/remove_ai_watermarks/noai/watermark_profiles.py)
+[`watermark_profiles.py`](../src/remove_ai_watermarks/_internal/watermark_profiles.py)
 for the current resolver.
 
 ### Pipelines have different quality tradeoffs
@@ -176,6 +214,92 @@ truncated file may still fail to decode.
 WebM, Matroska, MP3, WAV, FLAC, OGG, Opus, and AAC container metadata is stripped
 through ffmpeg with stream copying. The operation fails if ffmpeg is absent or
 cannot parse the input.
+
+### Video pixel removal is provider-specific
+
+The `video metadata` command and high level video API inspect and strip
+supported AI provenance metadata without transcoding streams.
+
+`video visible` and `remove_video_visible` additionally support the moving
+Sora 2 mascot and wordmark, the current Veo four-point diamond, the legacy
+`Veo` text, the Seedance boxed `AI` label, the fixed `Dola AI` text, the Hailuo
+MINIMAX/Hailuo composite label, and the bottom-right Kling label with its
+version suffix. Detection requires a recurring visual candidate across
+adjacent frames. Fixed-mark candidates must remain anchored rather than
+drifting with a scene object. Kling also requires a bright low-saturation
+candidate near the expected frame edge. Provider provenance can recover
+low-contrast runs only after visual evidence exists for the marks that define a
+provenance prior, so metadata alone does not erase a clean API export.
+The default auto-router evaluates all detectors in one decode pass but does not
+rank their raw confidence values. Those scores are provider-specific and known
+to cross-match in some layouts, so the router applies the independent temporal
+policies and selects the first stable result in specificity order. Use an
+explicit mark when the provider is already known.
+Historical Sora Turbo exports use a small OpenAI swirl in the corner rather
+than the moving mascot-and-wordmark design; that earlier variant is not
+detected by the `sora` video mark. Hailuo and Kling coverage is specific to the
+verified lower-edge layouts; a new provider layout needs a separate calibrated
+silhouette. Other provider video labels are not supported yet. Google video
+SynthID has an oracle-certified VAE removal path, while other proprietary
+invisible video watermarks have no registered attack.
+
+Visible removal transcodes the video stream and copies the complete audio
+stream without shortening an audio tail. Completed visible and invisible
+encodes are published atomically, so an encode failure preserves an existing
+output. Visible removal now applies a guarded motion-compensated blend after
+the per-frame fill. It uses adjacent optical flow only when the warped prior
+mask covers the current mask and a source-context ring agrees; scene cuts and
+disjoint marks keep the independent fill. This reduces measured paired
+temporal error, but it is not a generative video-inpainting model and cannot
+recover structure that no frame exposes. OpenCV can still leave a visible
+smear where the mark overlaps a hard edge or structured texture. MI-GAN
+improves difficult individual frames and is the practical learned CPU tier.
+LaMa remains an offline quality option: a full real sequence confirmed its
+multi-GB memory use and CPU throughput unsuitable for an online worker. The Veo diamond
+uses a shape mask to limit damage outside the symbol. Seedance fills the full
+localized box because a synthetic outline mask left part of the real
+translucent border visible in an end-to-end check. OpenCV may therefore soften
+texture inside that small box; use MI-GAN or LaMa when reconstruction quality
+matters. Relative variable-frame timestamps are preserved through a timestamped
+NUT bridge. A non-zero absolute video start PTS and the corresponding copied
+audio offset are preserved through ffmpeg timestamp passthrough.
+The encoder is source-aware for common 8-bit inputs: it probes and preserves
+supported chroma sampling, recognized color metadata, encoder time base, and
+MP4/MOV track timescale instead of accepting ffmpeg's implicit `yuv444p`
+raw-BGR output. OpenCV still decodes through 8-bit BGR, so HDR/high-bit-depth
+inputs are rejected before encoding rather than silently falling back to
+`yuv420p`. The synthetic
+Sora/OpenCV full-clip CI gate covers complete removal, untouched-region PSNR,
+frame count, frame rate, duration, copied-audio identity, source stream
+properties, paired temporal deltas against an independently encoded
+frame-local baseline inside the filled region, and metadata
+stripping through real ffmpeg. A second synthetic VFR clip verifies all display
+timestamps to the source time-base tick, including a non-zero source start,
+and checks both video and audio stream offsets. A separate constant-rate case
+guards the non-zero-start routing independently of VFR detection. A local
+full-sequence audit over all six providers passed both OpenCV and MI-GAN for
+complete-frame removal, quiet second detection, stream starts, duration, and
+copied audio. A full LaMa sequence passed the same checks but established that
+the backend belongs in the offline tier on CPU. These bounded local checks are
+still not universal evidence for every provider layout or source.
+
+Native TC260 metadata in MP4/MOV is supported at its normative
+`moov.udta.meta.keys/ilst` placement, including non-faststart files whose
+`moov` follows a large media payload. MKV/WebM is supported at the normative
+`Segment.Tags.Tag.SimpleTag` placement and uses ffmpeg for stream-copy removal.
+AVI is supported at `LIST/INFO/AIGC`, and FLV at
+`script.onMetaData.AIGC`; both use ffmpeg stream-copy removal. Stock ffmpeg can
+write and strip the FLV form, but writing the nonstandard AVI child for fixture
+generation requires dedicated muxer support, so the AVI reader is verified
+against an exact synthetic RIFF structure.
+
+MP4/MOV/M4V metadata removal now stream-copies the container in bounded chunks,
+keeps every box size and media offset fixed, and publishes atomically. The
+large-`mdat` regression rejects a full-source `read_bytes()` call and verifies
+that the encoded payload is byte-identical. HEIF/AVIF/JPEG-XL image metadata
+still uses the in-memory path because their XMP/EXIF items may live inside
+`mdat`/`idat` and require bounded format-item parsing before that path can
+stream safely.
 
 ### Metadata transformation is fail safe
 

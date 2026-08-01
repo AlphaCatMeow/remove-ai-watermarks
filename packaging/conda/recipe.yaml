@@ -47,11 +47,12 @@ tests:
 
 about:
   homepage: https://github.com/wiltodelta/remove-ai-watermarks
-  summary: Remove visible and invisible AI watermarks from images
+  summary: Inspect and strip AI provenance metadata from media
   description: |
     Inspect and strip AI-provenance metadata (C2PA, EXIF, IPTC, and PNG text
-    chunks) from images. Optional pip extras add visible watermark removal,
-    SynthID diffusion removal, and additional invisible-watermark detectors.
+    chunks) from images and supported video containers. Optional pip extras add
+    visible watermark removal, video processing, SynthID diffusion removal, and
+    additional invisible-watermark detectors.
   license: Apache-2.0
   license_file: LICENSE
   repository: https://github.com/wiltodelta/remove-ai-watermarks

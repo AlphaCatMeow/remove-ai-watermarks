@@ -1,10 +1,15 @@
 # Remove AI Watermarks
 
-Remove AI provenance marks from images you generated yourself:
+Remove AI provenance marks from images and video you generated yourself:
 
 - known visible labels such as the Gemini sparkle and vendor text marks;
 - invisible pixel watermarks through diffusion regeneration;
 - C2PA, EXIF, XMP, IPTC, and related AI metadata.
+
+Video support covers provenance identification, complete visible-plus-metadata
+cleaning, directory batches, visible Sora, Veo, Seedance, Dola, Hailuo, and
+Kling mark removal, and oracle-certified VAE regeneration for video SynthID
+removal.
 
 > Try it online at [raiw.cc](https://raiw.cc) if you do not want to install Python
 > or run diffusion models locally.
@@ -28,6 +33,12 @@ Remove AI provenance marks from images you generated yourself:
 | Remove known visible AI marks | `visible` | No |
 | Erase a region you select | `erase` | No |
 | Strip AI metadata | `metadata` | No |
+| Identify supported video provenance | `video identify` | No |
+| Remove visible marks and AI metadata from video | `video all` | No |
+| Strip AI metadata from video | `video metadata` | No |
+| Remove a registered visible AI mark from video | `video visible` | No |
+| Process a directory of videos | `video batch` | Depends on mode |
+| Remove video SynthID with the certified VAE profile | `video invisible` | Recommended |
 | Regenerate an image to disrupt invisible watermarks | `invisible` | Recommended |
 | Run visible, invisible, and metadata removal | `all` | Recommended |
 | Process a directory | `batch` | Depends on mode |
@@ -38,6 +49,8 @@ Remove AI provenance marks from images you generated yourself:
 | --- | --- |
 | Metadata inspection and stripping | `remove-ai-watermarks` |
 | Visible detection and removal | `remove-ai-watermarks[visible]` |
+| Visible video processing | `remove-ai-watermarks[video]` |
+| Video SynthID removal | `remove-ai-watermarks[video,diffusion]` |
 | Torch-free DWT-DCT detection | `remove-ai-watermarks[detect]` |
 | Diffusion removal | `remove-ai-watermarks[diffusion]` |
 | Every production feature | `remove-ai-watermarks[all]` |
@@ -78,6 +91,94 @@ Strip metadata without running visible inpainting or diffusion:
 ```bash
 remove-ai-watermarks metadata image.png --remove -o clean.png
 ```
+
+Inspect or remove AI metadata from an MP4, MOV, M4V, WebM, MKV, AVI, or FLV
+file:
+
+```bash
+remove-ai-watermarks video metadata input.mp4 --check
+remove-ai-watermarks video metadata input.mp4 --remove -o clean.mp4
+```
+
+The metadata command does not transcode video or audio streams. When `-o` is
+omitted it writes `<source>_clean` and preserves the original. MP4 and MOV
+inspection includes the native TC260 `AIGC` tag in
+`moov.udta.meta.keys/ilst`, including a `moov` placed after the media payload.
+MKV and WebM inspection reads the normative
+`Segment.Tags.Tag.SimpleTag` placement. AVI uses `LIST/INFO/AIGC`, while FLV
+uses `script.onMetaData.AIGC`. The non-ISOBMFF formats are remuxed with stream
+copy for removal.
+
+Use the product-oriented video path to identify or clean a file:
+
+```bash
+uv tool install --force "remove-ai-watermarks[video]"
+remove-ai-watermarks video identify input.mp4
+remove-ai-watermarks video all input.mp4 -o clean.mp4
+```
+
+`video all` removes a stable registered visible mark when present and always
+strips verified AI metadata. If neither signal is found, it still writes a
+same-container passthrough, so application callers get one predictable output
+contract. Proprietary invisible-video removal is excluded by default.
+`--invisible` opts into the lossy, oracle-certified video SynthID profile.
+
+Process a directory with the same contract:
+
+```bash
+remove-ai-watermarks video batch ./videos --mode all
+```
+
+Remove a supported visible video mark:
+
+```bash
+remove-ai-watermarks video visible input.mp4 -o clean.mp4
+remove-ai-watermarks video visible veo.mp4 --mark veo -o veo_clean.mp4
+remove-ai-watermarks video visible seedance.mp4 --mark seedance -o seedance_clean.mp4
+remove-ai-watermarks video visible dola.mp4 --mark dola -o dola_clean.mp4
+remove-ai-watermarks video visible hailuo.mp4 --mark hailuo -o hailuo_clean.mp4
+remove-ai-watermarks video visible kling.mp4 --mark kling -o kling_clean.mp4
+```
+
+This path scans the complete sequence before changing pixels. It accepts only a
+mark that repeats at a stable position across adjacent frames, then reuses the
+same OpenCV, MI-GAN, or LaMa fill backends as image removal. Audio is copied
+without re-encoding and is allowed to reach its natural end; the video stream
+is transcoded because its pixels change. By default, a guarded optical-flow
+pass motion-aligns the preceding accepted fill and blends it only when the
+nearby source context agrees; use `--no-temporal-consistency` to disable it.
+The encoder preserves supported
+8-bit source chroma sampling, color tags, and MP4/MOV track timescale instead
+of relying on ffmpeg's implicit raw-BGR defaults. Variable frame intervals are
+preserved through a timestamped in-memory NUT bridge instead of being flattened
+to the average frame rate. Non-zero source start timestamps are retained
+together with the copied audio offset. The default `--mark auto`
+scans all providers in one decode pass and selects the first stable match in
+the specificity order shown below. Pass an explicit mark to restrict detection
+to one provider.
+Sora covers the moving Sora 2 mascot and wordmark. Veo covers both the current
+four-point diamond and the legacy `Veo` text. Seedance covers the fixed boxed
+`AI` label, Dola covers the fixed `Dola AI` text, Hailuo covers the composite
+`MINIMAX | hailuo AI` label, and Kling covers the bottom-right `KLING AI`
+label with its version suffix. A completed encode is published atomically. No
+output is written when no stable mark is found.
+HDR, PQ/HLG, and greater-than-8-bit inputs are rejected before encoding rather
+than silently reduced through OpenCV's 8-bit BGR boundary.
+
+Remove video SynthID:
+
+```bash
+uv tool install --force "remove-ai-watermarks[video,diffusion]"
+remove-ai-watermarks video invisible input.mp4 -o clean.mp4
+```
+
+This path regenerates the complete sequence with one latent-noise field shared
+across time, copies complete audio, strips source metadata, and publishes the
+completed encode atomically. The default `noise_std=0.15` profile passed both
+the two-carrier calibration and a complete public eight-second Veo oracle
+check. Google does not publish a local decoder, so a fresh provider check
+remains useful for unusually important files or after provider changes, but it
+is not a product result state.
 
 For invisible watermark removal, install the diffusion dependencies:
 
@@ -206,8 +307,9 @@ Visible removal follows three steps:
 3. Fill only the masked region with OpenCV, MI-GAN, or LaMa.
 
 Metadata removal uses format aware stripping. JPEG metadata removal preserves
-the encoded image scan instead of recompressing it. Other supported containers
-use their corresponding metadata path.
+the encoded image scan instead of recompressing it. Native MP4/MOV TC260 values
+are blanked without changing box sizes or media offsets. Other supported
+containers use their corresponding metadata path.
 
 Invisible removal is different. It regenerates the image through a diffusion
 pipeline to disrupt pixel and frequency domain watermarks. This changes the
@@ -226,6 +328,22 @@ import remove_ai_watermarks as raiw
 
 result, removed = raiw.remove_visible("watermarked.png", "clean.png")
 print(removed)
+
+provenance = raiw.identify_video("input.mp4")
+report = raiw.inspect_video_metadata("input.mp4")
+complete = raiw.remove_video_all("input.mp4", "clean.mp4")
+batch = raiw.remove_video_batch("videos", "videos_clean")
+cleaned = raiw.remove_video_metadata("input.mp4")
+synthid_cleaned = raiw.remove_video_invisible("input.mp4", "synthid_clean.mp4")
+visible = raiw.remove_video_visible("input.mp4", "clean.mp4")
+print(visible.mark)
+veo = raiw.remove_video_visible("veo.mp4", "veo_clean.mp4", mark="veo")
+seedance = raiw.remove_video_visible(
+    "seedance.mp4",
+    "seedance_clean.mp4",
+    mark="seedance",
+)
+dola = raiw.remove_video_visible("dola.mp4", "dola_clean.mp4", mark="dola")
 ```
 
 The high level API accepts a file path or a BGR NumPy array. For path inputs it
@@ -250,10 +368,41 @@ invisible removal.
   and selected fill backend.
 - Invisible removal changes the whole image and may alter faces, text, or fine
   detail.
+- Visible video removal recognizes the moving Sora 2 wordmark, the current Veo
+  diamond plus legacy `Veo` text, the Seedance boxed `AI` label, and the fixed
+  Dola, Hailuo, and Kling labels. It does not recognize the older Sora Turbo
+  corner swirl or unregistered layouts from those providers.
+  The classical OpenCV backend can smear structured backgrounds; use MI-GAN or
+  LaMa when recovery quality matters.
+- Video SynthID regeneration changes resolution, frame rate, and image detail.
+  The shipped profile is oracle-certified, but no public local decoder can
+  certify an arbitrary output at runtime. Recheck unusually important outputs
+  after provider changes.
 - `qwen-zimage` requires CUDA. The other diffusion profiles also support the
   devices listed by `remove-ai-watermarks invisible --help`.
 - Provider watermark systems can change. Validate important outputs with the
   provider's own verifier when one is available.
+
+The shipped `video invisible` command uses the certified `noise_std=0.15`
+profile. The companion `scripts/video_synthid_sweep.py` research harness builds
+a matched re-encode control plus VAE-regenerated candidates and leaves the
+verifier verdict blank:
+
+```bash
+uv run --extra video --extra diffusion python scripts/video_synthid_sweep.py input.mp4 -o sweep/
+```
+
+The control must still be SynthID-positive before a negative candidate can
+count as removal evidence. In the 2026-07-29 two-clip calibration, both matched
+controls were positive in Gemini's built-in SynthID verifier; the stronger
+candidate was negative on both carriers, while a weaker candidate was
+negative on one. A later adversarial follow-up that asked ordinary Gemini to
+reinterpret the pixel result returned `UNAVAILABLE`; that follow-up was not a
+verifier rerun and does not invalidate the built-in verdicts. A 2026-07-31
+full-clip check on a public eight-second Veo sample found `0.10` still detected
+and `0.15` not detected, so `0.15` is now the certified default. The
+reproducible hashes and verdicts live in
+`data/evaluations/video-synthid-oracle.csv`.
 
 ## Documentation
 

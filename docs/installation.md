@@ -46,6 +46,23 @@ Add `heif` only when the pixel path must decode HEIC, HEIF, or AVIF:
 uv tool install --force "remove-ai-watermarks[visible,heif]"
 ```
 
+## Video processing
+
+Video metadata inspection and stripping work with the default package. Stable
+visible-mark identification and removal, full video cleaning, and visible/all
+batch modes need the `video` extra:
+
+```bash
+uv tool install --force "remove-ai-watermarks[video]"
+```
+
+The extra includes the visible pixel runtime and PyAV for preserving variable
+frame timestamps. Video SynthID regeneration also needs the diffusion stack:
+
+```bash
+uv tool install --force "remove-ai-watermarks[video,diffusion]"
+```
+
 ## Invisible watermark removal
 
 Diffusion based removal needs the `diffusion` extra:
@@ -75,6 +92,7 @@ application actually uses:
 | `pixels` | Shared BGR array and image-processing runtime | NumPy, headless OpenCV | No |
 | `heif` | HEIC, HEIF, and AVIF pixel decoding | pillow-heif | No |
 | `visible` | Visible mark detection, OpenCV inpainting, and manual erasing | `pixels` | No |
+| `video` | Visible video identification/removal and timestamp preservation | `visible`, PyAV | No |
 | `detect` | Open DWT-DCT detection for Stable Diffusion, SDXL, and FLUX | `pixels`, PyWavelets | No |
 | `trustmark` | Adobe TrustMark detection | trustmark | Yes |
 | `diffusion` | Diffusion-based invisible watermark removal | `pixels`, Torch, Diffusers | Yes |
@@ -90,6 +108,7 @@ Dependency composition:
 ```mermaid
 flowchart LR
     visible --> pixels
+    video --> visible
     detect --> pixels
     diffusion --> pixels
     migan --> visible
@@ -112,6 +131,9 @@ uv tool install --force "remove-ai-watermarks[detect]"
 
 # Visible removal with HEIC/AVIF support and MI-GAN
 uv tool install --force "remove-ai-watermarks[migan,heif]"
+
+# Visible video removal with preserved timestamps
+uv tool install --force "remove-ai-watermarks[video]"
 
 # DWT-DCT and TrustMark detection without diffusion removal
 uv tool install --force "remove-ai-watermarks[detect,trustmark]"
@@ -195,4 +217,4 @@ found. A missing signal does not prove that the image is clean. If you know the
 image came from a relevant generator, use `--force`.
 
 If the CLI reports that diffusion dependencies are unavailable, install the
-`gpu` extra.
+`diffusion` extra. Video SynthID removal needs both `video` and `diffusion`.

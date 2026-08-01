@@ -1,7 +1,4 @@
-"""AI metadata detection and removal.
-
-Wraps the noai-watermark metadata handling for stripping AI-generation
-metadata (EXIF, PNG text chunks, C2PA provenance) from images.
+"""Detect and remove AI provenance metadata from image containers.
 
 For metadata-only operations, the heavy ML dependencies are NOT required.
 """
@@ -10,12 +7,15 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import itertools
+import json
 import logging
 import re
 import struct
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
     from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -101,7 +101,7 @@ IPTC_AI_MARKERS: tuple[bytes, ...] = (
 # (Meta / Instagram / MidJourney) use ``trainedAlgorithmicMedia``. Including the bare
 # token flagged clean procedural images as AI (is_ai=high + has_invisible_target=True ->
 # a diffusion scrub of clean content), contradicting the c2pa layer, which sets
-# source_type without ai_source for it (tests/test_noai.py::test_plain_algorithmic_media_not_flagged_ai).
+# source_type without ai_source for it (tests/test_metadata_internals.py::test_plain_algorithmic_media_not_flagged_ai).
 # It is not a substring of the trained/composite tokens, so its removal does not affect
 # their detection.
 
@@ -120,12 +120,13 @@ IPTC_AI_FIELD_MARKERS: tuple[bytes, ...] = (
 # the container level (image, video, audio -- all ISOBMFF). A content sniff
 # (``ftyp``) is also accepted, so this is a fast-path hint, not the sole gate.
 _ISOBMFF_EXTS: frozenset[str] = frozenset({".avif", ".heif", ".heic", ".jxl", ".mp4", ".mov", ".m4v", ".m4a"})
+_STREAMING_ISOBMFF_EXTS: frozenset[str] = frozenset({".mp4", ".mov", ".m4v", ".m4a"})
 
 # Non-ISOBMFF audio/video the ISOBMFF box walker can't reach (EBML / framed /
 # RIFF / Vorbis). remove_ai_metadata strips their container metadata losslessly
 # via ffmpeg (`-c copy`), so it needs ffmpeg on PATH for these.
 _FFMPEG_STRIP_EXTS: frozenset[str] = frozenset(
-    {".webm", ".mkv", ".mka", ".mp3", ".wav", ".flac", ".ogg", ".oga", ".opus", ".aac"}
+    {".webm", ".mkv", ".mka", ".avi", ".flv", ".mp3", ".wav", ".flac", ".ogg", ".oga", ".opus", ".aac"}
 )
 
 # China's mandatory AI-content labeling (TC260, the national cybersecurity
@@ -143,7 +144,7 @@ AIGC_MARKERS: tuple[bytes, ...] = (
 # the same object as a PNG ``tEXt`` chunk keyed ``AIGC`` (raw JSON, not XMP), so
 # a JSON object carrying at least one of these is accepted as a valid TC260
 # label even when the namespaced XMP element is absent.
-_TC260_FIELDS: frozenset[str] = frozenset(
+TC260_AIGC_FIELDS: frozenset[str] = frozenset(
     {
         # Producer-side schema (Doubao and most China-served generators).
         "Label",
@@ -161,6 +162,22 @@ _TC260_FIELDS: frozenset[str] = frozenset(
         "ServiceUser",
     }
 )
+MAX_TC260_VALUE_BYTES = 1024 * 1024
+
+
+def parse_tc260_aigc_json(value: bytes) -> dict[str, str] | None:
+    """Parse a bounded JSON object carrying at least one normative TC260 field."""
+    if len(value) > MAX_TC260_VALUE_BYTES:
+        return None
+    try:
+        parsed = json.loads(value.rstrip(b"\x00 ").decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    fields = {str(key): str(item) for key, item in cast("dict[object, object]", parsed).items()}
+    return fields if TC260_AIGC_FIELDS & fields.keys() else None
+
 
 # HuggingFace-hosted GPU jobs (Jobs / Spaces) stamp generated PNGs with this
 # ``tEXt`` chunk key holding the job UUID. It marks the hosting job, not a
@@ -198,7 +215,7 @@ def _is_ai_value(value: str) -> bool:
     detection: NovelAI stamps a generic ``Title``/``Source`` text chunk (an
     AI-shaped value under a non-AI key) that ``_is_ai_key`` alone would keep.
     """
-    from remove_ai_watermarks.noai.constants import AI_GENERATOR_TOKENS
+    from remove_ai_watermarks._internal.constants import AI_GENERATOR_TOKENS
 
     value_lower = value.lower()
     return any(token in value_lower for token in AI_GENERATOR_TOKENS)
@@ -290,7 +307,7 @@ def _scan_head_impl(image_path: Path, size: int) -> bytes:
     with open(image_path, "rb") as f:
         head = f.read(size)
     # Lazy import: isobmff imports this module's constants at top level.
-    from remove_ai_watermarks.noai import isobmff
+    from remove_ai_watermarks._internal import isobmff
 
     if isobmff.is_isobmff(head):
         region = isobmff.scan_c2pa_region(image_path)
@@ -328,7 +345,7 @@ def has_ai_metadata(image_path: Path) -> bool:
     # Check C2PA — via the official c2pa-python reader first (spec-tracking, every
     # container it supports), then a binary scan that also catches AVIF/HEIF/JPEG-XL
     # containers and synthetic/partial blobs the validator rejects.
-    from remove_ai_watermarks.noai.c2pa import read_manifest_store_json
+    from remove_ai_watermarks._internal.c2pa import read_manifest_store_json
 
     if read_manifest_store_json(image_path) is not None:
         return True
@@ -363,16 +380,15 @@ def aigc_label_from_metadata(data: bytes, candidates: tuple[str, ...] = ()) -> d
     from typing import cast
 
     def _parse(text: str, *, require_tc260_field: bool) -> dict[str, str] | None:
+        if require_tc260_field:
+            return parse_tc260_aigc_json(text.encode("utf-8"))
         try:
             parsed = json.loads(text)
         except ValueError:
             return None
         if not isinstance(parsed, dict):
             return None
-        fields = {str(k): str(v) for k, v in cast("dict[object, object]", parsed).items()}
-        if require_tc260_field and not (_TC260_FIELDS & fields.keys()):
-            return None
-        return fields
+        return {str(k): str(v) for k, v in cast("dict[object, object]", parsed).items()}
 
     for candidate in candidates:
         if result := _parse(candidate, require_tc260_field=True):
@@ -407,10 +423,15 @@ def aigc_label_from_metadata(data: bytes, candidates: tuple[str, ...] = ()) -> d
 def aigc_label(image_path: Path) -> dict[str, str] | None:
     """Parse a China TC260 AI-labeling block, if present.
 
-    Three serializations are recognized:
+    Supported serializations are:
 
     - a PNG ``tEXt``/``iTXt`` chunk keyed ``AIGC`` carrying the raw JSON object
       (as written by Doubao / ByteDance), read via PIL;
+    - a native MP4/MOV ``AIGC`` key in ``moov.udta.meta.keys`` whose matching
+      ``ilst`` item carries the raw JSON object;
+    - a native MKV/WebM ``AIGC`` simple tag carrying the raw JSON object;
+    - a native AVI ``LIST/INFO/AIGC`` chunk or FLV
+      ``script.onMetaData.AIGC`` string carrying the raw JSON object;
     - an XMP ``<TC260:AIGC>{...}</TC260:AIGC>`` block (HTML-entity encoded text),
       found by a container-agnostic raw-byte scan (PNG/JPEG/WebP alike); and
     - a raw-JSON ``{"AIGC":{...}}`` block with no namespace, as embedded in JPEG
@@ -423,7 +444,7 @@ def aigc_label(image_path: Path) -> dict[str, str] | None:
     Returns the decoded JSON (e.g. ``{"Label": "1", "ContentProducer": ...}``)
     or None. The generic forms (the PNG-chunk key ``AIGC``, the bare
     ``{"AIGC":...}`` object, and the bare ``AIGC{...}`` blob) are accepted only
-    if they carry at least one known TC260 field (``_TC260_FIELDS``); the
+    if they carry at least one known TC260 field (``TC260_AIGC_FIELDS``); the
     namespaced XMP element is unambiguous, so any JSON object is accepted.
     """
     try:
@@ -434,9 +455,47 @@ def aigc_label(image_path: Path) -> dict[str, str] | None:
     except Exception as exc:
         logger.debug("PIL could not open %s for AIGC chunk scan: %s", image_path, exc)
         value = None
+
+    if isinstance(value, str) and (result := aigc_label_from_metadata(b"", (value,))):
+        return result
+
+    # Native MP4/MOV TC260 metadata (TC260-PG-20257A): the ``AIGC`` key lives
+    # in ``moov.udta.meta.keys`` and points to a raw JSON value in ``ilst``.
+    # Read it through the bounded box walker so a tail ``moov`` after a large
+    # ``mdat`` is found without loading or scanning the media payload.
+    from remove_ai_watermarks._internal.isobmff import tc260_aigc_payloads
+
+    isobmff_candidates = tuple(payload.decode("utf-8", "replace") for payload in tc260_aigc_payloads(image_path))
+    if result := aigc_label_from_metadata(b"", isobmff_candidates):
+        return result
+
+    # Native MKV/WebM TC260 metadata: ``Segment.Tags.Tag.SimpleTag`` carries
+    # ``TagName=AIGC`` and the raw JSON in ``TagString``. The EBML walker seeks
+    # over clusters and reads only bounded metadata values.
+    from remove_ai_watermarks._internal.ebml import tc260_aigc_payloads as ebml_tc260_aigc_payloads
+
+    ebml_candidates = tuple(payload.decode("utf-8", "replace") for payload in ebml_tc260_aigc_payloads(image_path))
+    if result := aigc_label_from_metadata(b"", ebml_candidates):
+        return result
+
+    # Native AVI and FLV TC260 metadata. Both readers walk their container
+    # structures and skip media payloads instead of relying on a raw substring
+    # that could collide inside compressed video.
+    legacy_payloads: tuple[bytes, ...] = ()
+    if image_path.suffix.lower() == ".avi":
+        from remove_ai_watermarks._internal.riff import tc260_aigc_payloads as riff_tc260_aigc_payloads
+
+        legacy_payloads = riff_tc260_aigc_payloads(image_path)
+    elif image_path.suffix.lower() == ".flv":
+        from remove_ai_watermarks._internal.flv import tc260_aigc_payloads as flv_tc260_aigc_payloads
+
+        legacy_payloads = flv_tc260_aigc_payloads(image_path)
+    legacy_candidates = tuple(payload.decode("utf-8", "replace") for payload in legacy_payloads)
+    if result := aigc_label_from_metadata(b"", legacy_candidates):
+        return result
+
     data = scan_head(image_path)
-    candidates = (value,) if isinstance(value, str) else ()
-    return aigc_label_from_metadata(data, candidates)
+    return aigc_label_from_metadata(data)
 
 
 # C2PA "Durable Content Credentials" manifest repositories (C2PA 2.4). When the
@@ -610,7 +669,7 @@ def synthid_source(image_path: Path) -> str | None:
     Returns:
         Comma-joined vendor name(s) (e.g. ``"OpenAI"``) or None.
     """
-    from remove_ai_watermarks.noai.c2pa import extract_c2pa_info, synthid_vendors_in
+    from remove_ai_watermarks._internal.c2pa import extract_c2pa_info, synthid_vendors_in
 
     # PNG: the caBX chunk parser gives a clean, structured issuer.
     vendors = extract_c2pa_info(image_path).get("synthid_vendors")
@@ -630,15 +689,15 @@ def synthid_source(image_path: Path) -> str | None:
     return ", ".join(matched) if matched else None
 
 
-def generator_from_metadata(candidates: list[str], scan: bytes = b"") -> str | None:
+def generator_from_metadata(candidates: Iterable[str], scan: bytes = b"") -> str | None:
     """Return a known AI generator from collected EXIF, PNG, or XMP values."""
-    from remove_ai_watermarks.noai.constants import AI_GENERATOR_TOKENS
+    from remove_ai_watermarks._internal.constants import AI_GENERATOR_TOKENS
 
-    candidates.extend(
+    creator_tools = (
         match.group(1).decode("latin1", "replace")
         for match in re.finditer(rb"CreatorTool[>\"'=\s]{1,4}([^<\"']{1,80})", scan)
     )
-    for value in candidates:
+    for value in itertools.chain(candidates, creator_tools):
         if any(token in value.lower() for token in AI_GENERATOR_TOKENS):
             return value.strip()
     return None
@@ -752,7 +811,7 @@ def _is_aigc_exif_value(raw: object) -> bool:
     Mirrors ``aigc_label``'s EXIF path: the ``{"AIGC":{...}}`` wrapper embedded in
     ``UserComment`` / ``ImageDescription`` by China-served generators (Doubao's
     producer schema AND Tencent Cloud's service-provider schema, both keyed under
-    ``_TC260_FIELDS``). Gated on both the ``AIGC`` marker and a TC260 field so a
+    ``TC260_AIGC_FIELDS``). Gated on both the ``AIGC`` marker and a TC260 field so a
     coincidental token cannot false-drop a genuine caption/comment. Accepts a ``str``
     too (a PNG ``tEXt``/``iTXt`` value), not only EXIF bytes.
     """
@@ -763,7 +822,7 @@ def _is_aigc_exif_value(raw: object) -> bool:
     if b"AIGC" not in raw:
         return False
     text = bytes(raw).decode("latin-1", "ignore")
-    return any(field in text for field in _TC260_FIELDS)
+    return any(field in text for field in TC260_AIGC_FIELDS)
 
 
 def _ai_exif_targets(loaded: dict[str, Any]) -> list[tuple[str, int, bytes, str]]:
@@ -782,7 +841,7 @@ def _ai_exif_targets(loaded: dict[str, Any]) -> list[tuple[str, int, bytes, str]
     """
     import piexif
 
-    from remove_ai_watermarks.noai.constants import AI_GENERATOR_TOKENS
+    from remove_ai_watermarks._internal.constants import AI_GENERATOR_TOKENS
 
     ifd0: dict[int, Any] = loaded.get("0th") or {}
     ifde: dict[int, Any] = loaded.get("Exif") or {}
@@ -841,7 +900,7 @@ def get_ai_metadata(image_path: Path) -> dict[str, str]:
     """
     from PIL import Image
 
-    from remove_ai_watermarks.noai.c2pa import extract_c2pa_info, soft_binding_vendors_in, synthid_verdict
+    from remove_ai_watermarks._internal.c2pa import extract_c2pa_info, soft_binding_vendors_in, synthid_verdict
 
     result: dict[str, str] = {}
 
@@ -861,7 +920,7 @@ def get_ai_metadata(image_path: Path) -> dict[str, str]:
     except Exception as exc:
         logger.debug("PIL could not open %s for AI-metadata scan: %s", image_path, exc)
 
-    # C2PA manifest fields from the single canonical parser (noai/c2pa.py).
+    # C2PA manifest fields from the single canonical parser (_internal/c2pa.py).
     c2pa = extract_c2pa_info(image_path)
     for key in (
         "c2pa_manifest",
@@ -1149,39 +1208,56 @@ def remove_ai_metadata(
     # strip C2PA + AI-label boxes at the container level without re-encoding.
     # Avoids needing PIL plugins (pillow-heif / pillow-jxl) and preserves the
     # codestream bit-for-bit. MP4/MOV/M4A are ISOBMFF too, so the same top-level
-    # uuid/jumb box walker applies. Route by suffix OR by an ``ftyp`` content
-    # sniff, so a correctly-shaped container is handled whatever its extension.
-    from remove_ai_watermarks.noai.isobmff import (
+    # uuid/jumb box walker applies. Known media suffixes take the bounded,
+    # offset-preserving streaming path; images retain the in-memory item scrub
+    # needed for XMP/EXIF inside mdat/idat. Route the remaining formats by suffix
+    # OR by an ``ftyp`` content sniff.
+    from remove_ai_watermarks._internal.isobmff import (
         blank_ai_exif_tokens,
         blank_ai_xmp_packets,
+        blank_tc260_aigc_tags,
         is_isobmff,
         strip_c2pa_boxes,
+        strip_isobmff_media_file,
     )
 
     with open(source_path, "rb") as f:
         head = f.read(12)
+    if source_path.suffix.lower() in _STREAMING_ISOBMFF_EXTS and is_isobmff(head):
+        stripped, tc260_blanked = strip_isobmff_media_file(source_path, output_path)
+        logger.info(
+            "Stream-blanked %d AI-provenance box(es) and %d native TC260 tag(s) → %s",
+            stripped,
+            tc260_blanked,
+            output_path,
+        )
+        return output_path
     if source_path.suffix.lower() in _ISOBMFF_EXTS or is_isobmff(head):
         data = source_path.read_bytes()
         # Top-level uuid/jumb boxes (C2PA + AI-label XMP), then the meta-box items
         # the top-level stripper can't reach (HEIF/AVIF store them in mdat/idat):
-        # AI-label XMP packets and AI-generator tokens in an Exif item -- both
-        # blanked in place (same length) so box sizes and iloc offsets stay valid
-        # and the coded image is untouched.
+        # Native TC260 tags, AI-label XMP packets, and AI-generator tokens in an
+        # Exif item are blanked in place (same length) so box sizes and iloc /
+        # media offsets stay valid and the coded content is untouched.
         cleaned, stripped = strip_c2pa_boxes(data)
+        cleaned, tc260_blanked = blank_tc260_aigc_tags(cleaned)
         cleaned, blanked = blank_ai_xmp_packets(cleaned)
         cleaned, exif_blanked = blank_ai_exif_tokens(cleaned)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_bytes(cleaned)
         logger.info(
-            "Stripped %d AI-provenance box(es), blanked %d meta-box XMP packet(s) + %d EXIF token(s) → %s",
+            "Stripped %d AI-provenance box(es), blanked %d native TC260 tag(s) + "
+            "%d meta-box XMP packet(s) + %d EXIF token(s) → %s",
             stripped,
+            tc260_blanked,
             blanked,
             exif_blanked,
             output_path,
         )
         return output_path
 
-    # Non-ISOBMFF audio/video (WebM/Matroska EBML, MP3 ID3, WAV/FLAC/OGG): the
+    # Non-ISOBMFF audio/video (WebM/Matroska EBML, AVI/FLV, MP3 ID3,
+    # WAV/FLAC/OGG): the
     # box walker can't reach these, so strip container metadata losslessly via
     # ffmpeg (-c copy -- codec data untouched, only tags/chapters dropped).
     if source_path.suffix.lower() in _FFMPEG_STRIP_EXTS:

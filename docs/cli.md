@@ -22,6 +22,9 @@ defaults. This page focuses on choosing the right command.
 | `visible` or `erase` with big-LaMa | `remove-ai-watermarks[lama]` |
 | `invisible` | `remove-ai-watermarks[diffusion]` |
 | `invisible --pipeline qwen-zimage` | `remove-ai-watermarks[qwen-zimage]` |
+| `video metadata` and `video identify --no-visible` | Default package |
+| `video identify`, `video visible`, and visible/all batch modes | `remove-ai-watermarks[video]` |
+| `video invisible` and `video all --invisible` | `remove-ai-watermarks[video,diffusion]` |
 | HEIC/HEIF/AVIF pixel input | Add `remove-ai-watermarks[heif]` |
 | Every production command and backend | `remove-ai-watermarks[all]` |
 
@@ -146,6 +149,194 @@ unless you pass `--remove-all`.
 The command also supports the audio and video containers listed in
 [supported signals](supported-signals.md). ffmpeg must be available for the
 non-ISOBMFF audio and video path.
+
+## Identify and clean video
+
+Install the video pixel and timestamp runtime for visible identification,
+removal, and the complete pipeline:
+
+```bash
+uv tool install --force "remove-ai-watermarks[video]"
+```
+
+Inspect every locally supported video signal:
+
+```bash
+remove-ai-watermarks video identify input.mp4
+remove-ai-watermarks video identify input.mp4 --json
+remove-ai-watermarks video identify input.mp4 --no-visible
+```
+
+The default scans the complete clip for stable registered visible marks and
+inspects supported metadata. A result with no signals is reported as unknown,
+not clean, because proprietary pixel watermarks have no public local decoder.
+`--no-visible` performs metadata-only inspection.
+
+Use the complete locally verifiable cleaning path:
+
+```bash
+remove-ai-watermarks video all input.mp4 -o clean.mp4
+```
+
+It removes a stable supported visible mark when found and always strips
+verified AI metadata. When neither signal is found, it writes a same-container
+passthrough instead of returning a missing output. The source is never
+overwritten.
+
+Invisible regeneration is deliberately opt-in:
+
+```bash
+remove-ai-watermarks video all input.mp4 -o clean.mp4 --invisible
+```
+
+That option is supported only for MP4, MOV, and M4V. It is lossy and uses the
+same oracle-certified profile as `video invisible`.
+
+Process all supported files in a top-level directory:
+
+```bash
+remove-ai-watermarks video batch ./videos --mode all
+remove-ai-watermarks video batch ./videos --mode visible
+remove-ai-watermarks video batch ./videos --mode metadata
+```
+
+The batch runs sequentially, preserves successful outputs when another file
+fails, and exits nonzero if any item failed. Visible no-op files are copied
+byte-for-byte so the output directory remains complete. `--invisible` is
+available only with `--mode all`.
+
+## Strip AI metadata from video
+
+Metadata inspection and removal are also available as an isolated operation:
+
+```bash
+remove-ai-watermarks video metadata input.mp4 --check
+remove-ai-watermarks video metadata input.mp4 --remove -o clean.mp4
+```
+
+Supported containers are MP4, MOV, M4V, WebM, MKV, AVI, and FLV. The operation
+delegates to the same verified metadata scanner and stripper as the generic
+`metadata` command, so detection and removal stay in parity. Video and audio
+streams are not transcoded. For MP4 and MOV, this includes the native TC260
+`AIGC` key and JSON value stored in `moov.udta.meta.keys/ilst`. The inspector
+seeks past a large `mdat` to find a tail `moov`. Removal stream-copies the
+container in bounded chunks, converts supported top-level provenance boxes to
+same-size `free` boxes, and blanks the TC260 key/value in place. Box sizes,
+media offsets, and encoded stream bytes do not move; the result is atomically
+published only after the complete copy succeeds.
+
+For MKV and WebM, the inspector reads the native TC260
+`Segment.Tags.Tag.SimpleTag` entry. Removal uses ffmpeg stream copying to
+discard container tags and chapters without transcoding the streams.
+AVI uses the normative `LIST/INFO/AIGC` chunk, while FLV uses the
+`script.onMetaData.AIGC` AMF0 string. Their bounded readers skip media payloads,
+and removal also uses ffmpeg stream copying.
+
+When `-o` is omitted, the command writes `<source>_clean` with the same
+extension. It never overwrites the source, and it rejects an output with a
+different container extension.
+
+Visible video labels and invisible video watermarks are not handled by this
+command.
+
+## Remove video SynthID
+
+```bash
+uv tool install --force "remove-ai-watermarks[video,diffusion]"
+remove-ai-watermarks video invisible input.mp4 -o clean.mp4
+```
+
+The command supports MP4, MOV, and M4V. It samples the complete
+sequence at the configured frame rate, resizes frames to the configured long
+side, regenerates them through a VAE, and applies one deterministic latent-noise
+field to every frame. Reusing one spatial field avoids the unnecessary flicker
+caused by independent per-frame noise. Frames are regenerated in bounded
+batches and streamed directly to ffmpeg, which encodes the result, copies
+audio, and drops source metadata.
+
+The default `noise_std=0.15` profile is oracle-certified. The project has no
+local video SynthID decoder, so an optional per-file recheck is still useful
+for unusually important files or after provider changes. In a new Gemini chat,
+upload the original first, invoke the built-in verifier with `@synthid`, and ask:
+
+> For the video attached to this message, was it created or edited by Google
+> AI? Use the built-in SynthID content verification result.
+
+The source must be positive. Then upload the processed result in a separate new
+chat and repeat the same built-in check. Only a source-positive, output-negative
+pair is a fresh per-file verification. Do not ask an adversarial follow-up that tells the
+chat model to ignore the verifier and reason about raw pixels: that is ordinary
+Gemini reasoning, not a second oracle check.
+
+The default output is `<source>_clean` in the same container. The
+source is never overwritten. Use `--noise-std`, `--long-side`, `--fps`,
+`--batch-size`, `--seed`, and `--device` to control the regeneration. The
+default noise level is `0.15`. It cleared both carriers in the 2026-07-29
+short-clip calibration and the complete public eight-second Veo carrier in the
+2026-07-31 full-clip check; `0.10` remained detected on that complete clip. This
+calibration certifies the shipped operating point; the paired check above is an
+optional runtime audit, not a separate result state.
+
+## Remove a supported visible video mark
+
+```bash
+remove-ai-watermarks video visible input.mp4 -o clean.mp4
+remove-ai-watermarks video visible veo.mp4 --mark veo -o veo_clean.mp4
+remove-ai-watermarks video visible seedance.mp4 --mark seedance -o seedance_clean.mp4
+remove-ai-watermarks video visible dola.mp4 --mark dola -o dola_clean.mp4
+remove-ai-watermarks video visible hailuo.mp4 --mark hailuo -o hailuo_clean.mp4
+remove-ai-watermarks video visible kling.mp4 --mark kling -o kling_clean.mp4
+```
+
+The command supports the moving Sora mascot and wordmark, two Veo
+corner variants, the Seedance boxed `AI` label, the `Dola AI` text label, the
+composite `MINIMAX | hailuo AI` label, and the bottom-right Kling label. Sora
+searches the whole frame at multiple scales. The other detectors search bounded
+lower-frame regions with separate synthetic silhouettes. Kling additionally
+requires its bright low-saturation label near the frame edge. Every mark
+requires a spatially recurring candidate across adjacent frames. Fixed marks
+must also remain anchored instead of drifting with a scene object. Matching
+provider provenance may relax the visual score only for registered
+provenance-aware marks; metadata alone never creates a detection.
+
+`--mark auto` is the default. It evaluates all providers in one decode pass and
+selects the first stable match in specificity order: Sora, Veo, Seedance, Dola,
+Hailuo, then Kling. Their confidence scores are independently calibrated and
+are not compared across providers. Pass an explicit `--mark` to scan only that
+provider.
+
+The video stream is transcoded and the complete original audio stream is
+copied without truncating an audio tail that extends beyond the final video
+frame. The encoder probes the source stream and preserves supported 8-bit
+chroma sampling, color range/matrix/transfer/primaries tags, and MP4/MOV track
+timescale. For a variable-frame-rate source, decoded PTS are carried through a
+timestamped in-memory NUT bridge so the output retains the source frame
+intervals instead of flattening them to a constant rate. A non-zero source
+start PTS and the copied audio start offset are preserved as well.
+Supported input and output containers are MP4, MOV, M4V, WebM, MKV, AVI, and
+FLV; the output extension must match the input. The default `cv2` backend is
+fast but can smear structured backgrounds. Select `--backend migan` or
+`--backend lama` for a learned fill, or `--backend auto` to choose the best
+installed backend.
+
+`--temporal-consistency` is enabled by default. It motion-aligns the preceding
+accepted fill, requires overlapping removal masks and matching source context,
+and blends only the safely covered pixels. Scene cuts, disjoint moving marks,
+or a poor motion match keep the independent current-frame fill. Use
+`--no-temporal-consistency` for an exact frame-local baseline.
+
+The pixel path is intentionally limited to SDR 8-bit video. A high-bit-depth,
+PQ, or HLG source is rejected before ffmpeg starts, preserving any existing
+output instead of silently downconverting it through OpenCV's 8-bit boundary.
+On CPU, MI-GAN is the practical learned tier. LaMa remains an explicit offline
+quality option because full-sequence inference is too slow and memory-heavy
+for an online worker.
+
+AI metadata is stripped from the encoded output by default. Use
+`--keep-metadata` to retain mapped container metadata. When no temporally stable
+mark is found, the command writes no output and exits with the no-visible-mark
+status. The final path is replaced atomically only after ffmpeg completes, so a
+failed encode does not overwrite an existing result.
 
 ## Remove invisible watermarks
 

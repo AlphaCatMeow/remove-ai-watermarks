@@ -13,9 +13,9 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from remove_ai_watermarks.noai.progress import is_mps_error
-from remove_ai_watermarks.noai.utils import get_image_format, is_supported_format
-from remove_ai_watermarks.noai.watermark_profiles import (
+from remove_ai_watermarks._internal.progress import is_mps_error
+from remove_ai_watermarks._internal.utils import get_image_format, is_supported_format
+from remove_ai_watermarks._internal.watermark_profiles import (
     DEFAULT_STRENGTH,
     GEMINI_STRENGTH,
     OPENAI_STRENGTH,
@@ -24,7 +24,7 @@ from remove_ai_watermarks.noai.watermark_profiles import (
     resolve_strength,
     strength_default_help,
 )
-from remove_ai_watermarks.noai.watermark_remover import get_device, is_watermark_removal_available
+from remove_ai_watermarks._internal.watermark_remover import get_device, is_watermark_removal_available
 
 # ── Device detection ────────────────────────────────────────────────
 
@@ -42,7 +42,7 @@ class TestDeviceDetection:
         # Just verify it doesn't crash and returns a valid string
         assert isinstance(device, str)
 
-    @patch("remove_ai_watermarks.noai.watermark_remover._HAS_TORCH", False)
+    @patch("remove_ai_watermarks._internal.watermark_remover._HAS_TORCH", False)
     def test_no_torch_returns_cpu(self):
         assert get_device() == "cpu"
 
@@ -55,7 +55,7 @@ class TestDeviceDetection:
         fake_torch = MagicMock()
         fake_torch.cuda.is_available.return_value = False
         fake_torch.xpu.is_available.return_value = True
-        with patch("remove_ai_watermarks.noai.watermark_remover.torch", fake_torch):
+        with patch("remove_ai_watermarks._internal.watermark_remover.torch", fake_torch):
             assert get_device() == "xpu"
         fake_torch.tensor.assert_called_with([1.0], device="xpu")
 
@@ -65,7 +65,7 @@ class TestDeviceDetection:
             pytest.skip("torch/diffusers not installed")
         import torch
 
-        from remove_ai_watermarks.noai.watermark_remover import WatermarkRemover
+        from remove_ai_watermarks._internal.watermark_remover import WatermarkRemover
 
         remover = WatermarkRemover(device="xpu")
         assert remover.device == "xpu"
@@ -74,7 +74,7 @@ class TestDeviceDetection:
     def test_seed_generator_falls_back_to_cpu_when_device_rng_unsupported(self):
         """A device with no RNG backend (e.g. some torch-xpu builds) falls back
         to a CPU generator instead of raising when --seed is used."""
-        from remove_ai_watermarks.noai import watermark_remover as wr
+        from remove_ai_watermarks._internal import watermark_remover as wr
 
         def fake_generator(device="cpu"):
             if device == "xpu":
@@ -138,7 +138,7 @@ class TestFp16WeightVariant:
     def _remover(self, dtype: object):
         if not is_watermark_removal_available():
             pytest.skip("torch/diffusers not installed")
-        from remove_ai_watermarks.noai.watermark_remover import WatermarkRemover
+        from remove_ai_watermarks._internal.watermark_remover import WatermarkRemover
 
         # device="cpu" alone would force fp32; the explicit torch_dtype override lets us
         # exercise the fp16 path with no GPU (construction loads no weights).
@@ -192,12 +192,12 @@ class TestNoReembeddedWatermark:
     def _remover(self, profile: str):
         if not is_watermark_removal_available():
             pytest.skip("torch/diffusers not installed")
-        from remove_ai_watermarks.noai.watermark_remover import WatermarkRemover
+        from remove_ai_watermarks._internal.watermark_remover import WatermarkRemover
 
         return WatermarkRemover(device="cpu", pipeline=profile)
 
     def _capture(self, monkeypatch, remover):
-        from remove_ai_watermarks.noai.watermark_remover import WatermarkRemover
+        from remove_ai_watermarks._internal.watermark_remover import WatermarkRemover
 
         calls: list[tuple[str, dict]] = []
 
@@ -242,7 +242,7 @@ class TestQwenKwargs:
     """
 
     def test_uses_true_cfg_not_guidance_scale(self):
-        from remove_ai_watermarks.noai.watermark_remover import _build_qwen_kwargs
+        from remove_ai_watermarks._internal.watermark_remover import _build_qwen_kwargs
 
         gen = object()
         img = _StubImage(2816, 1536)
@@ -254,14 +254,13 @@ class TestQwenKwargs:
         assert kwargs["strength"] == 0.3
         assert kwargs["image"] is img
         assert kwargs["generator"] is gen
-        # Faithful-regeneration prompt + an explicit negative prompt.
-        assert kwargs["prompt"]
-        assert kwargs["negative_prompt"]
+        assert kwargs["prompt"] == "high quality, sharp, detailed, faithful to the original"
+        assert kwargs["negative_prompt"] == "blurry, lowres, distorted text, garbled text, artifacts"
 
     def test_passes_explicit_aspect_preserving_size(self):
         # Without height/width the pipeline defaults to 1024x1024 and squishes non-square
         # input (the abba mixed-seam regression). Both already multiples of 16 -> unchanged.
-        from remove_ai_watermarks.noai.watermark_remover import _build_qwen_kwargs
+        from remove_ai_watermarks._internal.watermark_remover import _build_qwen_kwargs
 
         kwargs = _build_qwen_kwargs(
             _StubImage(2816, 1536), strength=0.25, num_inference_steps=40, true_cfg_scale=4.0, generator=None
@@ -270,14 +269,14 @@ class TestQwenKwargs:
         assert kwargs["height"] == 1536
 
     def test_qwen_target_size_floors_to_multiple_of_16(self):
-        from remove_ai_watermarks.noai.watermark_remover import _qwen_target_size
+        from remove_ai_watermarks._internal.watermark_remover import _qwen_target_size
 
         assert _qwen_target_size(2816, 1536) == (2816, 1536)  # already /16
         assert _qwen_target_size(1122, 1402) == (1120, 1392)  # floored
         assert _qwen_target_size(10, 10) == (16, 16)  # min clamp, never 0
 
     def test_qwen_model_id_is_qwen_image(self):
-        from remove_ai_watermarks.noai.watermark_profiles import QWEN_MODEL_ID
+        from remove_ai_watermarks._internal.watermark_profiles import QWEN_MODEL_ID
 
         assert QWEN_MODEL_ID == "Qwen/Qwen-Image"
 
@@ -303,7 +302,7 @@ class TestResolveStrength:
         # Qwen's certified Gemini floor (0.25) is HIGHER than controlnet's (0.15); OpenAI
         # matches (0.10). Unknown vendor on qwen tracks the higher Gemini value. This retires
         # the old manual "pass --strength 0.25 for Gemini on qwen" workaround.
-        from remove_ai_watermarks.noai.watermark_profiles import QWEN_GEMINI_STRENGTH, QWEN_OPENAI_STRENGTH
+        from remove_ai_watermarks._internal.watermark_profiles import QWEN_GEMINI_STRENGTH, QWEN_OPENAI_STRENGTH
 
         assert QWEN_GEMINI_STRENGTH == 0.25
         assert QWEN_OPENAI_STRENGTH == 0.10
@@ -354,32 +353,32 @@ class TestVendorForStrength:
         return patch("remove_ai_watermarks.metadata.synthid_source", return_value=value)
 
     def test_openai(self):
-        from remove_ai_watermarks.noai.watermark_profiles import vendor_for_strength
+        from remove_ai_watermarks._internal.watermark_profiles import vendor_for_strength
 
         with self._patch("OpenAI"):
             assert vendor_for_strength(Path("x.png")) == "openai"
 
     def test_google(self):
-        from remove_ai_watermarks.noai.watermark_profiles import vendor_for_strength
+        from remove_ai_watermarks._internal.watermark_profiles import vendor_for_strength
 
         with self._patch("Google"):
             assert vendor_for_strength(Path("x.png")) == "google"
 
     def test_both_issuers_google_wins(self):
         # The more-robust watermark wins -> safer (higher) strength.
-        from remove_ai_watermarks.noai.watermark_profiles import vendor_for_strength
+        from remove_ai_watermarks._internal.watermark_profiles import vendor_for_strength
 
         with self._patch("OpenAI, Google"):
             assert vendor_for_strength(Path("x.png")) == "google"
 
     def test_none_when_no_synthid_source(self):
-        from remove_ai_watermarks.noai.watermark_profiles import vendor_for_strength
+        from remove_ai_watermarks._internal.watermark_profiles import vendor_for_strength
 
         with self._patch(None):
             assert vendor_for_strength(Path("x.png")) is None
 
     def test_unreadable_metadata_is_none(self):
-        from remove_ai_watermarks.noai.watermark_profiles import vendor_for_strength
+        from remove_ai_watermarks._internal.watermark_profiles import vendor_for_strength
 
         with patch("remove_ai_watermarks.metadata.synthid_source", side_effect=OSError):
             assert vendor_for_strength(Path("x.png")) is None
@@ -478,19 +477,19 @@ class TestFp16VaeFix:
     DEFAULT = "stabilityai/stable-diffusion-xl-base-1.0"
 
     def test_default_sdxl_on_fp16_needs_fix(self):
-        from remove_ai_watermarks.noai.watermark_remover import _needs_fp16_vae_fix
+        from remove_ai_watermarks._internal.watermark_remover import _needs_fp16_vae_fix
 
         assert _needs_fp16_vae_fix(self.DEFAULT, self.DEFAULT, is_fp16=True) is True
 
     def test_fp32_does_not_need_fix(self):
         """cpu/mps run fp32, where the stock SDXL VAE is fine."""
-        from remove_ai_watermarks.noai.watermark_remover import _needs_fp16_vae_fix
+        from remove_ai_watermarks._internal.watermark_remover import _needs_fp16_vae_fix
 
         assert _needs_fp16_vae_fix(self.DEFAULT, self.DEFAULT, is_fp16=False) is False
 
     def test_non_default_model_keeps_own_vae(self):
         """A custom (non-SDXL) checkpoint must not get the SDXL-specific VAE."""
-        from remove_ai_watermarks.noai.watermark_remover import _needs_fp16_vae_fix
+        from remove_ai_watermarks._internal.watermark_remover import _needs_fp16_vae_fix
 
         assert _needs_fp16_vae_fix("runwayml/stable-diffusion-v1-5", self.DEFAULT, is_fp16=True) is False
 
@@ -500,13 +499,13 @@ class TestDegenerateOutputGuard:
     ``remove_watermark`` can retry in fp32. Pure image statistics, no model needed."""
 
     def test_all_black_is_degenerate(self):
-        from remove_ai_watermarks.noai.watermark_remover import _is_degenerate_image
+        from remove_ai_watermarks._internal.watermark_remover import _is_degenerate_image
 
         black = Image.fromarray(np.zeros((64, 64, 3), np.uint8))
         assert _is_degenerate_image(black) is True
 
     def test_normal_image_is_not_degenerate(self):
-        from remove_ai_watermarks.noai.watermark_remover import _is_degenerate_image
+        from remove_ai_watermarks._internal.watermark_remover import _is_degenerate_image
 
         rng = np.random.default_rng(0)
         normal = Image.fromarray(rng.integers(0, 256, (64, 64, 3), dtype=np.uint8))
@@ -514,7 +513,7 @@ class TestDegenerateOutputGuard:
 
     def test_dark_but_textured_image_is_not_degenerate(self):
         """A legitimately dark photo with real detail must NOT be flagged (variance guard)."""
-        from remove_ai_watermarks.noai.watermark_remover import _is_degenerate_image
+        from remove_ai_watermarks._internal.watermark_remover import _is_degenerate_image
 
         rng = np.random.default_rng(1)
         dark = Image.fromarray(rng.integers(0, 40, (64, 64, 3), dtype=np.uint8))

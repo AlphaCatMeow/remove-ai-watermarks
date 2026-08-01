@@ -33,7 +33,7 @@ Optional features and installation groups are documented in [`docs/installation.
 
 Command, gate, typing, and model-test invariants auto-load from [`.claude/rules/development.md`](.claude/rules/development.md). Environment recovery, CI behavior, and fixture policy live in [`docs/development.md`](docs/development.md).
 
-Before a release, read [`docs/release-and-distribution.md`](docs/release-and-distribution.md). Keep the source-distribution exclusion for `data/`.
+Before a release, read [`docs/release-and-distribution.md`](docs/release-and-distribution.md). Keep the source-distribution public allowlist.
 
 ## Module architecture
 

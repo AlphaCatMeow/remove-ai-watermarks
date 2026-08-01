@@ -29,7 +29,7 @@ import click
 from _plain_console import Console, Table
 from PIL import Image
 
-from remove_ai_watermarks.noai.c2pa import extract_c2pa_info
+from remove_ai_watermarks._internal.c2pa import extract_c2pa_info
 
 log = logging.getLogger(__name__)
 console = Console()

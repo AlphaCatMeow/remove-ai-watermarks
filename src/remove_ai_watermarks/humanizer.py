@@ -1,7 +1,7 @@
 """Post-processing filters for the cleaned output.
 
-``apply_analog_humanizer`` injects film grain and chromatic aberration to defeat
-digital AI-perfection classifiers (ported from NeuralBleach); ``unsharp_mask``
+``apply_analog_humanizer`` injects film grain and chromatic aberration to reduce
+overly uniform digital surfaces; ``unsharp_mask``
 counters the soft, over-smoothed look that the diffusion pass leaves behind
 (itself a common "this is AI" tell).
 """
@@ -16,10 +16,7 @@ from numpy.typing import NDArray
 
 def apply_analog_humanizer(image: NDArray, grain_intensity: float = 4.0, chromatic_shift: int = 1) -> NDArray:
     """
-    Apply Analog Humanizer (film grain and chromatic aberration) to an image.
-    This simulates analog film imperfections to defeat digital AI perfection classifiers.
-
-    Ported from NeuralBleach.
+    Apply shared-luminance grain and a small lateral color offset.
 
     Args:
         image: BGR image as numpy array (uint8).
@@ -33,26 +30,22 @@ def apply_analog_humanizer(image: NDArray, grain_intensity: float = 4.0, chromat
     if len(image.shape) != 3 or image.shape[2] != 3:
         return image.copy()
 
-    # Split channels (OpenCV uses BGR)
-    # B = 0, G = 1, R = 2
+    # Translate the outer color channels without circular edge wrapping.
     b, g, r = cv2.split(image)
-
-    # 1. Chromatic Aberration
-    # Shift R channel left, B channel right. np.roll is circular, so it wraps
-    # the opposite edge into a thin colored fringe at the L/R borders; replicate
-    # the original edge columns there to keep the intended offset interior-only.
-    # Clamp so the edge-replication slices below always have a source column: a shift
-    # >= width would leave them empty and crash the broadcast (r[:, -shift:] = (H, 0)).
-    shift = min(chromatic_shift, image.shape[1] - 1)
+    shift = min(max(0, chromatic_shift), max(0, image.shape[1] - 1))
     if shift > 0:
-        r = np.roll(r, -shift, axis=1)
-        r[:, -shift:] = r[:, -shift - 1 : -shift]
-        b = np.roll(b, shift, axis=1)
-        b[:, :shift] = b[:, shift : shift + 1]
+        shifted_b = np.empty_like(b)
+        shifted_b[:, :shift] = b[:, :1]
+        shifted_b[:, shift:] = b[:, :-shift]
+        b = shifted_b
+
+        shifted_r = np.empty_like(r)
+        shifted_r[:, :-shift] = r[:, shift:]
+        shifted_r[:, -shift:] = r[:, -1:]
+        r = shifted_r
 
     merged = cv2.merge((b, g, r))
 
-    # 2. Film Grain (Gaussian Noise)
     if grain_intensity > 0:
         img_f = merged.astype(np.float32)
         noise = np.random.normal(0, grain_intensity, img_f.shape).astype(np.float32)

@@ -43,7 +43,7 @@ class _DecodeMaxDct:
         row, col, _channels = bgr.shape
         yuv = cv2.cvtColor(bgr, cv2.COLOR_BGR2YUV)
 
-        scores_by_length = {wm_len: [[] for _ in range(wm_len)] for wm_len in self._wm_lengths}
+        scores_by_length = {wm_len: ([0] * wm_len, [0] * wm_len) for wm_len in self._wm_lengths}
         for channel in range(2):
             if self._scales[channel] <= 0:
                 continue
@@ -51,15 +51,15 @@ class _DecodeMaxDct:
             self._decode_frame(ca1, self._scales[channel], scores_by_length)
 
         return {
-            wm_len: np.asarray([float(np.asarray(score).mean()) if score else 0.0 for score in scores]) * 255 > 127
-            for wm_len, scores in scores_by_length.items()
+            wm_len: np.asarray(sums) * 255 > np.asarray(counts) * 127
+            for wm_len, (sums, counts) in scores_by_length.items()
         }
 
     def _decode_frame(
         self,
         frame: NDArray[Any],
         scale: int,
-        scores_by_length: dict[int, list[list[int]]],
+        scores_by_length: dict[int, tuple[list[int], list[int]]],
     ) -> None:
         row, col = frame.shape
         bit_index = 0
@@ -70,8 +70,10 @@ class _DecodeMaxDct:
                     j * self._block : j * self._block + self._block,
                 ]
                 inferred = self._infer_bit(block, scale)
-                for wm_len, scores in scores_by_length.items():
-                    scores[bit_index % wm_len].append(inferred)
+                for wm_len, (sums, counts) in scores_by_length.items():
+                    bucket = bit_index % wm_len
+                    sums[bucket] += inferred
+                    counts[bucket] += 1
                 bit_index += 1
 
     def _infer_bit(self, block: NDArray[Any], scale: int) -> int:

@@ -38,7 +38,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # The package's own format set. An inlined copy here silently skipped .heif, which
 # CLAUDE.md documents as supported.
-from remove_ai_watermarks.noai.constants import SUPPORTED_FORMATS as _EXTS
+from remove_ai_watermarks._internal.constants import SUPPORTED_FORMATS as _EXTS
 
 REPO = Path(__file__).resolve().parents[1]
 CORPUS = REPO / ".local-eval" / "originals"

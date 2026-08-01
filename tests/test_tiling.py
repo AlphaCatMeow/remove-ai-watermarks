@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from remove_ai_watermarks.noai.tiling import (
+from remove_ai_watermarks._internal.tiling import (
     Tile,
     _axis_positions,
     feather_region_composite,

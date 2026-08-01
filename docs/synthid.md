@@ -1,4 +1,4 @@
-# SynthID-Image: technical reference
+# SynthID: technical reference
 
 > Technical research reference. Current package behavior is defined by the
 > [supported signals](supported-signals.md), [known limitations](known-limitations.md),
@@ -6,10 +6,10 @@
 > historical evidence and should not be read as current CLI defaults.
 
 This document covers how Google SynthID for images works mechanically, what it
-survives, what removes it, and the current deployment landscape. It is written
-for engineers working on watermark detection and removal -- specifically to
-inform decisions about strength settings, test methodology, and what oracle
-results mean.
+survives, what removes it, the external video-verification workflow, and the
+current deployment landscape. It is written for engineers working on watermark
+detection and removal -- specifically to inform decisions about strength
+settings, test methodology, and what oracle results mean.
 
 Primary sources are cited inline. Marketing-only claims are flagged separately
 from independently-verified results.
@@ -326,6 +326,58 @@ A Google-SynthID image reads clean on openai.com/verify. An OpenAI image reads
 clean in the Gemini oracle. They are different payloads within the same
 framework.
 
+### 3.4 Video verification and attack harness
+
+Gemini's built-in verification flow reports whether and where it detects Google
+SynthID in a video. This remains a proprietary oracle: invoke `@synthid`, use
+the supported content-verification question, and keep every file in a separate
+new chat. A normal Gemini answer that discusses visual clues or metadata is not
+an oracle verdict. Nor is an adversarial follow-up that asks the chat model to
+ignore and reinterpret a completed verifier result.
+
+The research harness `scripts/video_synthid_sweep.py` tests a VAE regeneration
+attack without pretending to detect success locally. It emits:
+
+1. a re-encode control using the same sampled frames, dimensions, frame rate,
+   and codec as the candidates;
+2. VAE round-trip candidates with one spatial latent-noise field shared across
+   time;
+3. paired PSNR and motion-compensated temporal-residual metrics;
+4. an empty oracle column for the external verdict.
+
+The control is the first oracle submission. If it is not SynthID-positive, stop:
+the surrounding transcode already changed the verifier result. Only a
+control-positive, candidate-negative pair is evidence about the regeneration
+attack. PSNR and temporal residual measure fidelity and flicker, never watermark
+presence.
+
+The shipped `video invisible` command and `remove_video_invisible` API reuse the
+same VAE regeneration mechanism for a complete input sequence. The shipped
+default is oracle-certified and does not expose a separate verification-status
+flag. In the 2026-07-29
+two-carrier calibration, both matched controls were positive in the built-in
+verifier; the stronger candidate was negative on both, while a weaker
+candidate was negative on one. A 2026-07-30 `UNAVAILABLE` response came from an
+ordinary-model follow-up that asked Gemini to reinterpret the already returned
+verdict and therefore did not invalidate it. The default is a calibrated,
+content-dependent operating point. A per-file provider check remains an
+optional audit after provider changes or for unusually important files.
+
+The 2026-07-31 full-clip calibration used Google's public eight-second Veo
+off-road sample through the complete product command. The original was detected
+across 00:00-00:07, the `noise_std=0.10` output remained detected, and the
+`0.15` output was not detected. The positive `0.10` result proves that the
+surrounding 512 px / 12 fps / H.264 path did not create the negative result by
+itself. `0.15` is therefore the shipped default. The tracked manifest
+`data/evaluations/video-synthid-oracle.csv` records the public source URL,
+hashes, fidelity metrics, and verdicts without committing generated videos.
+
+The VAE perturbation follows the general regeneration-attack construction from
+Zhao et al. The video-specific control and temporal metric are local additions.
+VideoMarkBench motivates testing frame aggregation and matched perturbations,
+but it does not evaluate Google's proprietary SynthID, so its findings cannot
+stand in for the Gemini oracle.
+
 ---
 
 ## 4. Adoption and current state (as of June 2026)
@@ -571,7 +623,7 @@ it; (3) **historical engineering conclusion:** this dated run argued for a
 higher ControlNet strength than the then-current default. That proposal was
 later superseded. The current resolver intentionally shares the 0.10/0.15
 ladder between SDXL and ControlNet and uses a separate Qwen ladder; see
-`noai/watermark_profiles.py`.
+`_internal/watermark_profiles.py`.
 Source images are private (faces / product shots), not committed; reproduce on any
 photoreal + flat-graphic gpt-image pair, varying the seed, and re-checking the
 oracle.
@@ -628,3 +680,14 @@ seed dependent, so reproducible verification requires a fixed seed.
 
 5. OpenAI. **Verify tool for AI-generated images.** openai.com/research/verify.
    Accessed 2026-05-31.
+
+6. Google. **Verify AI-generated images, videos, and audio.**
+   https://support.google.com/gemini/answer/16722517
+
+7. Zhao et al. (2024). **Invisible Image Watermarks Are Provably Removable
+   Using Generative AI.** NeurIPS 2024, arXiv:2306.01953.
+   https://arxiv.org/abs/2306.01953
+
+8. Jiang et al. (2025). **VideoMarkBench: Benchmarking Robustness of Video
+   Watermarking.** arXiv:2505.21620.
+   https://arxiv.org/abs/2505.21620

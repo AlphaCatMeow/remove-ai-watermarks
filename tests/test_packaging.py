@@ -29,6 +29,7 @@ def test_default_install_is_metadata_focused():
         "python-dotenv",
     } <= default
     assert {
+        "av",
         "invisible-watermark",
         "numpy",
         "opencv-python-headless",
@@ -45,6 +46,10 @@ def test_pixels_extra_owns_shared_numeric_dependencies():
     } <= _requirement_names("pixels")
 
 
+def test_video_extra_owns_timestamp_dependency():
+    assert "av" in _requirement_names("video")
+
+
 def test_file_format_and_detector_dependencies_are_independent():
     assert "pillow-heif" in _requirement_names("heif")
     assert "pywavelets" in _requirement_names("detect")
@@ -53,7 +58,7 @@ def test_file_format_and_detector_dependencies_are_independent():
 def test_extras_use_capability_names_without_legacy_aliases():
     extras = set(metadata("remove-ai-watermarks").get_all("Provides-Extra") or [])
 
-    assert {"pixels", "heif", "visible", "detect", "diffusion"} <= extras
+    assert {"pixels", "heif", "visible", "video", "detect", "diffusion"} <= extras
     assert {"gpu", "remove", "detect-pywavelets"}.isdisjoint(extras)
 
 

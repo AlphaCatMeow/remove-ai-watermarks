@@ -1,7 +1,7 @@
 [project]
 name = "remove-ai-watermarks"
 version = "0.22.0"
-description = "AI watermark remover: strip visible and invisible AI watermarks (Gemini / Nano Banana sparkle, SynthID) and provenance metadata (C2PA, EXIF) from images"
+description = "AI watermark remover for visible, invisible, and provenance marks in images and video"
 readme = "README.md"
 requires-python = ">=3.10.1"
 license = {text = "Apache-2.0"}
@@ -51,7 +51,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     # Official C2PA reader (Content Authenticity Initiative, MIT/Apache-2.0). The
     # primary, spec-tracking manifest parser for the identify/metadata path; the
-    # hand-rolled caBX/CBOR scanner in noai/c2pa.py is kept only as a fallback for
+    # hand-rolled caBX/CBOR scanner in _internal/c2pa.py is kept only as a fallback for
     # synthetic/partial blobs the validator rejects. Binary wheel (Rust), but the
     # import is light (no torch/numpy) so it fits the dependency-light identify
     # host. Prebuilt wheels cover the full CI matrix (linux/macos/windows).
@@ -69,6 +69,14 @@ heif = [
     "pillow-heif>=0.13.0",
 ]
 visible = ["remove-ai-watermarks[pixels]"]
+# Video visible removal uses the shared pixel runtime. PyAV packetizes processed
+# VFR frames with explicit PTS before system ffmpeg encodes them. PyAV 18 requires
+# Python 3.11; the 16.x wheel line still covers Python 3.10.
+video = [
+    "remove-ai-watermarks[visible]",
+    "av>=16,<17; python_version < '3.11'",
+    "av>=18,<19; python_version >= '3.11'",
+]
 # Open DWT-DCT watermarks used by Stable Diffusion / SDXL / FLUX. The in-tree
 # decoder avoids the upstream invisible-watermark package's mandatory torch and
 # non-headless OpenCV dependencies.
@@ -152,7 +160,7 @@ esrgan = [
     "spandrel>=0.3.0",
 ]
 dev = [
-    "remove-ai-watermarks[visible]",
+    "remove-ai-watermarks[video]",
     "remove-ai-watermarks[detect]",
     "pytest>=8.0.0",
     "pytest-cov>=4.1.0",
@@ -166,7 +174,7 @@ dev = [
     "uv-outdated>=0.1.0; python_version >= '3.12'",
     "uv-secure>=0.12.0; python_version >= '3.12'",
 ]
-all = ["remove-ai-watermarks[visible,heif,detect,trustmark,diffusion,qwen-zimage,lama,migan,esrgan]"]
+all = ["remove-ai-watermarks[video,heif,detect,trustmark,diffusion,qwen-zimage,lama,migan,esrgan]"]
 
 # PyTorch Intel-GPU (XPU) wheel index. ``explicit = true`` keeps it inert for
 # the default CPU/CUDA install: uv consults it only when a torch install
@@ -191,9 +199,20 @@ build-backend = "hatchling.build"
 packages = ["src/remove_ai_watermarks"]
 
 [tool.hatch.build.targets.sdist]
-# Keep the source distribution small: ship the package and metadata, not
-# calibration or evaluation data under data/. The wheel ships only src/.
-exclude = ["/data"]
+# Keep the source distribution small and public-safe: ship tracked source and
+# metadata, not corpora or local research/session artifacts. The wheel ships
+# only src/.
+include = [
+    "/src",
+    "/LICENSE",
+    "/README.md",
+    "/pyproject.toml",
+]
+exclude = [
+    "/data",
+    "/tmp",
+    "/.sc",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -216,8 +235,8 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "scripts/*.py" = ["G004", "S108", "S310", "T20"]
 "tests/*.py" = ["ANN", "S101", "S105", "S106", "S108"]
-"src/remove_ai_watermarks/noai/watermark_remover.py" = ["S603", "S606", "S607", "T201"]  # subprocess calls for auto-install/CUDA fix
-"src/remove_ai_watermarks/noai/c2pa.py" = ["S110"]  # try-except-pass for corrupt file handling
+"src/remove_ai_watermarks/_internal/watermark_remover.py" = ["S603", "S606", "S607"]  # nvidia-smi capability probe
+"src/remove_ai_watermarks/_internal/c2pa.py" = ["S110"]  # try-except-pass for corrupt file handling
 
 [tool.ruff.format]
 quote-style = "double"

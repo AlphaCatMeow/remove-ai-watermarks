@@ -86,16 +86,210 @@ Regression coverage:
 - [`test_api.py`](../tests/test_api.py)
 - [`test_image_io.py`](../tests/test_image_io.py)
 
+[`video.py`](../src/remove_ai_watermarks/video.py) provides the high-level
+video entry point:
+
+- `identify_video`
+- `inspect_video_metadata`
+- `remove_video_all`
+- `remove_video_batch`
+- `remove_video_invisible`
+- `remove_video_metadata`
+- `remove_video_visible`
+
+The video API validates both the supported extension and container signature,
+then delegates all metadata detection and stripping to `metadata.py`. It
+requires a separate same-container output, defaulting to `<source>_clean`, so
+the product path does not overwrite an original. The package root exposes all
+functions lazily.
+
+`identify_video` runs the same stable-mark selection helper as
+`remove_video_visible`, so a provenance report cannot authorize a mark that the
+removal path would reject. It reports an empty local result as unknown rather
+than clean. Identification skips the separate per-frame timestamp probe because
+it never encodes frames. `remove_video_all` is the predictable-output
+composition: visible removal plus verified metadata stripping by default, with
+a same-container passthrough when neither signal exists. The lossy invisible
+removal stage is an explicit opt-in through the oracle-certified profile.
+`remove_video_batch` applies those contracts sequentially across a top-level
+directory, returns every per-file failure, and byte-copies visible no-ops so a
+successful output set has no silent holes. An invisible batch loads one VAE
+runtime and reuses it across every compatible file; a failed model load is
+reported per file without retrying the same multi-GB initialization.
+
+Native MP4/MOV TC260 labels follow TC260-PG-20257A:
+`moov.udta.meta.keys` maps an `AIGC` key to a raw JSON value in `ilst`.
+[`_internal/isobmff.py`](../src/remove_ai_watermarks/_internal/isobmff.py) walks those
+nested boxes by seeking, so detection reaches a tail `moov` without reading the
+preceding `mdat`. The MP4/MOV/M4V/M4A removal path first validates the top-level
+box walk, then copies the source to a sibling temporary file in bounded chunks.
+Supported C2PA/JUMBF/AI-label boxes become same-size `free` boxes with blank
+payloads; TC260 removal changes the four-byte key to `free` and blanks only the
+validated JSON value with same-length spaces. This preserves every box size,
+`stco`/`co64` offset, encoded stream byte, and source-sized memory bound.
+Publication is atomic, and a malformed top-level walk is copied unchanged. A
+generic `AIGC` key whose value has no TC260 field is ignored.
+
+[`_internal/ebml.py`](../src/remove_ai_watermarks/_internal/ebml.py) provides the
+corresponding bounded Matroska/WebM reader. It seeks over clusters and accepts
+only a `Segment.Tags.Tag.SimpleTag` pairing `TagName=AIGC` with a JSON
+`TagString` carrying a TC260 field. The existing ffmpeg stream-copy path removes
+those container tags without transcoding the encoded streams.
+
+[`_internal/riff.py`](../src/remove_ai_watermarks/_internal/riff.py) and
+[`_internal/flv.py`](../src/remove_ai_watermarks/_internal/flv.py) implement the remaining
+normative TC260 video placements. The RIFF walker reads only AVI
+`LIST/INFO/AIGC` children. The FLV walker skips media tags and parses the AMF0
+`script.onMetaData.AIGC` string. Both require a recognized TC260 JSON field and
+use the verified ffmpeg stream-copy path for removal.
+
+[`video_encoding.py`](../src/remove_ai_watermarks/video_encoding.py) owns the
+ffmpeg command and pipe lifecycle shared by visible removal and invisible
+regeneration. It centralizes container codecs, optional audio stream copying,
+metadata/chapter policy, encode-failure reporting, and atomic same-directory
+publication. Each mapped stream is allowed to reach its own end, so a copied
+audio tail is not shortened to the frame-input duration.
+Both the raw-BGR and timestamped-NUT stdin modes redirect ffmpeg stderr to a
+temporary file while frames are written. Waiting to read diagnostics until
+after stdin closed allowed stderr backpressure to stop ffmpeg's frame reads,
+which in turn blocked the producer before it could close stdin. The file consumes
+no pipe capacity or RAM while ffmpeg runs; completion reports a bounded head and
+tail when diagnostics are unusually large. Aborts release it even when ffmpeg
+has already exited. A real subprocess regression writes diagnostics beyond pipe
+capacity while streaming frames, checks bounded failure reporting, and the Linux
+full-clip CI job guards the complete path.
+Frame encoding and source-audio copying run as two ffmpeg processes in sequence.
+The streaming encoder has only the frame pipe as input, so input probing or
+demux queues cannot deadlock the producer against a second input. After that
+pipe reaches EOF, a finite stream-copy mux combines the encoded video with the
+source audio and applies the requested metadata/chapter policy. Both stages use
+sibling temporary files, and only the completed mux is published atomically.
+The mux also redirects diagnostics to disk and reports only a bounded head and
+tail. Command regressions assert the single-input encoder and final map targets;
+failure regressions cover bounded mux diagnostics and atomic cleanup.
+`probe_video_encode_profile` reads the first source video stream with ffprobe
+and preserves the supported properties that survive the 8-bit BGR boundary:
+`yuv420p`/`yuv422p`/`yuv444p` chroma sampling, recognized color tags, encoder
+time base, MP4/MOV track timescale, source pixel format, and component depth.
+Both raw-CFR and timestamped-NUT inputs use ffmpeg's passthrough FPS mode. This
+keeps one encoded frame per supplied frame when an older ffmpeg receives a
+fine-grained source encoder time base such as `1/90000`; implicit synchronization
+can otherwise synthesize thousands of duplicate frames between CFR timestamps.
+HDR transfer functions and component depths above 8 bits are rejected before
+encoding so the OpenCV boundary cannot silently reduce them to SDR 8-bit.
+`probe_video_timestamps` reads authoritative per-frame display PTS through
+ffprobe. OpenCV timestamps are only a count-matched fallback when ffprobe is
+unavailable or fails; this avoids decoder anomalies such as one spurious
+negative first-frame timestamp turning a CFR clip into false VFR. A uniform sequence keeps the
+cheap raw-BGR pipe unless the source starts at a non-zero PTS. A variable or
+offset sequence is packetized by the lazy PyAV bridge as rawvideo in an
+in-memory NUT stream with explicit PTS. System ffmpeg reads that stream with
+`-fps_mode passthrough`; `-copyts` additionally retains a non-zero video start
+and the corresponding copied-audio offset. No temporary frame sequence or
+second video encoder is introduced.
+
+[`video_temporal.py`](../src/remove_ai_watermarks/video_temporal.py) owns the
+shared optical-flow maps and temporal residual metric. Visible removal uses
+`stabilize_filled_frame` after the selected image backend: it works on a
+bounded crop around adjacent masks, backward-warps the prior cleaned frame,
+requires high warped-mask coverage, and gates blending on an unmasked
+source-context ring. Only covered current-mask pixels change. Scene cuts,
+disjoint marks, and poor motion matches therefore retain the independent
+current-frame fill. The same module supplies the motion-compensated metric used
+by the invisible-video sweep.
+
+[`video_invisible.py`](../src/remove_ai_watermarks/video_invisible.py)
+implements the oracle-certified video SynthID removal engine. It samples frames
+uniformly, resizes to a VAE-aligned geometry, encodes each frame to latent
+space, applies one seeded spatial-noise field across the entire sequence, and
+decodes fresh pixels. Reusing a single noise field avoids independent
+frame-to-frame noise. The shipped path retains only one configured frame batch,
+updates PSNR and temporal residuals incrementally, and streams BGR frames
+directly to the video-only ffmpeg encoder. A separate stream-copy mux then adds
+optional source audio and drops all source metadata. The result is written
+through same-directory temporary files and atomically replaced only after both
+stages succeed.
+
+The engine returns PSNR and a motion-compensated temporal-residual ratio as
+quality measurements. Neither is a watermark detector. The high-level result
+reports completed removal without a separate verification-status flag. The companion
+`scripts/video_synthid_sweep.py` imports the same engine helpers to build a
+matched control and candidate grid, preventing research and shipped
+regeneration paths from drifting. The full-clip oracle floor is
+`noise_std=0.15`: on the public eight-second Veo carrier, `0.10` remained
+detected while `0.15` did not.
+
+[`video_visible.py`](../src/remove_ai_watermarks/video_visible.py) implements
+the first pixel stages for Sora, Veo, Seedance, Dola, Hailuo, and Kling. The
+Sora detector searches a normalized frame with a fully synthetic
+mascot-and-text silhouette at several scales. The Veo detector uses separate
+synthetic silhouettes for the current four-point diamond and legacy `Veo`
+text. Seedance uses a synthetic rounded boxed-`AI` silhouette, while Dola uses
+an OpenCV-font `Dola AI` silhouette. Hailuo uses a synthetic waveform,
+MINIMAX/Hailuo text, separator, and ring. Kling combines synthetic font
+variants with a ring approximation of its swirl; the logo path rescues
+wordmarks whose version or font differs, while the edge and white-label gates
+reject recurring scene texture. All fixed-mark searches are bounded to the
+expected lower-frame area and calibrated independently. A strong relocated Veo
+diamond may bypass the known layout anchors, but weak free-corner matches never
+enter the temporal arbiter.
+
+The default `auto` route decodes each frame once, shares its grayscale and
+normalized representations across all detectors, and caches resized synthetic
+template features for the fixed stream geometry. Provider confidence scales
+are not comparable: selection applies each provider's temporal arbiter and
+takes the first stable result in specificity order (`sora`, `veo`, `seedance`,
+`dola`, `hailuo`, `kling`). An explicit mark uses the same scan path with one
+candidate. Removal also collects authoritative per-frame timestamps for the
+encoder, while identification omits that unused ffprobe pass.
+
+Every per-frame result is untrusted. The provider-specific stabilization
+wrappers share one recurrence implementation, while retaining separate visual
+floors and minimum-run policy. Provenance can relax a low-contrast run only
+after recurring visual evidence exists. Sora transition frames follow the
+nearest confirmed moving position only with Sora provenance. Veo, Seedance,
+Dola, Hailuo, and Kling additionally require candidates to remain anchored to
+the start of a run. This rejects slowly drifting scene details that still have
+high frame-to-frame overlap. Hailuo and Kling do not infer provenance from
+technical encoder tags; their confirmed public samples carried no provider
+metadata.
+
+Removal runs in a second decode pass. Sora, legacy Veo text, Dola text,
+Seedance, Hailuo, and Kling use box masks. Seedance deliberately fills the
+complete localized box: a synthetic outline mask passed repeat detection but
+left part of the real translucent border visible during visual end-to-end
+review. Hailuo expands beyond the matched core to cover both provider icons.
+Kling expands around the wordmark or swirl to include the version and optional
+`PRO` suffix. The square Veo diamond uses a synthetic shape mask so transparent
+corners do not erase unrelated pixels. Every mask goes through the shared
+`watermark_registry.fill` backends. ffmpeg encodes the changed video stream and
+copies optional audio. The default OpenCV fill is the speed floor; structured
+backgrounds need MI-GAN or LaMa for better reconstruction. Invisible video
+stages must continue to reuse the image and metadata implementations rather
+than copying their logic.
+
+Regression coverage:
+
+- [`test_video.py`](../tests/test_video.py), including a real ffmpeg full-clip
+  Sora/OpenCV path that generates a synthetic marked MP4 with AAC audio and
+  C2PA provenance, runs both `remove_video_visible` and the composed
+  `remove_video_all` API without mocks, and verifies complete removal, frame
+  count, frame rate, duration, untouched-region PSNR, paired temporal deltas
+  inside the filled region, byte-identical copied audio packets, source stream
+  properties, metadata stripping, and a large-`mdat` metadata case that rejects
+  any full-source `read_bytes()` call. CI installs ffmpeg explicitly for this
+  test so the integration gate cannot silently skip.
+
 ## Metadata and provenance
 
 ### C2PA
 
-[`noai/c2pa.py`](../src/remove_ai_watermarks/noai/c2pa.py) reads C2PA with the
+[`_internal/c2pa.py`](../src/remove_ai_watermarks/_internal/c2pa.py) reads C2PA with the
 official `c2pa-python` reader first. Its byte-level PNG parser remains a fallback
 for partial and synthetic fixtures that the official reader rejects.
 
 Vendor attribution comes from the registry in
-[`noai/constants.py`](../src/remove_ai_watermarks/noai/constants.py). Derived
+[`_internal/constants.py`](../src/remove_ai_watermarks/_internal/constants.py). Derived
 issuer and platform maps should not be maintained separately.
 
 ### Metadata scanning and stripping
@@ -109,7 +303,14 @@ Key contracts:
 - JPEG stripping walks metadata segments and preserves the entropy-coded image
   scan.
 - ISOBMFF containers use
-  [`noai/isobmff.py`](../src/remove_ai_watermarks/noai/isobmff.py).
+  [`_internal/isobmff.py`](../src/remove_ai_watermarks/_internal/isobmff.py).
+- Native MP4/MOV TC260 `AIGC` entries are read from
+  `moov.udta.meta.keys/ilst` and blanked without changing box sizes.
+- Native MKV/WebM TC260 `AIGC` entries are read from
+  `Segment.Tags.Tag.SimpleTag` and removed through the ffmpeg stream-copy path.
+- Native AVI and FLV TC260 entries are read from `LIST/INFO/AIGC` and
+  `script.onMetaData.AIGC`, respectively, then removed through ffmpeg stream
+  copying.
 - Supported non-ISOBMFF audio and video containers use ffmpeg stream copying.
 - The low-level remover is fail-safe and can copy an undecodable file through
   unchanged.
@@ -126,7 +327,7 @@ test proves that it no longer appears in the output.
 Regression coverage:
 
 - [`test_metadata.py`](../tests/test_metadata.py)
-- [`test_noai.py`](../tests/test_noai.py)
+- [`test_metadata_internals.py`](../tests/test_metadata_internals.py)
 - [`test_security_clamp.py`](../tests/test_security_clamp.py)
 
 ### Provenance report
@@ -273,7 +474,7 @@ Regression coverage:
 
 ### Profiles and strength
 
-[`noai/watermark_profiles.py`](../src/remove_ai_watermarks/noai/watermark_profiles.py)
+[`_internal/watermark_profiles.py`](../src/remove_ai_watermarks/_internal/watermark_profiles.py)
 is the source of truth for:
 
 - profile aliases;
@@ -293,11 +494,18 @@ router.
 [`invisible_engine.py`](../src/remove_ai_watermarks/invisible_engine.py) handles
 image sizing, optional pre-upscaling, postprocessing, and the public engine
 interface. It delegates model execution to
-[`noai/watermark_remover.py`](../src/remove_ai_watermarks/noai/watermark_remover.py).
+[`_internal/watermark_remover.py`](../src/remove_ai_watermarks/_internal/watermark_remover.py).
 
 The Python engine and CLI do not have identical defaults for every optional
 postprocessing argument. Integrations that require reproducibility should pass
 the relevant values explicitly.
+
+The standard Qwen and ControlNet prompts are calibrated model inputs, and the
+ControlNet edge map uses fixed Canny thresholds of 100 and 200. Treat those
+values as behavioral compatibility contracts: a refactor must preserve them,
+and any deliberate change requires image-quality evaluation rather than only a
+unit-test pass. Exact prompt and edge-map regression guards live in
+`test_platform.py` and `test_invisible_engine.py`.
 
 Regression coverage:
 
@@ -318,7 +526,7 @@ Regression coverage:
 
 ### Qwen plus Z-Image
 
-[`noai/qwen_zimage_pipeline.py`](../src/remove_ai_watermarks/noai/qwen_zimage_pipeline.py)
+[`_internal/qwen_zimage_pipeline.py`](../src/remove_ai_watermarks/_internal/qwen_zimage_pipeline.py)
 implements the fixed CUDA-only two-stage profile:
 
 1. Qwen Image with Canny conditioning regenerates the frame.
@@ -329,13 +537,11 @@ The profile rejects a custom model identifier. Its global and face model stack
 is fixed by the implementation. When tiling is enabled, only the global stage
 is tiled; the face stage runs once after the tiles are blended.
 
-The resolution and largest-face adaptive formulas remain exact ports of the
-reference workflow. The face stage applies half the reference result because
-this port uses a different sampler and composites regenerated SAM pixels rather
-than using the reference latent inpaint mask and noise feather. Paired face
-evaluations favored this scale on identity, perceptual distance, and full-image
-similarity, and the exact OpenAI and Gemini candidates both passed their
-matching provider oracle. The global stage stays unchanged.
+The maintained implementation preserves the previously oracle-tested strength,
+conditioning, crop, and sampler parameters as compatibility contracts. Its Python
+orchestration, YuNet integration, SAM selection, masks, sizing helpers, and pixel
+compositing are implemented for this runtime. Changing a calibrated model input
+requires the same provider-oracle and identity evaluation as a model change.
 
 Regression coverage:
 
@@ -344,7 +550,7 @@ Regression coverage:
 
 ### Tiling
 
-[`noai/tiling.py`](../src/remove_ai_watermarks/noai/tiling.py) contains pure
+[`_internal/tiling.py`](../src/remove_ai_watermarks/_internal/tiling.py) contains pure
 tile planning, feather weights, tile orchestration, and region compositing.
 
 Tiling engages only when requested and the long side exceeds the tile size.

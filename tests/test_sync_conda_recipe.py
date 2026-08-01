@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from scripts.sync_conda_recipe import update_recipe
@@ -39,3 +41,9 @@ def test_update_recipe_rejects_ambiguous_recipe() -> None:
 
     with pytest.raises(ValueError, match="exactly one"):
         update_recipe(duplicate, version="2.0.0", sha256=_NEW_SHA)
+
+
+def test_repository_recipe_stays_metadata_only() -> None:
+    recipe = Path("packaging/conda/recipe.yaml").read_text(encoding="utf-8")
+
+    assert "    - av >=16\n" not in recipe

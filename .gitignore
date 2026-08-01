@@ -4,6 +4,8 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+tmp/
+.sc/
 
 # Environment secrets
 .env

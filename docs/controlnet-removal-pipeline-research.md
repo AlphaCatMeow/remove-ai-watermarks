@@ -211,7 +211,7 @@ regeneration so strokes exceed the VAE's ~8 px latent floor), but ctrlregen runs
 at LOW res, the opposite. CtrlRegen's paper gives no resolution/tiling spec to contradict this.
 
 **Sources.** the former internal
-`src/remove_ai_watermarks/noai/ctrlregen/engine.py` (removed after this study);
+`src/remove_ai_watermarks/_internal/ctrlregen/engine.py` (removed after this study);
 resolution-omission
 confirmed against https://arxiv.org/html/2410.05470v1
 

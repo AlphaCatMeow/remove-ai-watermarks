@@ -13,8 +13,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from remove_ai_watermarks.noai import img2img_runner
-from remove_ai_watermarks.noai.img2img_runner import (
+from remove_ai_watermarks._internal import img2img_runner
+from remove_ai_watermarks._internal.img2img_runner import (
     run_img2img,
     run_img2img_with_mps_fallback,
 )

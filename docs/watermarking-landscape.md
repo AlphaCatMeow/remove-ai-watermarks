@@ -38,7 +38,19 @@ pair. On the ISOBMFF path, `blank_ai_exif_tokens` provides the corresponding
 in-place scrub for supported EXIF values, TC260 AIGC blocks, and the xAI pair.
 - **China TC260 AIGC label (caught by `AIGC_MARKERS` / `metadata.aigc_label`, surfaced by `identify` as the `aigc` signal):** China-served generators embed an XMP `<TC260:AIGC>{"Label":"1","ContentProducer":...}` block — China's mandatory AI-content labeling (TC260 namespace `tc260.org.cn/ns/AIGC`).
 
-**Doubao** (ByteDance) uses it (verified on a public issue sample; `ContentProducer` `001191110102MACQD9K64010000`, no C2PA/SynthID/imwatermark — the XMP block is the only signal; GitHub attachment upload did NOT strip it). The same standard is mandatory for Jimeng/Kling/Qwen/Ernie etc., so the one marker covers the whole China-AIGC-labeled ecosystem. `aigc_label` reads **four serializations** through a shared `_parse` helper: the HTML-entity-encoded XMP `TC260:AIGC` block in **either RDF form** — the nested element `<TC260:AIGC>{...}</TC260:AIGC>` (Doubao) or the attribute `TC260:AIGC="{...}"` (**PicWish**, `ContentProducer="picwish"`, verified on compatible samples) — via a container-agnostic raw-byte scan (any JSON object accepted), a raw-JSON PNG `AIGC` tEXt chunk (Doubao also writes the label this way, no namespaced marker at all — confirmed on compatible samples, `ContentProducer="doubao"`), a bare raw-JSON `{"AIGC":{...}}` object embedded in **JPEG EXIF (UserComment)** by some China-served generators, brace-matched from the scan head with `json.JSONDecoder().raw_decode` (no namespaced marker, no PNG chunk — confirmed on compatible samples, `ContentProducer="001191440300708461136T1308L"`), **and** a bare `AIGC{...}` blob (the label glued straight to its JSON, no `"AIGC":` key wrapper) embedded in a **JPEG APP segment near the JFIF header** — confirmed on compatible samples. The two raw-JSON forms are scanned in one loop (`'"AIGC"'` then `AIGC{`) that **falls through on a non-TC260 / undecodable hit instead of returning** — a quoted `"AIGC"` can appear later in an XMP packet while the real label is a bare `AIGC{...}` earlier in the file, so an unconditional early return on the quoted form would shadow the bare form (the exact bug behind the 06-10 misses). All three generic forms (the PNG chunk, the bare `{"AIGC":...}` object, and the bare `AIGC{...}` blob) are gated on at least one TC260 field (`_TC260_FIELDS`) so a generic `AIGC` key cannot false-positive; the namespaced XMP element is unambiguous and needs no gate. `_TC260_FIELDS` covers **two schemas**: the producer-side one (`Label` / `ContentProducer` / `ProduceID` / `ContentPropagator` / `PropagateID`, Doubao and most China gens) and the **service-provider** one (`ServiceProvider` / `ServiceUser`, plus generic `Time` / `ContentId` which are NOT gated on) — **Tencent Cloud's** AIGC variant (`ServiceProvider` = `腾讯云`), embedded in **EXIF `ImageDescription`**, verified on compatible samples. In `identify`, `aigc` fires on the parsed label **or** the `AIGC_MARKERS` byte scan (the latter preserves the laundering-tell case where the JSON payload is truncated).
+**Doubao** (ByteDance) uses it (verified on a public issue sample; `ContentProducer` `001191110102MACQD9K64010000`, no C2PA/SynthID/imwatermark — the XMP block is the only signal; GitHub attachment upload did NOT strip it). The same standard is mandatory for Jimeng/Kling/Qwen/Ernie etc., so the one marker covers the whole China-AIGC-labeled ecosystem. `aigc_label` reads **four image serializations** through a shared `_parse` helper: the HTML-entity-encoded XMP `TC260:AIGC` block in **either RDF form** — the nested element `<TC260:AIGC>{...}</TC260:AIGC>` (Doubao) or the attribute `TC260:AIGC="{...}"` (**PicWish**, `ContentProducer="picwish"`, verified on compatible samples) — via a container-agnostic raw-byte scan (any JSON object accepted), a raw-JSON PNG `AIGC` tEXt chunk (Doubao also writes the label this way, no namespaced marker at all — confirmed on compatible samples, `ContentProducer="doubao"`), a bare raw-JSON `{"AIGC":{...}}` object embedded in **JPEG EXIF (UserComment)** by some China-served generators, brace-matched from the scan head with `json.JSONDecoder().raw_decode` (no namespaced marker, no PNG chunk — confirmed on compatible samples, `ContentProducer="001191440300708461136T1308L"`), **and** a bare `AIGC{...}` blob (the label glued straight to its JSON, no `"AIGC":` key wrapper) embedded in a **JPEG APP segment near the JFIF header** — confirmed on compatible samples. The two raw-JSON forms are scanned in one loop (`'"AIGC"'` then `AIGC{`) that **falls through on a non-TC260 / undecodable hit instead of returning** — a quoted `"AIGC"` can appear later in an XMP packet while the real label is a bare `AIGC{...}` earlier in the file, so an unconditional early return on the quoted form would shadow the bare form (the exact bug behind the 06-10 misses). Native MP4/MOV is a fifth serialization: TC260-PG-20257A stores an `AIGC` key in `moov.udta.meta.keys` and the raw JSON in the matching `ilst` item. The seeking parser reaches a tail `moov` without reading `mdat`; removal replaces the key with `free` and blanks the validated value at the same length so every box size and stream offset stays fixed. All generic forms are gated on at least one TC260 field (`TC260_AIGC_FIELDS`) so a generic `AIGC` key cannot false-positive; the namespaced XMP element is unambiguous and needs no gate. `TC260_AIGC_FIELDS` covers **two schemas**: the producer-side one (`Label` / `ContentProducer` / `ProduceID` / `ContentPropagator` / `PropagateID`, Doubao and most China gens) and the **service-provider** one (`ServiceProvider` / `ServiceUser`, plus generic `Time` / `ContentId` which are NOT gated on) — **Tencent Cloud's** AIGC variant (`ServiceProvider` = `腾讯云`), embedded in **EXIF `ImageDescription`**, verified on compatible samples. In `identify`, `aigc` fires on the parsed label **or** the `AIGC_MARKERS` byte scan (the latter preserves the laundering-tell case where the JSON payload is truncated).
+
+Native MKV/WebM is a sixth serialization. TC260-PG-20257A stores
+`TagName=AIGC` and the raw JSON `TagString` in
+`Segment.Tags.Tag.SimpleTag`. The bounded EBML reader skips cluster payloads;
+the existing ffmpeg stream-copy path removes the tags without transcoding.
+
+The same [TC260 video guide](https://www.tc260.org.cn/portal/article/303/4061772dcf684d8a96f395a4298e9e53)
+defines two more native serializations. AVI stores an `AIGC` child in
+`LIST/INFO`; FLV stores an AMF0 `AIGC` string under `script.onMetaData`. The
+bounded RIFF and FLV readers validate the JSON field set and skip media
+payloads. Removal remuxes either container through ffmpeg with stream copy.
+
 - **HuggingFace-hosted job (caught by `metadata.huggingface_job`, surfaced by `identify` as the `hf_job` signal, MEDIUM confidence):** HuggingFace Jobs / Spaces can stamp generated PNGs with an `hf-job-id` tEXt chunk holding the job UUID. It marks the *hosting job*, not a model, so it lifts an Unknown verdict to a tentative AI via `hf_only` but never overrides a hard metadata signal. `_HF_JOB_CAVEAT` states the limit. Removal drops the chunk through the PNG metadata whitelist.
 - **No detectable signal on some downloads:** Recraft exports and some hosted
   FLUX surfaces can arrive without a supported local signal. Midjourney samples
@@ -49,12 +61,18 @@ in-place scrub for supported EXIF values, TC260 AIGC blocks, and the xAI pair.
 - **C2PA 2.4 "Durable Content Credentials" (April 2026; verified against the spec) raise the bar for metadata stripping.** 2.4 defines soft bindings (an invisible watermark or a content fingerprint) plus a server-side manifest repository and a new `c2pa.repository-receipt` assertion. Per the spec: "if a C2PA manifest is removed from an asset, but a copy of that manifest remains in a provenance store elsewhere, the manifest and asset may be matched using available soft bindings." So our local `metadata --remove` deletes the *embedded* manifest, but a fingerprint/watermark soft binding can still re-link the image to its manifest in a repository server-side. Stripping the file is becoming necessary-but-not-sufficient against durable provenance. (Our parsers target the stable embedded-manifest format documented in C2PA 2.1 §11; that format is unchanged in 2.4 -- the new pieces are repository/soft-binding infra, not the on-file box layout, so no parser change is implied.) Spec: https://spec.c2pa.org/specifications/specifications/2.4/specs/C2PA_Specification.html We now READ the soft-binding `alg` (`C2PA_SOFT_BINDINGS` / `soft_binding_vendors_in`) to name the forensic-watermark vendor, and locally DECODE the one open scheme, Adobe TrustMark (`trustmark_detector`); the rest (Digimarc/Imatag/Steg.AI/...) stay name-only (proprietary decoders).
 - **Built in the dated batch:** soft-binding vendor detection, IPTC Photo
   Metadata AI-disclosure fields, C2PA detection and stripping for supported
-  ISOBMFF video, and the optional Adobe TrustMark decoder. Visible video-logo
-  removal and proprietary audio-watermark detection remain outside the package.
+  ISOBMFF video, the optional Adobe TrustMark decoder, and temporally stabilized
+  visible Sora, Veo, Seedance, Dola, Hailuo, and Kling removal. Other visible
+  video logos and proprietary audio-watermark detection remain outside the
+  package.
   Metadata stripping for supported audio containers is a separate implemented
   path.
 
 **Box detection window — now handled (v0.6.8):** detection no longer relies on a fixed first-MB read. `metadata.scan_head(path, size)` reads the first `size` bytes and, for ISOBMFF, appends the payloads of late provenance boxes found by `isobmff.scan_c2pa_region` (a file-seeking top-level box walker that skips past `mdat` by size without reading it), so a C2PA/AIGC/IPTC manifest placed AFTER a large `mdat` in a streaming/non-faststart MP4 is now caught. Every C2PA/marker byte scan (`has_ai_metadata`, `aigc_label`, `iptc_ai_system`, `synthid_source`, `exif_generator` XMP, `get_ai_metadata` soft-binding, and `identify`) goes through `scan_head`; it is behavior-neutral for non-ISOBMFF inputs (exactly `f.read(size)`).
+
+Native TC260 MP4/MOV tags do not live in those top-level provenance boxes.
+`tc260_aigc_payloads` separately seeks through `moov.udta.meta.keys/ilst`, so
+the normative tag is also found when a large `mdat` precedes `moov`.
 
 **Meta-box XMP and EXIF removal are handled in place:** an AI-label XMP packet
 stored as a meta-box `mime` item is blanked by
@@ -68,6 +86,42 @@ against primary sources before adding jurisdiction-specific claims.
 ## Visible AI-generation marks + detection methods (deep-research 2026-07-10, adversarially verified)
 
 **Google Gemini visible "sparkle" -- tier-dependent, and spec-undocumented by Google.** Google primary sources (the Nano Banana Pro blog and the gemini.google image-generation page, both WebFetch-verified) confirm Gemini images carry BOTH the invisible SynthID (on ALL Google-AI media) AND a visible sparkle, but the visible mark is **tier-gated**: applied for FREE and Google AI **Pro** users, and **REMOVED** for Google AI **Ultra** subscribers, inside **Google AI Studio**, and on **API / dev** output. So a Google-C2PA image with NO visible sparkle is expected (Ultra / API), not evidence it is clean -- this reinforces the `identify` "no visible mark != clean" rule. The ONLY official verifier is the SynthID flow (upload to the Gemini app, ask if it is AI-generated), which reads the INVISIBLE mark; there is **no official visible-sparkle detector**, and Google publishes **no** glyph geometry / size / opacity / color / locale / placement spec. So our capture-based sparkle template is the only source of truth and cannot be validated against a vendor spec -- keep reverse-engineering from real captures (do not expect a published spec).
+
+**Google Veo video marks use two incompatible visible designs.** Public raw
+clips verify the current four-point diamond and the legacy bottom-right `Veo`
+text. The independent
+[VeoWatermarkRemover](https://github.com/allenk/VeoWatermarkRemover) project
+reports the same current-versus-legacy split, multiple output layouts, and the
+need for cross-frame position agreement. Our implementation copies no logo
+pixels or alpha maps from that project: it uses two synthetic silhouettes,
+known-layout searches plus a strong relocated-diamond fallback, and a separate
+temporal arbiter calibrated against raw watermarked clips and clean API exports.
+
+**ByteDance video surfaces use distinct visible labels.** Public Seedance
+showcase clips contain a fixed rounded box with `AI`, while the Dola sample in
+[issue #16](https://github.com/wiltodelta/remove-ai-watermarks/issues/16) uses
+fixed `Dola AI` text. The independent
+[Seedance remover](https://github.com/SamurAIGPT/seedance-2.0-watermark-remover)
+estimates a static corner from a temporal mean frame and edge density. Our
+implementation instead matches provider-specific synthetic silhouettes on
+every frame, then requires an anchored temporal run. This extra anchor check
+was necessary because a moving clean scene detail could retain enough adjacent
+overlap to pass a recurrence-only gate.
+
+**Hailuo and Kling use larger fixed composite labels.** Verified Hailuo exports
+carry a lower-edge waveform, `MINIMAX`, separator, Hailuo ring, and
+`hailuo AI` text. Verified Kling exports carry a bottom-right swirl,
+`KLING AI`, a changing version suffix, and sometimes `PRO`. The detectors use
+only synthetic primitives and fonts. Hailuo expands the matched core to cover
+the complete composite. Kling combines a version-independent text core with a
+synthetic ring rescue, then requires the recurring candidate to reach the
+expected frame edge and contain enough bright low-saturation pixels. Those
+extra gates were added after clean Luma and PixVerse scene details passed shape
+and temporal recurrence alone. The generic
+[WatermarkRemover-AI](https://github.com/D-Ogi/WatermarkRemover-AI) project
+instead uses Florence-2 to identify arbitrary watermarks before LaMa
+inpainting. That is broader, but it carries a much heavier model and a less
+auditable detection boundary than the provider-specific synthetic path here.
 
 **The faint-visible-mark precision/recall wall is fundamental, not a heuristic artifact.** The visible-watermark-detection literature has moved to LEARNED segmentation / object-detection (WDNet WACV'21 arXiv:2012.07616; SLBR ACM MM'21, open code+weights; the PRCV'18 large-scale detector; Su et al. survey 2025), but three verified findings bound what a learned detector actually buys: (1) a claim that a confidence threshold "cleanly separates" true from false matches even with a learned CNN front-end was **REFUTED** in verification (arXiv:1705.08593) -- the precision/recall wall persists even with learned features. (2) Learned detectors need a LARGE, pattern-diverse labeled dataset trained on synthetic composites (PRCV'18: 60k images / 80 watermark classes; CLWD: 60k / 160 marks), and off-distribution degradation is a documented real axis (models trained on limited-pattern LVW transfer worse; diversity of training patterns drives generalization). (3) Inference is cheap (WDNet ~8 ms at 256x256) -- the cost is the data pipeline, not runtime. Net: a learned detector shifts the frontier but does NOT remove the wall; for a SINGLE mark the cheapest next step is a small patch classifier (real-sparkle vs false-positive) on top of the existing NCC localizer, not a full segmentation model. SLBR is a ready baseline. The current NCC + false-positive gate (core-ring brightness margin + gradient-NCC crispness + white-core saturation) is a sound operating point, and the residual miss is the information-theoretic wall the literature confirms.
 

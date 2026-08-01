@@ -79,13 +79,13 @@ Measured on `gemini_3` (18 faces) at the Gemini scrub floor 0.25 vs base-Qwen 0.
 a Qwen face fix. The next distinct architecture was Z-Image-Turbo on original masked face
 crops, not another Qwen geometry conditioner.
 
-**Implementation follow-up (2026-07-24):** that distinct architecture now exists as the
-manual `qwen-zimage` profile. It ports the upstream Synthid-Bypass v2 graph: Qwen-Image-2512
-Lightning + DiffSynth Canny for the full frame, then SAM-masked Z-Image Turbo regeneration
-from original face crops. The upstream result supplied by the user was Gemini-oracle negative.
-The active upstream face path is YOLO + SAM, not the unconnected MediaPipe node. The port
-matches its center-point + box prompts, IoU-0.93 proposal selection, detector-box intersection,
-crop factor, and paste feather; YuNet is the intentional detector substitution.
+**Implementation follow-up (2026-07-24, revised 2026-07-31):** an early experimental
+`qwen-zimage` prototype reproduced a broad two-stage shape demonstrated by a public
+experiment: structure-guided Qwen regeneration followed by masked Z-Image face
+refinement. The maintained profile was subsequently
+rewritten with project-owned prompts, adaptive strength and sizing policies, YuNet face
+detection, SAM selection, masks, and compositing. It does not include the upstream workflow
+JSON or source code. The upstream result supplied by the user was Gemini-oracle negative.
 
 The first exact-path Modal run completed without SAM fallback or face seams. On one crowded
 18-face `gemini_3` fixture, ArcFace identity improved materially over controlnet
@@ -108,7 +108,7 @@ checked all six current outputs in the provider-separated
 oracles and confirmed that none retained SynthID or the provider generation signal. The
 checked bytes used the complete `visible -> qwen-zimage -> metadata` route, the calibrated
 YuNet 0.5 gate, and the shipped prompt-cache/model-residency optimizations. This supersedes
-the earlier first-port batch check as the release-candidate result, but it is not a
+the earlier prototype batch check as the release-candidate result, but it is not a
 certification across seeds, resolutions, and content classes. YuNet's threshold was
 calibrated independently from upstream YOLO: 0.5 retained the visible faces in the
 comparison fixtures while removing the false and duplicate boxes admitted by the copied

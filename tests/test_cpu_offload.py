@@ -12,7 +12,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from remove_ai_watermarks.noai.watermark_remover import WatermarkRemover
+from remove_ai_watermarks._internal.watermark_remover import WatermarkRemover
 
 
 def _remover(device: str, cpu_offload: bool) -> WatermarkRemover:

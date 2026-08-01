@@ -1,5 +1,5 @@
-"""Tests for vendored noai submodules: constants, extractor, c2pa, plus the
-consolidated metadata strip (formerly noai.cleaner)."""
+"""Tests for metadata compatibility submodules: constants, extractor, C2PA, plus the
+consolidated metadata strip (formerly legacy metadata helper)."""
 
 from __future__ import annotations
 
@@ -8,10 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from remove_ai_watermarks.metadata import (
-    remove_ai_metadata as noai_remove_ai_metadata,
-)
-from remove_ai_watermarks.noai.c2pa import (
+from remove_ai_watermarks._internal.c2pa import (
     _parse_c2pa_chunk,
     cbor_text_after,
     extract_c2pa_chunk,
@@ -20,23 +17,26 @@ from remove_ai_watermarks.noai.c2pa import (
     inject_c2pa_chunk,
     synthid_verdict,
 )
-from remove_ai_watermarks.noai.constants import (
+from remove_ai_watermarks._internal.constants import (
     AI_KEYWORDS,
     AI_METADATA_KEYS,
     C2PA_CHUNK_TYPE,
     PNG_SIGNATURE,
     SUPPORTED_FORMATS,
 )
-from remove_ai_watermarks.noai.extractor import (
+from remove_ai_watermarks._internal.extractor import (
     extract_ai_metadata,
     extract_metadata,
     get_ai_metadata_summary,
     has_ai_metadata,
 )
-from remove_ai_watermarks.noai.isobmff import (
+from remove_ai_watermarks._internal.isobmff import (
     blank_ai_exif_tokens,
     is_isobmff,
     strip_c2pa_boxes,
+)
+from remove_ai_watermarks.metadata import (
+    remove_ai_metadata as remove_metadata,
 )
 
 # ── Constants ───────────────────────────────────────────────────────
@@ -77,7 +77,7 @@ class TestConstants:
 
 
 class TestExtractor:
-    """Tests for noai.extractor functions."""
+    """Tests for internal metadata extraction helpers."""
 
     def test_extract_metadata_returns_dict(self, tmp_clean_png):
         meta = extract_metadata(tmp_clean_png)
@@ -115,11 +115,11 @@ class TestExtractor:
 
 class TestCleaner:
     """Metadata stripping via the single, consolidated ``metadata.remove_ai_metadata``
-    (the legacy ``noai.cleaner`` duplicate was retired)."""
+    (the legacy ``legacy metadata helper`` duplicate was retired)."""
 
     def test_remove_ai_metadata(self, tmp_png_with_ai_metadata, tmp_path):
         output = tmp_path / "cleaned.png"
-        noai_remove_ai_metadata(tmp_png_with_ai_metadata, output)
+        remove_metadata(tmp_png_with_ai_metadata, output)
         assert output.exists()
         # Verify AI metadata removed
         meta = extract_ai_metadata(output)
@@ -201,7 +201,7 @@ class TestC2PARealSamples:
 
     def test_extract_info_uses_reader_store(self):
         """The c2pa-python reader path: structured (not heuristic) extraction."""
-        from remove_ai_watermarks.noai import c2pa
+        from remove_ai_watermarks._internal import c2pa
 
         assert c2pa.reader_available()
         info = extract_c2pa_info(SAMPLES_DIR / "chatgpt-1.png")
@@ -213,7 +213,7 @@ class TestC2PARealSamples:
 
     def test_fallback_to_png_parser_when_reader_unavailable(self, monkeypatch):
         """With the reader disabled, the hand-rolled PNG parser still works."""
-        from remove_ai_watermarks.noai import c2pa
+        from remove_ai_watermarks._internal import c2pa
 
         monkeypatch.setattr(c2pa, "_C2PA_READER_AVAILABLE", False)
         info = extract_c2pa_info(SAMPLES_DIR / "chatgpt-1.png")
@@ -326,7 +326,7 @@ class TestC2PADigitalSourceType:
         (AI-enhanced) and a bare procedural ``algorithmicMedia`` token must classify as
         AI-enhanced. Before the reorder the bare-token elif fired first and returned
         non-AI, dropping the composite AI signal (a false negative)."""
-        from remove_ai_watermarks.noai.c2pa import _populate_registry_fields
+        from remove_ai_watermarks._internal.c2pa import _populate_registry_fields
 
         info: dict = {}
         _populate_registry_fields(b"x compositeWithTrainedAlgorithmicMedia x algorithmicMedia x", info)
@@ -452,12 +452,50 @@ class TestISOBMFF:
         assert blanked == 0
         assert out == FTYP + b"\x00\x00\x00\x0cmdat" + b"pixels!!"
 
+    def test_streaming_malformed_walk_copies_input_unchanged(self, tmp_path: Path):
+        from remove_ai_watermarks._internal.isobmff import strip_isobmff_media_file
+
+        source = tmp_path / "malformed.mp4"
+        output = tmp_path / "clean.mp4"
+        malformed = FTYP + struct.pack(">I", 999) + b"uuid" + b"short"
+        source.write_bytes(malformed)
+
+        stripped, tc260_blanked = strip_isobmff_media_file(source, output)
+
+        assert (stripped, tc260_blanked) == (0, 0)
+        assert output.read_bytes() == malformed
+
+    def test_streaming_failure_does_not_publish_partial_output(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from remove_ai_watermarks import metadata
+        from remove_ai_watermarks._internal import isobmff
+
+        source = tmp_path / "source.mp4"
+        output = tmp_path / "clean.mp4"
+        uuid_box = struct.pack(">I", 24) + b"uuid" + metadata.C2PA_UUID
+        source.write_bytes(FTYP + uuid_box)
+        output.write_bytes(b"previous output")
+
+        def fail_patch(*_args: object, **_kwargs: object) -> None:
+            raise OSError("synthetic patch failure")
+
+        monkeypatch.setattr(isobmff, "_overwrite_range", fail_patch)
+
+        with pytest.raises(OSError, match="synthetic patch failure"):
+            isobmff.strip_isobmff_media_file(source, output)
+
+        assert output.read_bytes() == b"previous output"
+        assert not list(tmp_path.glob(".clean-*"))
+
 
 class TestIterTopLevelBoxes:
     """The box walker's three size encodings and its underflow/overflow guards."""
 
     def test_64bit_largesize(self):
-        from remove_ai_watermarks.noai.isobmff import _iter_top_level_boxes
+        from remove_ai_watermarks._internal.isobmff import _iter_top_level_boxes
 
         # size32 == 1 -> a 64-bit largesize follows the type; total box length = 24.
         box = struct.pack(">I", 1) + b"uuid" + struct.pack(">Q", 24) + b"payload!"
@@ -467,7 +505,7 @@ class TestIterTopLevelBoxes:
         assert (start, end, btype, payload_off) == (0, 24, b"uuid", 16)
 
     def test_size0_runs_to_eof(self):
-        from remove_ai_watermarks.noai.isobmff import _iter_top_level_boxes
+        from remove_ai_watermarks._internal.isobmff import _iter_top_level_boxes
 
         box = struct.pack(">I", 0) + b"mdat" + b"tail-to-eof"
         boxes = list(_iter_top_level_boxes(box))
@@ -476,13 +514,13 @@ class TestIterTopLevelBoxes:
         assert (start, end, btype, payload_off) == (0, len(box), b"mdat", 8)
 
     def test_underflow_size_stops_safely(self):
-        from remove_ai_watermarks.noai.isobmff import _iter_top_level_boxes
+        from remove_ai_watermarks._internal.isobmff import _iter_top_level_boxes
 
         # size (4) < the 8-byte header -> the guard returns without yielding a box.
         assert list(_iter_top_level_boxes(struct.pack(">I", 4) + b"ftyp" + b"more")) == []
 
     def test_overflow_size_stops_safely(self):
-        from remove_ai_watermarks.noai.isobmff import _iter_top_level_boxes
+        from remove_ai_watermarks._internal.isobmff import _iter_top_level_boxes
 
         # size claims 999 but the buffer is far shorter -> guard returns, no partial box.
         assert list(_iter_top_level_boxes(struct.pack(">I", 999) + b"uuid" + b"x")) == []
@@ -495,7 +533,7 @@ class TestBlankAiXmpPackets:
     AIMARK = b"trainedAlgorithmicMedia"
 
     def test_ai_packet_blanked_same_length(self):
-        from remove_ai_watermarks.noai.isobmff import blank_ai_xmp_packets
+        from remove_ai_watermarks._internal.isobmff import blank_ai_xmp_packets
 
         packet = b'<?xpacket begin="x"?><x:xmpmeta>' + self.AIMARK + b'</x:xmpmeta><?xpacket end="w"?>'
         data = b"boxhdr" + packet + b"tail"
@@ -507,7 +545,7 @@ class TestBlankAiXmpPackets:
         assert b"tail" in out
 
     def test_clean_packet_left_intact(self):
-        from remove_ai_watermarks.noai.isobmff import blank_ai_xmp_packets
+        from remove_ai_watermarks._internal.isobmff import blank_ai_xmp_packets
 
         packet = b'<?xpacket begin="x"?><x:xmpmeta>plain copyright</x:xmpmeta><?xpacket end="w"?>'
         out, n = blank_ai_xmp_packets(packet)
@@ -515,7 +553,7 @@ class TestBlankAiXmpPackets:
         assert out == packet
 
     def test_missing_end_delimiter_not_blanked(self):
-        from remove_ai_watermarks.noai.isobmff import blank_ai_xmp_packets
+        from remove_ai_watermarks._internal.isobmff import blank_ai_xmp_packets
 
         # No <?xpacket end?> -> the packet regex cannot match, so it is left unchanged.
         data = b'<?xpacket begin="x"?><x:xmpmeta>' + self.AIMARK + b"</x:xmpmeta>"
@@ -530,7 +568,7 @@ class TestC2paBufferScans:
     as vendors are added."""
 
     def test_soft_binding_vendors_in(self):
-        from remove_ai_watermarks.noai.c2pa import C2PA_SOFT_BINDINGS, soft_binding_vendors_in
+        from remove_ai_watermarks._internal.c2pa import C2PA_SOFT_BINDINGS, soft_binding_vendors_in
 
         sig, name = next(iter(C2PA_SOFT_BINDINGS.items()))
         assert name in soft_binding_vendors_in(b"...manifest..." + sig + b"...tail...")
@@ -538,7 +576,7 @@ class TestC2paBufferScans:
         assert soft_binding_vendors_in(b"no soft-binding assertion here") == []
 
     def test_synthid_vendors_in_requires_synthid_issuer(self):
-        from remove_ai_watermarks.noai.c2pa import C2PA_ISSUERS, SYNTHID_C2PA_ISSUERS, synthid_vendors_in
+        from remove_ai_watermarks._internal.c2pa import C2PA_ISSUERS, SYNTHID_C2PA_ISSUERS, synthid_vendors_in
 
         syn_sig = next(s for s in C2PA_ISSUERS if s in SYNTHID_C2PA_ISSUERS)
         non_sig = next(s for s in C2PA_ISSUERS if s not in SYNTHID_C2PA_ISSUERS)
@@ -547,7 +585,7 @@ class TestC2paBufferScans:
         assert C2PA_ISSUERS[non_sig] not in synthid_vendors_in(b"x" + non_sig + b"x")
 
     def test_synthid_verdict_format(self):
-        from remove_ai_watermarks.noai.c2pa import synthid_verdict
+        from remove_ai_watermarks._internal.c2pa import synthid_verdict
 
         assert synthid_verdict("Google LLC") == "likely present (Google LLC embeds SynthID with C2PA)"
 

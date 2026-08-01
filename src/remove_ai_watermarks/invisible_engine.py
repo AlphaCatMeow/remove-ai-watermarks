@@ -1,7 +1,4 @@
-"""Invisible watermark removal engine.
-
-Wraps the vendored noai-watermark code for removing invisible AI watermarks
-(SynthID, StableSignature, TreeRing) via diffusion-based regeneration.
+"""Diffusion engine for regenerating images that carry invisible AI watermarks.
 
 This module requires the 'gpu' extra dependencies:
     uv pip install 'remove-ai-watermarks[diffusion]'
@@ -19,10 +16,10 @@ import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .noai.watermark_profiles import (
+from ._internal.watermark_profiles import (
     DEFAULT_MODEL_ID as DEFAULT_SDXL_MODEL_ID,
 )
-from .noai.watermark_profiles import (
+from ._internal.watermark_profiles import (
     resolve_seed,
 )
 
@@ -81,9 +78,6 @@ def _target_size(width: int, height: int, max_resolution: int, min_resolution: i
 class InvisibleEngine:
     """Remove invisible AI watermarks using diffusion model regeneration.
 
-    Based on noai-watermark by mertizci:
-    https://github.com/mertizci/noai-watermark
-
     The approach encodes the image into latent space, injects controlled noise
     to break watermark patterns, and reconstructs via reverse diffusion.
     """
@@ -124,7 +118,7 @@ class InvisibleEngine:
                 residency. CUDA only.
         """
 
-        from remove_ai_watermarks.noai.watermark_remover import WatermarkRemover
+        from remove_ai_watermarks._internal.watermark_remover import WatermarkRemover
 
         effective_model = model_id or self.DEFAULT_MODEL_ID
 

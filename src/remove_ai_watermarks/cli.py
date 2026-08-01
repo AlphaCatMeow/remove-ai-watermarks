@@ -4,6 +4,8 @@ Provides commands for:
   - Visible watermark removal (Gemini sparkle) - works offline, fast
   - Invisible watermark removal (SynthID etc.) - requires GPU/diffusion models
   - AI metadata stripping - lightweight, no ML deps needed
+  - Video identification, visible-wordmark removal, and metadata stripping
+  - Oracle-certified video SynthID removal
 """
 
 from __future__ import annotations
@@ -19,13 +21,20 @@ from typing import TYPE_CHECKING, Any, Literal, NoReturn
 import click
 
 from remove_ai_watermarks import __version__, image_io, watermark_registry
-from remove_ai_watermarks.noai.constants import SUPPORTED_FORMATS
-from remove_ai_watermarks.noai.watermark_profiles import (
+from remove_ai_watermarks._internal.constants import SUPPORTED_FORMATS
+from remove_ai_watermarks._internal.watermark_profiles import (
     resolve_seed,
     resolve_steps,
     resolve_strength,
     strength_default_help,
     vendor_for_strength,
+)
+from remove_ai_watermarks.video import VIDEO_VISIBLE_MARKS
+from remove_ai_watermarks.video_synthid import (
+    DEFAULT_VIDEO_SYNTHID_FPS,
+    DEFAULT_VIDEO_SYNTHID_LONG_SIDE,
+    DEFAULT_VIDEO_SYNTHID_NOISE_STD,
+    VIDEO_SYNTHID_LATENT_MULTIPLE,
 )
 
 if TYPE_CHECKING:
@@ -149,7 +158,7 @@ def _resolved_strength_for_display(
     if pipeline == "qwen-zimage" and strength is None:
         from PIL import Image
 
-        from remove_ai_watermarks.noai.qwen_zimage_pipeline import resolution_adaptive_denoise
+        from remove_ai_watermarks._internal.qwen_zimage_pipeline import resolution_adaptive_denoise
 
         with Image.open(source) as image:
             return resolution_adaptive_denoise(image.width, image.height)
@@ -260,7 +269,7 @@ def _normalize_pipeline(ctx: click.Context, param: click.Parameter, value: str |
     """
     if value is None:
         return None
-    from remove_ai_watermarks.noai.watermark_profiles import normalize_profile
+    from remove_ai_watermarks._internal.watermark_profiles import normalize_profile
 
     normalized = normalize_profile(value)
     if value.strip().lower() == "default":
@@ -586,7 +595,7 @@ def _should_skip_invisible_scrub(force: bool, image_path: Path) -> bool:
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose logging.")
 @click.pass_context
 def main(ctx: click.Context, verbose: bool) -> None:
-    """Remove visible and invisible AI watermarks from images."""
+    """Remove visible and invisible AI watermarks from images, plus provenance metadata from video."""
     from dotenv import load_dotenv
 
     load_dotenv()  # Load .env (e.g. HF_TOKEN)
@@ -1017,6 +1026,23 @@ def cmd_invisible(
 
 
 # ── Metadata operations ──
+def _print_metadata_report(source: Path, has_ai: bool, metadata: dict[str, str]) -> None:
+    """Render one metadata inspection result for the generic and video commands."""
+    if not has_ai:
+        console.print(f"  No AI metadata found in {source.name}")
+        return
+
+    console.print(f"  Warning: AI metadata detected in {source.name}:")
+    if synthid := metadata.get("synthid_watermark"):
+        console.print(f"  Warning: SynthID watermark (inferred from C2PA metadata) {synthid}")
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Key", style="cyan")
+    table.add_column("Value")
+    for key, value in metadata.items():
+        table.add_row(key, str(value)[:80])
+    console.print(table)
+
+
 @main.command("metadata")
 @click.argument("source", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--check", is_flag=True, help="Check for AI metadata (don't modify).")
@@ -1039,8 +1065,8 @@ def cmd_metadata(
     Strips EXIF AI tags, PNG text chunks, C2PA provenance manifests, and the
     China TC260 AIGC label. Beyond images (PNG/JPEG/WebP/AVIF/HEIF/JXL) it also
     strips provenance metadata from MP4/MOV/M4V/M4A containers and, via ffmpeg,
-    from WebM/MP3/WAV/FLAC/OGG. The coded image, audio, and video data are left
-    untouched.
+    from WebM/MKV/AVI/FLV/MP3/WAV/FLAC/OGG. The coded image, audio, and video
+    data are left untouched.
     """
     from remove_ai_watermarks.metadata import get_ai_metadata, has_ai_metadata, strip_and_verify
 
@@ -1051,19 +1077,8 @@ def cmd_metadata(
 
     if check or (not remove):
         has_ai = has_ai_metadata(source)
-        if has_ai:
-            console.print(f"  Warning: AI metadata detected in {source.name}:")
-            meta = get_ai_metadata(source)
-            if synthid := meta.get("synthid_watermark"):
-                console.print(f"  Warning: SynthID watermark (inferred from C2PA metadata) {synthid}")
-            table = Table(show_header=True, header_style="bold")
-            table.add_column("Key", style="cyan")
-            table.add_column("Value")
-            for k, v in meta.items():
-                table.add_row(k, str(v)[:80])
-            console.print(table)
-        else:
-            console.print(f"  No AI metadata found in {source.name}")
+        metadata = get_ai_metadata(source) if has_ai else {}
+        _print_metadata_report(source, has_ai, metadata)
 
         if not remove:
             return
@@ -1081,6 +1096,400 @@ def cmd_metadata(
         console.print("    the file could not be decoded, so it was copied through unchanged")
         raise SystemExit(1)
     console.print(f"  AI metadata stripped -> {out}")
+
+
+# ── Video pipeline ──
+def _video_visible_options(f: Any) -> Any:
+    """Apply the shared visible-video detector and fill options."""
+    f = click.option(
+        "--temporal-consistency/--no-temporal-consistency",
+        default=True,
+        help="Motion-align adjacent accepted fills to reduce frame-to-frame flicker.",
+    )(f)
+    f = click.option(
+        "--backend",
+        type=click.Choice(["auto", "cv2", "migan", "lama"]),
+        default="cv2",
+        help="Per-frame visible-fill backend.",
+    )(f)
+    return click.option(
+        "--mark",
+        type=click.Choice(["auto", *VIDEO_VISIBLE_MARKS]),
+        default="auto",
+        help="Visible AI mark to remove. Auto scans every supported provider in one decode pass.",
+    )(f)
+
+
+def _video_invisible_options(f: Any) -> Any:
+    """Apply the shared invisible-video removal options."""
+    f = click.option(
+        "--device",
+        type=click.Choice(["auto", "cuda", "mps", "cpu"]),
+        default="auto",
+        show_default=True,
+        help="VAE inference device.",
+    )(f)
+    f = click.option("--seed", type=int, default=0, show_default=True)(f)
+    f = click.option("--batch-size", type=click.IntRange(min=1), default=4, show_default=True)(f)
+    f = click.option(
+        "--fps",
+        type=click.FloatRange(min=1.0),
+        default=DEFAULT_VIDEO_SYNTHID_FPS,
+        show_default=True,
+        help="Output frame rate, capped at the source frame rate.",
+    )(f)
+    f = click.option(
+        "--long-side",
+        type=click.IntRange(min=VIDEO_SYNTHID_LATENT_MULTIPLE),
+        default=DEFAULT_VIDEO_SYNTHID_LONG_SIDE,
+        show_default=True,
+        help="Regenerated video long side in pixels.",
+    )(f)
+    return click.option(
+        "--noise-std",
+        type=click.FloatRange(min=0.0, max=1.0),
+        default=DEFAULT_VIDEO_SYNTHID_NOISE_STD,
+        show_default=True,
+        help="Shared latent-noise strength. Higher values change more detail.",
+    )(f)
+
+
+@main.group("video")
+def cmd_video() -> None:
+    """Process AI watermarks in video files."""
+
+
+@cmd_video.command("identify")
+@click.argument("source", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--no-visible", is_flag=True, help="Skip visible-mark detection; inspect metadata only.")
+@click.option("--json", "as_json", is_flag=True, help="Emit the report as JSON.")
+def cmd_video_identify(source: Path, no_visible: bool, as_json: bool) -> None:
+    """Identify supported provenance and visible AI marks in video."""
+    from dataclasses import asdict
+
+    from remove_ai_watermarks.video import identify_video
+
+    try:
+        report = identify_video(source, check_visible=not no_visible)
+    except (OSError, RuntimeError, ValueError) as e:
+        raise click.ClickException(str(e)) from e
+
+    if as_json:
+        click.echo(json.dumps(asdict(report), default=str, indent=2))
+        return
+
+    _banner()
+    verdict = "AI-generated" if report.is_ai_generated else "unknown"
+    console.print(f"  Verdict: {verdict}  (confidence: {report.confidence})")
+    console.print(f"  Platform: {report.platform or 'undetermined'}")
+    if report.visible_mark is not None:
+        console.print(
+            f"  Visible mark: {report.visible_mark} "
+            f"({report.visible_detected_frames}/{report.total_frames} stable frames)"
+        )
+    else:
+        console.print("  Visible mark: none found" if not no_visible else "  Visible mark: not checked")
+    if report.metadata_markers:
+        console.print(f"  AI metadata markers: {', '.join(sorted(report.metadata_markers))}")
+    else:
+        console.print("  AI metadata markers: none found")
+    if report.caveats:
+        console.print("  Caveats:")
+        for caveat in report.caveats:
+            console.print(f"  - {caveat}")
+
+
+@cmd_video.command("metadata")
+@click.argument("source", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--check", is_flag=True, help="Check for AI metadata (don't modify).")
+@click.option("--remove", is_flag=True, help="Remove AI metadata.")
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Output path (default: <source>_clean with the same container).",
+)
+@click.option("--keep-standard/--remove-all", default=True, help="Keep standard metadata.")
+def cmd_video_metadata(
+    source: Path,
+    check: bool,
+    remove: bool,
+    output: Path | None,
+    keep_standard: bool,
+) -> None:
+    """Check or remove AI metadata without transcoding video streams."""
+    from remove_ai_watermarks.video import inspect_video_metadata, remove_video_metadata
+
+    _banner()
+    try:
+        report = inspect_video_metadata(source)
+    except (OSError, ValueError) as e:
+        raise click.ClickException(str(e)) from e
+
+    if check or not remove:
+        _print_metadata_report(source, report.has_ai_metadata, report.markers)
+
+        if not remove:
+            return
+
+    try:
+        result = remove_video_metadata(source, output, keep_standard=keep_standard)
+    except (OSError, RuntimeError, ValueError) as e:
+        raise click.ClickException(str(e)) from e
+
+    if result.remaining:
+        console.print(f"  FAILED: {len(result.remaining)} AI metadata marker(s) survived in {result.output}")
+        console.print(f"    still present: {', '.join(sorted(result.remaining))}")
+        raise SystemExit(1)
+    console.print(f"  AI metadata stripped -> {result.output}")
+
+
+@cmd_video.command("invisible")
+@click.argument("source", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Output path (default: <source>_clean with the same container).",
+)
+@_video_invisible_options
+def cmd_video_invisible(
+    source: Path,
+    output: Path | None,
+    noise_std: float,
+    long_side: int,
+    fps: float,
+    batch_size: int,
+    seed: int,
+    device: str,
+) -> None:
+    """Remove video SynthID with the oracle-certified VAE profile."""
+    from remove_ai_watermarks.video import remove_video_invisible
+
+    _banner()
+    console.print(f"  Regenerating {source.name} with temporally shared VAE noise...")
+    try:
+        result = remove_video_invisible(
+            source,
+            output,
+            noise_std=noise_std,
+            long_side=long_side,
+            fps=fps,
+            batch_size=batch_size,
+            seed=seed,
+            device=device,
+        )
+    except (OSError, RuntimeError, ValueError) as e:
+        raise click.ClickException(str(e)) from e
+
+    if result.remaining_metadata:
+        console.print(f"  FAILED: {len(result.remaining_metadata)} AI metadata marker(s) survived in {result.output}")
+        raise SystemExit(1)
+    console.print(
+        f"  SynthID removal complete: {result.width}x{result.height}, "
+        f"{result.total_frames} frames at {result.fps:.4g} fps -> {result.output}"
+    )
+
+
+@cmd_video.command("visible")
+@click.argument("source", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Output path (default: <source>_clean with the same container).",
+)
+@_video_visible_options
+@click.option("--strip-metadata/--keep-metadata", default=True, help="Strip AI metadata from the transcoded output.")
+def cmd_video_visible(
+    source: Path,
+    output: Path | None,
+    mark: str,
+    backend: str,
+    temporal_consistency: bool,
+    strip_metadata: bool,
+) -> None:
+    """Remove a temporally stable visible AI wordmark from video."""
+    from remove_ai_watermarks.video import remove_video_visible
+
+    _banner()
+    console.print(f"  Scanning {source.name} for a temporally stable {mark} mark...")
+    try:
+        result = remove_video_visible(
+            source,
+            output,
+            mark=mark,
+            backend=backend,
+            strip_metadata=strip_metadata,
+            temporal_consistency=temporal_consistency,
+        )
+    except (OSError, RuntimeError, ValueError) as e:
+        raise click.ClickException(str(e)) from e
+
+    if result.output is None:
+        console.print(f"  No stable {mark} watermark detected; no output written")
+        raise SystemExit(EXIT_NO_VISIBLE_MARK)
+    if result.remaining_metadata:
+        console.print(f"  FAILED: {len(result.remaining_metadata)} AI metadata marker(s) survived in {result.output}")
+        raise SystemExit(1)
+    console.print(
+        f"  Removed {result.mark} watermark from "
+        f"{result.removed_frames}/{result.total_frames} frames -> {result.output}"
+    )
+
+
+@cmd_video.command("all")
+@click.argument("source", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Output path (default: <source>_clean with the same container).",
+)
+@_video_visible_options
+@click.option(
+    "--invisible/--no-invisible",
+    default=False,
+    help="Opt into oracle-certified lossy video SynthID removal.",
+)
+@_video_invisible_options
+def cmd_video_all(
+    source: Path,
+    output: Path | None,
+    mark: str,
+    backend: str,
+    temporal_consistency: bool,
+    invisible: bool,
+    noise_std: float,
+    long_side: int,
+    fps: float,
+    batch_size: int,
+    seed: int,
+    device: str,
+) -> None:
+    """Remove stable visible marks and AI metadata from video."""
+    from remove_ai_watermarks.video import remove_video_all
+
+    _banner()
+    stages = "visible marks + SynthID + verified AI metadata" if invisible else "visible marks + verified AI metadata"
+    console.print(f"  Cleaning {source.name}: {stages}...")
+    try:
+        result = remove_video_all(
+            source,
+            output,
+            mark=mark,
+            backend=backend,
+            temporal_consistency=temporal_consistency,
+            include_invisible=invisible,
+            noise_std=noise_std,
+            long_side=long_side,
+            fps=fps,
+            batch_size=batch_size,
+            seed=seed,
+            device=device,
+        )
+    except (OSError, RuntimeError, ValueError) as e:
+        raise click.ClickException(str(e)) from e
+
+    if result.remaining_metadata:
+        console.print(f"  FAILED: {len(result.remaining_metadata)} AI metadata marker(s) survived in {result.output}")
+        raise SystemExit(1)
+    if result.visible_mark is None:
+        detail = "" if result.invisible_removed else "; pixels preserved"
+        console.print(f"  Visible mark: none found{detail}")
+    else:
+        console.print(
+            f"  Visible mark: removed {result.visible_mark} from "
+            f"{result.visible_removed_frames}/{result.total_frames} frames"
+        )
+    console.print(f"  AI metadata: stripped -> {result.output}")
+    if result.invisible_removed:
+        console.print("  SynthID: removed with the oracle-certified VAE profile")
+
+
+@cmd_video.command("batch")
+@click.argument("directory", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option(
+    "-o",
+    "--output-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Output directory (default: <directory>_clean).",
+)
+@click.option(
+    "--mode",
+    type=click.Choice(["all", "visible", "metadata"]),
+    default="all",
+    show_default=True,
+    help="Video processing mode.",
+)
+@_video_visible_options
+@click.option(
+    "--invisible/--no-invisible",
+    default=False,
+    help="Opt into oracle-certified lossy SynthID removal in all mode.",
+)
+@_video_invisible_options
+def cmd_video_batch(
+    directory: Path,
+    output_dir: Path | None,
+    mode: str,
+    mark: str,
+    backend: str,
+    temporal_consistency: bool,
+    invisible: bool,
+    noise_std: float,
+    long_side: int,
+    fps: float,
+    batch_size: int,
+    seed: int,
+    device: str,
+) -> None:
+    """Process every supported video in a directory."""
+    from remove_ai_watermarks.video import remove_video_batch
+
+    _banner()
+    console.print(f"  Processing video directory {directory} in {mode} mode...")
+    try:
+        result = remove_video_batch(
+            directory,
+            output_dir,
+            mode=mode,  # type: ignore[arg-type]
+            mark=mark,
+            backend=backend,
+            temporal_consistency=temporal_consistency,
+            include_invisible=invisible,
+            noise_std=noise_std,
+            long_side=long_side,
+            fps=fps,
+            batch_size=batch_size,
+            seed=seed,
+            device=device,
+        )
+    except (OSError, RuntimeError, ValueError) as e:
+        raise click.ClickException(str(e)) from e
+
+    for item in result.items:
+        if item.error is not None:
+            console.print(f"  FAILED {item.source.name}: {item.error}")
+        elif item.changed:
+            detail = f" ({item.visible_mark})" if item.visible_mark is not None else ""
+            console.print(f"  Processed {item.source.name}{detail} -> {item.output}")
+        elif item.mode == "visible":
+            console.print(f"  Copied {item.source.name} byte-for-byte -> {item.output}")
+        else:
+            console.print(f"  Completed {item.source.name}; no supported signal found -> {item.output}")
+    console.print(
+        f"  Batch complete: {result.processed} processed, {result.failed} failed -> {result.output_directory}"
+    )
+    if result.invisible_removed:
+        console.print(f"  SynthID: removed from {result.invisible_removed} file(s)")
+    if result.failed:
+        raise SystemExit(1)
 
 
 # ── Provenance identification ──
