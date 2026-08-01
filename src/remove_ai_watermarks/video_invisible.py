@@ -13,7 +13,6 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
-from importlib.util import find_spec
 from typing import TYPE_CHECKING, Any
 
 import cv2
@@ -75,7 +74,9 @@ class VideoVaeRuntime:
 
 def is_available() -> bool:
     """Return whether the optional VAE runtime can be imported."""
-    return find_spec("torch") is not None and find_spec("diffusers") is not None
+    from remove_ai_watermarks.optional_deps import module_available
+
+    return module_available("torch", "diffusers")
 
 
 def _fit_size(width: int, height: int, long_side: int) -> tuple[int, int]:

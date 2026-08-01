@@ -22,6 +22,7 @@ import click
 
 from remove_ai_watermarks import __version__, image_io, watermark_registry
 from remove_ai_watermarks._internal.constants import SUPPORTED_FORMATS
+from remove_ai_watermarks._internal.utils import is_supported_format
 from remove_ai_watermarks._internal.watermark_profiles import (
     resolve_seed,
     resolve_steps,
@@ -143,7 +144,7 @@ def _validate_image(path: Path) -> Path:
     if not path.exists():
         console.print(f"Error: File not found: {path}")
         raise SystemExit(1)
-    if path.suffix.lower() not in SUPPORTED_FORMATS:
+    if not is_supported_format(path):
         console.print(f"Warning: {path.suffix} may not be supported (expected: {', '.join(SUPPORTED_FORMATS)})")
     return path
 
@@ -2092,7 +2093,7 @@ def cmd_batch(
         output_dir = directory.parent / (directory.name + "_clean")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    images = sorted(p for p in directory.iterdir() if p.suffix.lower() in SUPPORTED_FORMATS)
+    images = sorted(p for p in directory.iterdir() if is_supported_format(p))
 
     if not images:
         console.print(f"No supported images found in {directory}")

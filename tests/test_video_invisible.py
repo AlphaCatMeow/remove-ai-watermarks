@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from remove_ai_watermarks import video_encoding, video_invisible
+from remove_ai_watermarks import optional_deps, video_encoding, video_invisible
 from remove_ai_watermarks.video_synthid import DEFAULT_VIDEO_SYNTHID_NOISE_STD
 
 if TYPE_CHECKING:
@@ -68,9 +68,9 @@ def test_encoder_redirects_large_stderr_while_frames_are_streaming(
 
 def test_availability_requires_both_optional_packages(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        video_invisible,
-        "find_spec",
-        lambda name: object() if name == "torch" else None,
+        optional_deps,
+        "module_available",
+        lambda *names: set(names) <= {"torch"},
     )
 
     assert video_invisible.is_available() is False

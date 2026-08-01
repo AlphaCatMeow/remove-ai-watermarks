@@ -156,7 +156,6 @@ class TextMarkLocation:
     y: int
     w: int
     h: int
-    is_fallback: bool = True  # geometry anchor (no template match) -> always True for now
 
     @property
     def bbox(self) -> tuple[int, int, int, int]:
@@ -512,7 +511,7 @@ class TextMarkEngine:
         y = min(margin_b, max(0, h - wm_h)) if c.corner == "tl" else max(0, h - margin_b - wm_h)
         wm_w = min(wm_w, w - x)
         wm_h = min(wm_h, h - y)
-        return TextMarkLocation(x=x, y=y, w=wm_w, h=wm_h, is_fallback=True)
+        return TextMarkLocation(x=x, y=y, w=wm_w, h=wm_h)
 
     # ── Mask ────────────────────────────────────────────────────────────
 

@@ -133,7 +133,10 @@ trustmark = [
 # eraser backend needs none of this.
 lama = [
     "remove-ai-watermarks[visible]",
-    "onnxruntime>=1.16.0",
+    # ONNX Runtime 1.24 dropped CPython 3.10 wheels; keep the project's
+    # supported 3.10 line on the last compatible release series.
+    "onnxruntime>=1.16.0,<1.24; python_version < '3.11'",
+    "onnxruntime>=1.16.0; python_version >= '3.11'",
     "huggingface-hub>=0.20.0",
 ]
 # Lightweight inpaint backend -- MI-GAN via onnxruntime (andraniksargsyan/migan,
@@ -143,7 +146,8 @@ lama = [
 # LaMa, the quality-first `auto` choice, is too large. Same runtime as `lama`.
 migan = [
     "remove-ai-watermarks[visible]",
-    "onnxruntime>=1.16.0",
+    "onnxruntime>=1.16.0,<1.24; python_version < '3.11'",
+    "onnxruntime>=1.16.0; python_version >= '3.11'",
     "huggingface-hub>=0.20.0",
 ]
 # Optional pre-diffusion super-resolution for small inputs (Real-ESRGAN). Loaded via
