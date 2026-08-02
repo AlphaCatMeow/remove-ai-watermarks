@@ -110,6 +110,85 @@ def test_yunet_download_targets_verified_lfs_artifact():
     assert pytest.approx(0.5) == YUNET_SCORE_THRESHOLD
 
 
+def test_global_stack_is_resident_on_a_large_card_and_streams_on_a_small_one():
+    """The mandatory Qwen stack must not stream from disk on a card that can hold it.
+
+    DiffSynth offloads by dropping weights to the meta device and re-reading every
+    parameter through its DiskMap, so the streaming config costs a full model reload
+    on each stage transition. Benchmark in docs/module-internals.md, "CPU offload".
+    """
+    import torch
+
+    from remove_ai_watermarks._internal.qwen_zimage_pipeline import (
+        QwenZImagePipeline,
+        resolve_global_model_residency,
+    )
+
+    assert resolve_global_model_residency(None, total_memory_gib=79.2) is True
+    assert resolve_global_model_residency(None, total_memory_gib=39.5) is False
+    assert resolve_global_model_residency(False, total_memory_gib=79.2) is False
+    assert resolve_global_model_residency(True, total_memory_gib=39.5) is True
+
+    large = QwenZImagePipeline(
+        device="cuda",
+        torch_dtype=torch.bfloat16,
+        keep_global_models_on_device=True,
+    )._qwen_vram_config()
+    # No "disk" anywhere: DiffSynth latches disk_offload from offload_dtype once, so
+    # leaving it in would keep the meta-drop even with every device set to cuda.
+    assert "disk" not in large.values()
+    assert large["offload_device"] == "cuda"
+    assert large["onload_device"] == "cuda"
+    assert large["computation_dtype"] is torch.bfloat16
+
+    small = QwenZImagePipeline(
+        device="cuda",
+        torch_dtype=torch.bfloat16,
+        keep_global_models_on_device=False,
+    )._qwen_vram_config()
+    assert small["offload_dtype"] == "disk"
+    assert small["offload_device"] == "disk"
+    assert small["onload_device"] == "cpu"
+
+
+@pytest.mark.parametrize(
+    ("cpu_offload", "expected"),
+    [(True, False), (False, None)],
+)
+def test_cpu_offload_forces_both_stacks_to_stream(monkeypatch, cpu_offload, expected):
+    """``cpu_offload`` is the caller's escape hatch and must cover the global stack too.
+
+    Without the global flag it silenced only the face stack, so a caller asking for
+    low VRAM still got the larger global stack pinned.
+    """
+    from remove_ai_watermarks._internal import qwen_zimage_pipeline as pipeline_module
+    from remove_ai_watermarks._internal import watermark_remover as module
+
+    captured: dict[str, object] = {}
+
+    class Recorder:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    # `_load_qwen_zimage_pipeline` imports the class inside the function body, so the
+    # patch has to land on the defining module rather than on watermark_remover.
+    monkeypatch.setattr(pipeline_module, "QwenZImagePipeline", Recorder)
+
+    remover = module.WatermarkRemover.__new__(module.WatermarkRemover)
+    remover.device = "cuda"
+    remover.torch_dtype = None
+    remover.hf_token = None
+    remover._progress_callback = None
+    remover.controlnet_conditioning_scale = 1.0
+    remover.cpu_offload = cpu_offload
+    remover._qwen_zimage_pipeline = None
+
+    remover._load_qwen_zimage_pipeline()
+
+    assert captured["keep_global_models_on_device"] is expected
+    assert captured["keep_face_models_on_device"] is expected
+
+
 def test_resident_face_models_disable_vram_offload():
     from remove_ai_watermarks._internal.qwen_zimage_pipeline import (
         QwenZImagePipeline,

@@ -55,6 +55,12 @@ GLOBAL_CFG = 1.0
 FACE_CFG = 1.0
 GLOBAL_CONTROLNET_SCALE = 1.0
 RESIDENT_FACE_MODEL_MIN_VRAM_GIB = 64.0
+# Below this floor the mandatory Qwen stack streams from disk, which is what makes a
+# 20B model runnable on a consumer card at all; at or above it, streaming is pure
+# waste. Set equal to the face floor rather than lower because that is the
+# configuration actually measured with both stacks resident; a tighter gate is
+# plausible but unvalidated. Benchmark in docs/module-internals.md, "CPU offload".
+RESIDENT_GLOBAL_MODEL_MIN_VRAM_GIB = 64.0
 FACE_DENOISE_SCALE = 0.5
 
 _CANNY_LOW = 13
@@ -77,6 +83,17 @@ def resolve_face_model_residency(
     if requested is not None:
         return requested
     return total_memory_gib >= RESIDENT_FACE_MODEL_MIN_VRAM_GIB
+
+
+def resolve_global_model_residency(
+    requested: bool | None,
+    *,
+    total_memory_gib: float,
+) -> bool:
+    """Keep the mandatory Qwen stack resident when explicitly requested or safely sized."""
+    if requested is not None:
+        return requested
+    return total_memory_gib >= RESIDENT_GLOBAL_MODEL_MIN_VRAM_GIB
 
 
 def _pin_vram_managed_models(pipe: Any) -> None:
@@ -497,6 +514,7 @@ class QwenZImagePipeline:
     progress_callback: Callable[[str], None] | None = None
     controlnet_conditioning_scale: float = GLOBAL_CONTROLNET_SCALE
     keep_face_models_on_device: bool | None = None
+    keep_global_models_on_device: bool | None = None
     cache_prompt_embeddings: bool = True
 
     def __post_init__(self) -> None:
@@ -524,21 +542,50 @@ class QwenZImagePipeline:
             return max(1.0, torch.cuda.mem_get_info("cuda")[1] / (1024**3) - 0.5)
         return None
 
-    def _keep_face_models_resident(self) -> bool:
+    def _total_vram_gib(self) -> float:
+        """Card capacity for the residency gates, 0.0 when it cannot be read.
+
+        Separate from ``_vram_limit``, which answers a different question (the budget
+        handed to DiffSynth) and must stay ``None`` rather than 0.0 when unknown, so
+        an unreadable device means "no limit" there and "assume small" here.
+        """
         import torch
 
-        total_memory_gib = 0.0
         with contextlib.suppress(Exception):
-            total_memory_gib = torch.cuda.get_device_properties("cuda").total_memory / (1024**3)
+            return torch.cuda.get_device_properties("cuda").total_memory / (1024**3)
+        return 0.0
+
+    def _keep_face_models_resident(self) -> bool:
         return resolve_face_model_residency(
             self.keep_face_models_on_device,
-            total_memory_gib=total_memory_gib,
+            total_memory_gib=self._total_vram_gib(),
         )
 
-    @staticmethod
-    def _qwen_vram_config() -> dict[str, Any]:
+    def _keep_global_models_resident(self) -> bool:
+        return resolve_global_model_residency(
+            self.keep_global_models_on_device,
+            total_memory_gib=self._total_vram_gib(),
+        )
+
+    def _qwen_vram_config(self) -> dict[str, Any]:
         import torch
 
+        if self._keep_global_models_resident():
+            # Same fp8 storage and bf16 computation as the streaming config, but the
+            # weights never leave the GPU. Passing no "disk" anywhere is what makes
+            # this work: DiffSynth decides `disk_offload` once from `offload_dtype`,
+            # so a card large enough to hold the stack skips both the `to("meta")`
+            # drop and the DiskMap re-read entirely.
+            return {
+                "offload_dtype": torch.float8_e4m3fn,
+                "offload_device": "cuda",
+                "onload_dtype": torch.float8_e4m3fn,
+                "onload_device": "cuda",
+                "preparing_dtype": torch.float8_e4m3fn,
+                "preparing_device": "cuda",
+                "computation_dtype": torch.bfloat16,
+                "computation_device": "cuda",
+            }
         return {
             "offload_dtype": "disk",
             "offload_device": "disk",

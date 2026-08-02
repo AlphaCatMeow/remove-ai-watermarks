@@ -353,6 +353,7 @@ class WatermarkRemover:
                 progress_callback=self._progress_callback,
                 controlnet_conditioning_scale=self.controlnet_conditioning_scale,
                 keep_face_models_on_device=False if self.cpu_offload else None,
+                keep_global_models_on_device=False if self.cpu_offload else None,
             )
         return self._qwen_zimage_pipeline
 
