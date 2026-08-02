@@ -63,6 +63,21 @@ RESIDENT_FACE_MODEL_MIN_VRAM_GIB = 64.0
 RESIDENT_GLOBAL_MODEL_MIN_VRAM_GIB = 64.0
 FACE_DENOISE_SCALE = 0.5
 
+# Both stages prompt with compile-time constants, and at CFG 1.0 DiffSynth reuses the
+# positive embedding for the negative side instead of encoding it, so exactly one
+# embedding per stage is ever needed. Persisting it lets the next container load the
+# stack without its text encoder at all: 15.45 GiB for Qwen and 7.49 GiB for Z-Image
+# of a measured 87.6 GiB read per request. The stored tensors are what the encoder
+# itself produced, so the output stays byte-identical. Bump the version when the
+# stored shape changes; the model id and prompt are already part of the key, so a
+# model or prompt change invalidates itself.
+_PROMPT_CACHE_VERSION = 1
+_PROMPT_CACHE_DIRNAME = "prompt-embeddings"
+# DiffSynth identifies a pipeline unit by what it produces, so these tuples are how
+# the prompt stage is located inside each pipeline and how its cache file is keyed.
+_QWEN_PROMPT_OUTPUTS = ("prompt_emb", "prompt_emb_mask")
+_ZIMAGE_PROMPT_OUTPUTS = ("prompt_embeds",)
+
 _CANNY_LOW = 13
 _CANNY_HIGH = 64
 
@@ -127,7 +142,56 @@ def _pin_vram_managed_models(pipe: Any) -> None:
     pipe.load_models_to_device(model_names)
 
 
-def _cached_prompt_process(original_process: Any) -> Any:
+def _cast_prompt_payload(payload: Any, device: Any, dtype: Any) -> Any:
+    """Move a stored embedding payload onto the runtime device.
+
+    Only floating tensors take the pipeline dtype. The attention masks travel in the
+    same payload and are integer, so casting them would corrupt the prompt.
+    """
+    import torch
+
+    if isinstance(payload, torch.Tensor):
+        if dtype is not None and payload.is_floating_point():
+            return payload.to(device=device, dtype=dtype)
+        return payload.to(device=device)
+    if isinstance(payload, dict):
+        return {key: _cast_prompt_payload(value, device, dtype) for key, value in payload.items()}
+    if isinstance(payload, (list, tuple)):
+        return type(payload)(_cast_prompt_payload(value, device, dtype) for value in payload)
+    return payload
+
+
+def _prompt_cache_path(model_id: str, output_params: tuple[str, ...], prompt: str) -> Path:
+    """Locate the stored embedding for one model and one exact prompt string."""
+    key = "\x1f".join((str(_PROMPT_CACHE_VERSION), model_id, *output_params, prompt))
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:32]
+    return _model_cache_dir() / _PROMPT_CACHE_DIRNAME / f"{digest}.pt"
+
+
+def _store_prompt_payload(path: Path, payload: Any) -> None:
+    """Write the embedding atomically so a torn write can never read back as a hit."""
+    import torch
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=path.parent, suffix=".pt", delete=False) as handle:
+        torch.save(_cast_prompt_payload(payload, "cpu", None), handle)
+        temporary = Path(handle.name)
+    temporary.replace(path)
+
+
+def _load_prompt_payload(path: Path, device: Any, dtype: Any) -> Any:
+    import torch
+
+    return _cast_prompt_payload(torch.load(path, map_location="cpu", weights_only=True), device, dtype)
+
+
+def _cached_prompt_process(
+    original_process: Any,
+    *,
+    model_id: str | None,
+    output_params: tuple[str, ...],
+    require_cache: bool,
+) -> Any:
     cache: dict[str, dict[str, Any]] = {}
 
     def cached_process(
@@ -137,9 +201,30 @@ def _cached_prompt_process(original_process: Any) -> Any:
     ) -> dict[str, Any]:
         if edit_image is not None:
             return original_process(runtime_pipe, prompt, edit_image=edit_image)
-        if prompt not in cache:
-            cache[prompt] = original_process(runtime_pipe, prompt, edit_image=None)
-        return cache[prompt]
+        if prompt in cache:
+            return cache[prompt]
+        path = None if model_id is None else _prompt_cache_path(model_id, output_params, prompt)
+        if path is not None and path.exists():
+            try:
+                cache[prompt] = _load_prompt_payload(path, runtime_pipe.device, runtime_pipe.torch_dtype)
+            except Exception:
+                log.warning("Discarding unreadable prompt-embedding cache %s", path, exc_info=True)
+            else:
+                return cache[prompt]
+        if require_cache:
+            # The text encoder was left out of the model stack on the strength of
+            # this file, so there is nothing left to fall back to.
+            raise RuntimeError(
+                f"The cached prompt embedding {path} disappeared after the stack was loaded without its text encoder."
+            )
+        produced = original_process(runtime_pipe, prompt, edit_image=None)
+        if path is not None:
+            try:
+                _store_prompt_payload(path, produced)
+            except OSError:
+                log.warning("Could not persist the prompt embedding to %s", path, exc_info=True)
+        cache[prompt] = produced
+        return produced
 
     return cached_process
 
@@ -147,11 +232,25 @@ def _cached_prompt_process(original_process: Any) -> Any:
 def _cache_static_prompt_embeddings(
     pipe: Any,
     output_params: tuple[str, ...],
+    *,
+    model_id: str | None = None,
+    require_cache: bool = False,
 ) -> bool:
-    """Memoize a prompt unit when its embedding depends only on static text."""
+    """Memoize a prompt unit when its embedding depends only on static text.
+
+    With ``model_id`` the memo is also persisted, which is what lets the next
+    container skip the text encoder entirely; without it the memo lives only as long
+    as the pipeline. ``require_cache`` says the stack was already built without a
+    text encoder, so a miss must fail loudly rather than call a model that is absent.
+    """
     for unit in pipe.units:
         if tuple(getattr(unit, "output_params", ())) == output_params:
-            unit.process = _cached_prompt_process(unit.process)
+            unit.process = _cached_prompt_process(
+                unit.process,
+                model_id=model_id,
+                output_params=output_params,
+                require_cache=require_cache,
+            )
             return True
     return False
 
@@ -317,7 +416,13 @@ def _expanded_box(
 
 
 def _model_cache_dir() -> Path:
-    root = os.environ.get("XDG_CACHE_HOME")
+    """Where this library persists downloaded and derived model assets.
+
+    ``HF_HOME`` comes first because on a scale-to-zero runner it is the one path
+    mounted persistently; anything under a container-local cache is re-derived on
+    every request, which defeats both the YuNet download and the prompt cache.
+    """
+    root = os.environ.get("HF_HOME") or os.environ.get("XDG_CACHE_HOME")
     base = Path(root) if root else Path.home() / ".cache"
     return base / "remove-ai-watermarks"
 
@@ -567,6 +672,10 @@ class QwenZImagePipeline:
             total_memory_gib=self._total_vram_gib(),
         )
 
+    def _prompt_is_cached(self, model_id: str, output_params: tuple[str, ...], prompt: str) -> bool:
+        """Whether this stack can be built without its text encoder at all."""
+        return self.cache_prompt_embeddings and _prompt_cache_path(model_id, output_params, prompt).exists()
+
     def _qwen_vram_config(self) -> dict[str, Any]:
         import torch
 
@@ -629,17 +738,18 @@ class QwenZImagePipeline:
 
         self._progress("Loading Qwen-Image-2512, Lightning LoRA, and Canny ControlNet...")
         config = self._qwen_vram_config()
+        text_encoder_config = ModelConfig(
+            model_id=QWEN_IMAGE_2512_MODEL_ID,
+            origin_file_pattern="text_encoder/model*.safetensors",
+            **config,
+        )
         model_configs = [
             ModelConfig(
                 model_id=QWEN_IMAGE_2512_MODEL_ID,
                 origin_file_pattern="transformer/diffusion_pytorch_model*.safetensors",
                 **config,
             ),
-            ModelConfig(
-                model_id=QWEN_IMAGE_2512_MODEL_ID,
-                origin_file_pattern="text_encoder/model*.safetensors",
-                **config,
-            ),
+            text_encoder_config,
             ModelConfig(
                 model_id=QWEN_IMAGE_2512_MODEL_ID,
                 origin_file_pattern="vae/diffusion_pytorch_model.safetensors",
@@ -651,6 +761,10 @@ class QwenZImagePipeline:
                 **config,
             ),
         ]
+        prompt_cached = self._prompt_is_cached(QWEN_IMAGE_2512_MODEL_ID, _QWEN_PROMPT_OUTPUTS, _GLOBAL_PROMPT)
+        if prompt_cached:
+            model_configs.remove(text_encoder_config)
+            log.info("Qwen prompt embedding is cached; loading the stack without its text encoder")
         pipe = QwenImagePipeline.from_pretrained(
             torch_dtype=self.torch_dtype,
             device=self.device,
@@ -675,7 +789,9 @@ class QwenZImagePipeline:
         if self.cache_prompt_embeddings:
             _cache_static_prompt_embeddings(
                 pipe,
-                ("prompt_emb", "prompt_emb_mask"),
+                _QWEN_PROMPT_OUTPUTS,
+                model_id=QWEN_IMAGE_2512_MODEL_ID,
+                require_cache=prompt_cached,
             )
         self._qwen_pipe = (pipe, ControlNetInput)
         return self._qwen_pipe
@@ -698,26 +814,32 @@ class QwenZImagePipeline:
         self._progress("Loading Z-Image Turbo face-detail model...")
         keep_on_device = self._keep_face_models_resident()
         config = self._zimage_vram_config()
+        text_encoder_config = ModelConfig(
+            model_id=ZIMAGE_TURBO_MODEL_ID,
+            origin_file_pattern="text_encoder/*.safetensors",
+            **config,
+        )
+        model_configs = [
+            ModelConfig(
+                model_id=ZIMAGE_TURBO_MODEL_ID,
+                origin_file_pattern="transformer/*.safetensors",
+                **config,
+            ),
+            text_encoder_config,
+            ModelConfig(
+                model_id=ZIMAGE_TURBO_MODEL_ID,
+                origin_file_pattern="vae/diffusion_pytorch_model.safetensors",
+                **config,
+            ),
+        ]
+        prompt_cached = self._prompt_is_cached(ZIMAGE_TURBO_MODEL_ID, _ZIMAGE_PROMPT_OUTPUTS, _FACE_PROMPT)
+        if prompt_cached:
+            model_configs.remove(text_encoder_config)
+            log.info("Z-Image prompt embedding is cached; loading the stack without its text encoder")
         pipe = ZImagePipeline.from_pretrained(
             torch_dtype=self.torch_dtype,
             device=self.device,
-            model_configs=[
-                ModelConfig(
-                    model_id=ZIMAGE_TURBO_MODEL_ID,
-                    origin_file_pattern="transformer/*.safetensors",
-                    **config,
-                ),
-                ModelConfig(
-                    model_id=ZIMAGE_TURBO_MODEL_ID,
-                    origin_file_pattern="text_encoder/*.safetensors",
-                    **config,
-                ),
-                ModelConfig(
-                    model_id=ZIMAGE_TURBO_MODEL_ID,
-                    origin_file_pattern="vae/diffusion_pytorch_model.safetensors",
-                    **config,
-                ),
-            ],
+            model_configs=model_configs,
             tokenizer_config=ModelConfig(
                 model_id=ZIMAGE_TURBO_MODEL_ID,
                 origin_file_pattern="tokenizer/",
@@ -727,7 +849,12 @@ class QwenZImagePipeline:
         if keep_on_device:
             _pin_vram_managed_models(pipe)
         if self.cache_prompt_embeddings:
-            _cache_static_prompt_embeddings(pipe, ("prompt_embeds",))
+            _cache_static_prompt_embeddings(
+                pipe,
+                _ZIMAGE_PROMPT_OUTPUTS,
+                model_id=ZIMAGE_TURBO_MODEL_ID,
+                require_cache=prompt_cached,
+            )
         self._zimage_pipe = pipe
         return pipe
 

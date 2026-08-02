@@ -564,6 +564,39 @@ orchestration, YuNet integration, SAM selection, masks, sizing helpers, and pixe
 compositing are implemented for this runtime. Changing a calibrated model input
 requires the same provider-oracle and identity evaluation as a model change.
 
+### Static prompt embeddings
+
+Both stages prompt with module constants, and at CFG 1.0 DiffSynth's
+`PipelineUnitRunner` reuses the positive embedding for the negative side instead of
+encoding it. So exactly one embedding per stage is ever computed, from text that
+cannot vary at runtime, which makes it cacheable across containers rather than only
+within one pipeline.
+
+`_cache_static_prompt_embeddings` therefore persists what the text encoder produced
+under `_model_cache_dir()/prompt-embeddings`, keyed by cache version, model id,
+pipeline output params, and the exact prompt string. Once that file exists,
+`_load_qwen` and `_load_zimage` drop the text-encoder `ModelConfig` from the model
+stack entirely and serve the stored tensors instead. Measured on an H100 volume in
+August 2026, that removes **15.45 GiB** (Qwen2.5-VL) and **7.49 GiB** (Z-Image) of a
+**87.6 GiB** per-request read, worth a median **11.76 s** and **4.10 s** of load time
+(paired within five containers). The output is **byte-identical** -- the stored
+tensors are the encoder's own -- so this needs no provider-oracle re-verification.
+
+Three properties are load-bearing:
+
+- **The key self-heals.** A model bump or a prompt edit changes the key, so the next
+  container recomputes rather than reading a stale embedding. `_PROMPT_CACHE_VERSION`
+  covers a change to the stored shape itself.
+- **The write is atomic.** A torn write must never be readable as a cache hit, so the
+  payload lands in a temp file and is renamed into place.
+- **A miss after the encoder was dropped raises.** `require_cache` records that the
+  stack was built without a text encoder on the strength of the file; falling back
+  would call a model that is not loaded, which surfaces as an opaque crash.
+
+`_model_cache_dir()` prefers `HF_HOME` for the same reason: on a scale-to-zero runner
+that is the only persistently mounted path, and anything below it is re-derived per
+request. The YuNet download follows the same root.
+
 Regression coverage:
 
 - [`test_qwen_zimage_pipeline.py`](../tests/test_qwen_zimage_pipeline.py)
