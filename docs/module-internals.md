@@ -293,11 +293,32 @@ Regression coverage:
 
 CPU offload is enabled only when requested on CUDA. The standard Diffusers
 profiles call `enable_model_cpu_offload`. The `qwen-zimage` profile uses the
-same flag to force its face stack out of automatic device residency.
+same flag to force **both** its stacks out of automatic device residency.
+
+Residency is otherwise chosen from the card's total VRAM, once per stack:
+`resolve_global_model_residency` gates the mandatory Qwen stack at
+`RESIDENT_GLOBAL_MODEL_MIN_VRAM_GIB` and `resolve_face_model_residency` gates the
+optional Z-Image stack at `RESIDENT_FACE_MODEL_MIN_VRAM_GIB`.
+
+Below the global floor, `_qwen_vram_config` streams the stack from disk, which is
+what makes a 20B model runnable on a consumer card. At or above it, streaming is
+pure waste and the weights stay on the GPU. The difference is not marginal:
+DiffSynth offloads by dropping the weights to the meta device and re-reading every
+parameter through its `DiskMap` on the next onload, and the pipeline moves between
+text encoder, transformer and VAE on each pass. Measured on an H100 (80 GiB), a warm
+global pass took 37.3 s at 0.8 GiB resident with the streaming config, against 2.2 s
+at 28.7 GiB with the stack resident; both stacks resident peaked at 48.0 GiB. Faster
+storage cannot close that gap, because the cost is the reload itself rather than the
+read.
+
+The resident config deliberately passes no `"disk"` value anywhere. DiffSynth latches
+`disk_offload` once, from `offload_dtype`, so leaving the sentinel in place while
+pointing every device at CUDA would keep the meta-drop and re-read.
 
 Regression coverage:
 
 - [`test_cpu_offload.py`](../tests/test_cpu_offload.py)
+- [`test_qwen_zimage_pipeline.py`](../tests/test_qwen_zimage_pipeline.py)
 
 ### Qwen plus Z-Image
 
