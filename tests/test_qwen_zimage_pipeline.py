@@ -271,6 +271,113 @@ def test_static_prompt_cache_reuses_embeddings_without_caching_image_edits():
     assert unit.calls == 4
 
 
+def test_prompt_cache_path_is_keyed_by_version_model_outputs_and_prompt(monkeypatch, tmp_path):
+    """A model, prompt or format change must not read a stale embedding."""
+    from remove_ai_watermarks._internal import qwen_zimage_pipeline as qz
+
+    monkeypatch.setenv("HF_HOME", str(tmp_path))
+    baseline = qz._prompt_cache_path("model/a", ("prompt_emb",), "text")
+
+    assert baseline.parent == tmp_path / "remove-ai-watermarks" / "prompt-embeddings"
+    assert baseline == qz._prompt_cache_path("model/a", ("prompt_emb",), "text")
+    assert baseline != qz._prompt_cache_path("model/b", ("prompt_emb",), "text")
+    assert baseline != qz._prompt_cache_path("model/a", ("prompt_embeds",), "text")
+    assert baseline != qz._prompt_cache_path("model/a", ("prompt_emb",), "other")
+
+    monkeypatch.setattr(qz, "_PROMPT_CACHE_VERSION", qz._PROMPT_CACHE_VERSION + 1)
+    assert baseline != qz._prompt_cache_path("model/a", ("prompt_emb",), "text")
+
+
+def test_model_cache_dir_prefers_the_persistent_hugging_face_root(monkeypatch, tmp_path):
+    """A scale-to-zero runner only mounts HF_HOME, so it must win over XDG."""
+    from remove_ai_watermarks._internal.qwen_zimage_pipeline import _model_cache_dir
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+    monkeypatch.delenv("HF_HOME", raising=False)
+    assert _model_cache_dir() == tmp_path / "xdg" / "remove-ai-watermarks"
+
+    monkeypatch.setenv("HF_HOME", str(tmp_path / "hf"))
+    assert _model_cache_dir() == tmp_path / "hf" / "remove-ai-watermarks"
+
+
+def test_stored_prompt_embedding_round_trips_without_casting_the_mask(monkeypatch, tmp_path):
+    """The mask rides in the same payload and is integer; casting it corrupts the prompt."""
+    import torch
+
+    from remove_ai_watermarks._internal import qwen_zimage_pipeline as qz
+
+    monkeypatch.setenv("HF_HOME", str(tmp_path))
+    path = qz._prompt_cache_path("model/a", qz._QWEN_PROMPT_OUTPUTS, "text")
+    payload = {
+        "prompt_emb": torch.ones((1, 2, 3), dtype=torch.float32),
+        "prompt_emb_mask": torch.ones((1, 2), dtype=torch.int64),
+    }
+    qz._store_prompt_payload(path, payload)
+    restored = qz._load_prompt_payload(path, "cpu", torch.bfloat16)
+
+    assert restored["prompt_emb"].dtype == torch.bfloat16
+    assert restored["prompt_emb_mask"].dtype == torch.int64
+    assert torch.equal(restored["prompt_emb"].float(), payload["prompt_emb"])
+
+
+def test_persisted_prompt_cache_lets_a_second_pipeline_skip_the_text_encoder(monkeypatch, tmp_path):
+    """The whole point: container two must not call the encoder container one ran."""
+    import torch
+
+    from remove_ai_watermarks._internal import qwen_zimage_pipeline as qz
+
+    monkeypatch.setenv("HF_HOME", str(tmp_path))
+
+    class PromptUnit:
+        output_params = qz._ZIMAGE_PROMPT_OUTPUTS
+
+        def __init__(self):
+            self.calls = 0
+
+        def process(self, _pipe, prompt, edit_image=None):
+            self.calls += 1
+            return {"prompt_embeds": [torch.ones((2, 2), dtype=torch.float32)]}
+
+    def build():
+        unit = PromptUnit()
+        pipe = MagicMock(units=[unit], device="cpu", torch_dtype=torch.float32)
+        return unit, pipe
+
+    first_unit, first_pipe = build()
+    qz._cache_static_prompt_embeddings(first_pipe, qz._ZIMAGE_PROMPT_OUTPUTS, model_id="model/a", require_cache=False)
+    first_unit.process(first_pipe, qz._FACE_PROMPT)
+    assert first_unit.calls == 1
+
+    second_unit, second_pipe = build()
+    qz._cache_static_prompt_embeddings(second_pipe, qz._ZIMAGE_PROMPT_OUTPUTS, model_id="model/a", require_cache=True)
+    restored = second_unit.process(second_pipe, qz._FACE_PROMPT)
+
+    assert second_unit.calls == 0
+    assert torch.equal(restored["prompt_embeds"][0], torch.ones((2, 2)))
+
+
+def test_a_missing_cache_fails_loudly_once_the_text_encoder_was_left_out(monkeypatch, tmp_path):
+    """Silently calling an absent text encoder would surface as an opaque crash."""
+    import torch
+
+    from remove_ai_watermarks._internal import qwen_zimage_pipeline as qz
+
+    monkeypatch.setenv("HF_HOME", str(tmp_path))
+
+    class PromptUnit:
+        output_params = qz._QWEN_PROMPT_OUTPUTS
+
+        def process(self, _pipe, prompt, edit_image=None):
+            raise AssertionError("the text encoder is not loaded")
+
+    unit = PromptUnit()
+    pipe = MagicMock(units=[unit], device="cpu", torch_dtype=torch.float32)
+    qz._cache_static_prompt_embeddings(pipe, qz._QWEN_PROMPT_OUTPUTS, model_id="model/a", require_cache=True)
+
+    with pytest.raises(RuntimeError, match="disappeared"):
+        unit.process(pipe, "never cached")
+
+
 def test_sam_pixels_match_model_dtype_without_casting_boxes():
     import torch
 
