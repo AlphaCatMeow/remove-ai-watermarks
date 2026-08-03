@@ -558,6 +558,31 @@ The profile rejects a custom model identifier. Its global and face model stack
 is fixed by the implementation. When tiling is enabled, only the global stage
 is tiled; the face stage runs once after the tiles are blended.
 
+#### How the face stage actually composites
+
+The mechanism is easy to misread from the parameter names, so state it plainly.
+`_run_faces` crops the expanded box from the **original** image, resizes it toward the
+768 px face guide, runs Z-Image over **the entire crop**, resizes back, and only then
+merges through `composite_face`, which cross-fades on a Gaussian-blurred SAM mask with
+`feather=10`. The base it merges into is the global Qwen result.
+
+Two consequences follow, and both matter when tuning:
+
+- **Everything inside the crop is regenerated, including the pixels the mask later
+  discards.** The generation is therefore conditioned on a fully noised neighbourhood,
+  not on an intact one. An alternative design passes the mask into the sampler as a
+  latent noise mask, so only masked pixels are ever denoised and the edge transition
+  happens inside the generation rather than as a post-hoc blend. That approach has
+  never been tried in this runtime and is an open lever, particularly since the face
+  stage is the largest measured quality contributor: removing it costs 3.5 dB inside
+  the face boxes on one fixture and 6.1 dB on another.
+- **`FACE_DENOISE_SCALE = 0.5` is best understood as compensation for the above.**
+  Regenerating a whole crop and blending is a stronger operation than denoising only
+  inside a mask, so the halved strength brings the visible result back into range. Read
+  it as coupled to the compositing design rather than as an independently calibrated
+  constant: changing the compositing without revisiting the scale would change output
+  strength by roughly a factor of two.
+
 The maintained implementation preserves the previously oracle-tested strength,
 conditioning, crop, and sampler parameters as compatibility contracts. Its Python
 orchestration, YuNet integration, SAM selection, masks, sizing helpers, and pixel
