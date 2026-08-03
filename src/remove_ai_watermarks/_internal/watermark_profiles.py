@@ -34,7 +34,11 @@ PROFILE_CHOICES = (QWEN_ZIMAGE_PROFILE, SDXL_ZIMAGE_PROFILE)
 # the CLI passed on a torch+diffusers environment and the run then died at the
 # DiffSynth face stage, telling the user to install an extra that does not contain it.
 REMOVAL_MODULES = ("torch", "diffusers", "diffsynth")
-INVISIBLE_EXTRA = "remove-ai-watermarks[qwen-zimage]"
+# Shell-quoted, because this string is printed as a command the user copy-pastes.
+# Bare brackets are a glob in zsh (the macOS default shell): an unquoted
+# ``pip install remove-ai-watermarks[qwen-zimage]`` dies with "no matches found"
+# before pip ever runs -- another install hint that does not install.
+INVISIBLE_EXTRA = "'remove-ai-watermarks[qwen-zimage]'"
 
 # qwen-zimage's output already matches the input's detail level, so polishing it is a
 # no-op at best. sdxl-zimage's global pass leaves the softer output the polish exists

@@ -636,8 +636,9 @@ class QwenZImagePipeline:
     def _require_cuda(self) -> None:
         if self.device != "cuda":
             raise RuntimeError(
-                "The qwen-zimage pipeline is CUDA-only. Its Qwen-Image-2512 and "
-                "Z-Image models do not fit the supported MPS path."
+                "The qwen-zimage pipeline is CUDA-only; there is no CPU or MPS path "
+                "for it. WatermarkRemover already refuses a non-CUDA device, so "
+                "reaching this guard means the pipeline was constructed directly."
             )
 
     def _vram_limit(self) -> float | None:

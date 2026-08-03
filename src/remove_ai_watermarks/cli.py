@@ -286,8 +286,7 @@ _cpu_offload_option = click.option(
     help=(
         "Offload model components to CPU between CUDA calls instead of keeping the "
         "whole pipeline in VRAM, at the cost of speed. For qwen-zimage, forces the "
-        "face stack to offload instead of using automatic residency. No effect on "
-        "cpu/mps."
+        "face stack to offload instead of using automatic residency."
     ),
 )
 

@@ -179,23 +179,25 @@ overlapping tiles. It avoids the explicit downscale, but it is not pixel
 lossless: each tile is independently regenerated. With `qwen-zimage`, only the
 global Qwen stage is tiled; the face stage runs after tile blending.
 
-### CPU offload is CUDA only
+### CPU offload trades speed for VRAM
 
-`--cpu-offload` moves Diffusers model components between CPU and CUDA instead of
-keeping the complete standard pipeline in GPU memory. For `qwen-zimage`, it
-forces the face stack to use its offload path.
+`--cpu-offload` forces both stacks of the two-stage profile out of automatic
+device residency, streaming weights instead of pinning them. It reduces CUDA
+memory pressure at the cost of speed.
 
-The option reduces CUDA memory pressure at the cost of speed. It has no effect
-on CPU or MPS and fails loudly when a CUDA Diffusers pipeline does not expose
-the required offload method.
+Residency is otherwise chosen from the card's total VRAM. On a card large enough
+to hold a stack, offloading is pure waste: DiffSynth drops weights to the meta
+device and re-reads every parameter from disk on each stage transition.
 
-### MPS may fall back to CPU
+### There is no CPU or MPS fallback
 
-The SDXL paths include an MPS out-of-memory fallback that reloads on CPU. A run
-that appears much slower after an MPS failure may be continuing on CPU.
+Invisible-watermark removal refuses any device but CUDA at construction. There is
+no MPS out-of-memory fallback that continues on CPU, and no lighter profile to
+drop to: both remaining profiles need an NVIDIA GPU.
 
-Memory needs depend on the pipeline, input size, dtype, and machine. Use tiling,
-a resolution cap, or a lighter pipeline when necessary.
+When a run does not fit, the levers are `--tile` (native geometry, tiled
+diffusion), `--max-resolution` (an explicit downscale), and `--cpu-offload`.
+Memory needs depend on the profile, input size, dtype, and card.
 
 ## Metadata and formats
 

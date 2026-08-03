@@ -86,8 +86,10 @@ sweep asserts on stderr, or the codes get split -- the latter is the better fix.
 #### Coverage method
 
 Compare the flags and values exercised by the matrix against the options declared by
-the CLI. Include optional backends, batch modes, tiling, region-targeted composition,
-and the ffmpeg audio/video strip. The gap to find is not only
+the CLI. Include optional backends, batch modes, tiling, and the ffmpeg audio/video
+strip. (Region-targeted diffusion composition was on this list until the parameter
+was deleted: nothing but a caller-less convenience wrapper ever reached it, and the
+user-facing region path is `erase`, which inpaints instead.) The gap to find is not only
 "logic untested" but
 "never executed on real data", which is precisely what this campaign is for.
 

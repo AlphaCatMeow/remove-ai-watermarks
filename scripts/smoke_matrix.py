@@ -304,7 +304,7 @@ def main() -> None:
         _diffusion_rows(r, tmp, doubao)
     else:
         for name in ("invisible", "all", "batch --mode invisible"):
-            r.skip(f"{name} (model-running body)", "pass --diffusion to exercise it (needs the SDXL weights)")
+            r.skip(f"{name} (model-running body)", "pass --diffusion to exercise it (needs CUDA and the model weights)")
 
     # ---- real-data formats and shapes ---------------------------------------
     if not a.quick:
@@ -486,7 +486,7 @@ def _sdxl_watermark_bits(img: object) -> float:
 
 
 def _diffusion_rows(r: Runner, tmp: Path, doubao: Path) -> None:
-    """Exercise the model-running bodies at a reduced resolution (MPS-friendly).
+    """Exercise the model-running bodies at a reduced resolution (CUDA required).
 
     Bounded with `--max-resolution 512` and a fixed seed: the point is that the paths
     RUN and keep their contracts, not to certify removal strength (that needs the
@@ -508,7 +508,7 @@ def _diffusion_rows(r: Runner, tmp: Path, doubao: Path) -> None:
     # OUTPUT and the row degrades to a skip rather than a false pass if it goes fragile.
     mj = SAMPLES / "mj-1.png"
     inv = tmp / "inv_mj.png"
-    res = r.run("invisible runs (mps, 512px)", ["invisible", str(mj), "-o", str(inv), "--force", *small], timeout=1800)
+    res = r.run("invisible runs (512px)", ["invisible", str(mj), "-o", str(inv), "--force", *small], timeout=1800)
     if res.status == "pass" and inv.exists():
         src_img, out_img = imread(str(mj)), imread(str(inv))
         r.check(
@@ -536,7 +536,7 @@ def _diffusion_rows(r: Runner, tmp: Path, doubao: Path) -> None:
 
     # `all`: every stage must land -- the visible mark AND the metadata both gone.
     allout = tmp / "all_out.png"
-    res = r.run("all runs (mps, 512px)", ["all", str(doubao), "-o", str(allout), *small], timeout=1800)
+    res = r.run("all runs (512px)", ["all", str(doubao), "-o", str(allout), *small], timeout=1800)
     if res.status == "pass" and allout.exists():
         rep = json.loads(_capture(["identify", str(allout), "--json"]))
         r.check(
@@ -555,7 +555,7 @@ def _diffusion_rows(r: Runner, tmp: Path, doubao: Path) -> None:
         shutil.copy(f, bd / f.name)
     bout = tmp / "batch_inv_out"
     res = r.run(
-        "batch --mode invisible runs (mps, 512px)",
+        "batch --mode invisible runs (512px)",
         ["batch", str(bd), "--mode", "invisible", "-o", str(bout), *small],
         expect_exit=None,
         timeout=3600,
@@ -567,45 +567,11 @@ def _diffusion_rows(r: Runner, tmp: Path, doubao: Path) -> None:
     # `batch --mode all` -- the only --mode value the matrix never ran.
     aout = tmp / "batch_all_out"
     r.run(
-        "batch --mode all runs (mps, 512px)",
+        "batch --mode all runs (512px)",
         ["batch", str(bd), "--mode", "all", "-o", str(aout), *small],
         expect_exit=None,
         timeout=3600,
     )
-
-    # The AI-enhanced composite path: regenerate ONLY a region and feather it back,
-    # leaving everything outside the box pixel-exact. Library-level -- the CLI has no
-    # flag for it, so it would otherwise never be exercised on real data.
-    try:
-        import numpy as np
-
-        from remove_ai_watermarks._internal.watermark_remover import WatermarkRemover
-        from remove_ai_watermarks.image_io import imread
-
-        src = imread(str(mj))
-        h, w = src.shape[:2]
-        box = (w // 4, h // 4, w // 4, h // 4)
-        # Default profile, default four-step schedule: the remover rejects any other
-        # step count now, and the retired controlnet profile no longer exists.
-        rem = WatermarkRemover()
-        rout = tmp / "region_composite.png"
-        rem.remove_watermark(mj, rout, strength=0.15, seed=0, region=box)
-        got = imread(str(rout))
-        if got is None or got.shape != src.shape:
-            r.check("region composite keeps the frame outside the box", False, "shape changed or unreadable")
-        else:
-            mask = np.ones(src.shape[:2], dtype=bool)
-            x, y, bw, bh = box
-            # Outside the box PLUS the feather margin must be untouched.
-            pad = 96
-            mask[max(0, y - pad) : y + bh + pad, max(0, x - pad) : x + bw + pad] = False
-            r.check(
-                "region composite keeps the frame outside the box",
-                bool(np.array_equal(src[mask], got[mask])),
-                "pixels changed outside the regenerated region",
-            )
-    except Exception as e:
-        r.skip("region composite (remove_watermark(region=...))", f"{type(e).__name__}: {e}"[:120])
 
 
 if __name__ == "__main__":

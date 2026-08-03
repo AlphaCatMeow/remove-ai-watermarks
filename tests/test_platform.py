@@ -14,6 +14,7 @@ import pytest
 from remove_ai_watermarks._internal.utils import get_image_format, is_supported_format
 from remove_ai_watermarks._internal.watermark_profiles import (
     PROFILE_CHOICES,
+    REMOVAL_MODULES,
     SDXL_ZIMAGE_GEMINI_STRENGTH,
     SDXL_ZIMAGE_OPENAI_STRENGTH,
     SDXL_ZIMAGE_UNKNOWN_STRENGTH,
@@ -67,20 +68,19 @@ class TestDeviceDetection:
         here only defers a guaranteed failure to model-load time - several layers down,
         after the dependency check and the pipeline import, under a message naming
         whichever profile the internal pipeline happens to be.
+
+        Deliberately NOT gated on the diffusion stack. It used to be, and since no CI
+        job installs diffusers or diffsynth (the dev extra pulls torch only, via
+        invisible-watermark) the guard skipped in every environment it ran in --
+        including the maintainer's. The refusal fires before any torch attribute is
+        touched, so faking the dependency probe is enough to reach it.
         """
-        if not is_watermark_removal_available():
-            pytest.skip("torch/diffusers not installed")
-        import torch
+        from remove_ai_watermarks._internal import watermark_remover as module
 
-        from remove_ai_watermarks._internal.watermark_remover import WatermarkRemover
-
-        for device in ("cpu", "mps", "xpu"):
-            with pytest.raises(ValueError, match="CUDA-only"):
-                WatermarkRemover(device=device)
-
-        remover = WatermarkRemover(device="cuda")
-        assert remover.device == "cuda"
-        assert remover.torch_dtype == torch.bfloat16
+        with patch.object(module, "is_watermark_removal_available", return_value=True):
+            for device in ("cpu", "mps", "xpu"):
+                with pytest.raises(ValueError, match="CUDA-only"):
+                    module.WatermarkRemover(device=device)
 
     def test_the_refusal_names_the_resolved_device_not_a_bare_none(self):
         """``device=None`` on a CUDA-less host must report "cpu", not "None".
@@ -88,15 +88,27 @@ class TestDeviceDetection:
         The message used to interpolate the raw argument, so the common auto-detect
         path told the user that ``'None'`` cannot run the removal.
         """
-        if not is_watermark_removal_available():
-            pytest.skip("torch/diffusers not installed")
         from remove_ai_watermarks._internal import watermark_remover as module
 
         with (
+            patch.object(module, "is_watermark_removal_available", return_value=True),
             patch.object(module, "get_device", return_value="cpu"),
             pytest.raises(ValueError, match="'cpu' cannot run it"),
         ):
             module.WatermarkRemover(device=None)
+
+    def test_a_cuda_remover_picks_the_profile_dtype(self):
+        """The dtype half still needs real torch, so it keeps its skip."""
+        if not is_watermark_removal_available():
+            pytest.skip("the qwen-zimage extra is not installed")
+        import torch
+
+        from remove_ai_watermarks._internal.watermark_remover import WatermarkRemover
+
+        remover = WatermarkRemover(device="cuda")
+        assert remover.device == "cuda"
+        assert remover.torch_dtype == torch.bfloat16
+        assert WatermarkRemover(device="cuda", pipeline="sdxl-zimage").torch_dtype == torch.float16
 
 
 class TestModelProfiles:
@@ -155,7 +167,7 @@ class TestNoReembeddedWatermark:
 
     def test_sdxl_global_stage_disables_watermarker(self, monkeypatch: pytest.MonkeyPatch):
         if not is_watermark_removal_available():
-            pytest.skip("torch/diffusers not installed")
+            pytest.skip("the qwen-zimage extra is not installed")
         import diffusers
 
         from remove_ai_watermarks._internal.sdxl_zimage_pipeline import SdxlZImagePipeline
@@ -315,24 +327,46 @@ class TestFormatUtils:
 
 
 class TestAvailability:
-    """Tests for dependency availability checks."""
+    """The CLI gate and the remover precondition must answer from the same module list.
 
-    def test_watermark_removal_available(self):
-        # Reflects the actual environment: True iff torch + diffusers (the gpu
-        # extra) are importable. The default+dev CI env has no diffusers, so this
-        # must not assume the full stack is present.
-        import importlib.util
+    Both used to hardcode (torch, diffusers) while the code moved to REMOVAL_MODULES,
+    which includes diffsynth. In a torch+diffusers-only environment the assertions were
+    then simply wrong -- and, worse, comparing each gate against a tuple copied from
+    itself can never catch the two disagreeing, which is the drift that let the CLI pass
+    an environment the run then died in.
+    """
 
-        expected = all(importlib.util.find_spec(m) is not None for m in ("torch", "diffusers"))
-        assert is_watermark_removal_available() is expected
-
-    def test_invisible_is_available(self):
+    def test_both_gates_agree_and_read_the_shared_module_list(self):
         import importlib.util
 
         from remove_ai_watermarks.invisible_engine import is_available
 
-        expected = all(importlib.util.find_spec(m) is not None for m in ("torch", "diffusers"))
+        assert "diffsynth" in REMOVAL_MODULES
+        expected = all(importlib.util.find_spec(m) is not None for m in REMOVAL_MODULES)
+        assert is_watermark_removal_available() is expected
         assert is_available() is expected
+
+    def test_a_missing_module_closes_both_gates(self, monkeypatch: pytest.MonkeyPatch):
+        """Discriminating, not vacuous: it must FAIL if either gate stops requiring one.
+
+        Comparing the live answer to a tuple derived from the same constant passes on
+        any host -- with the full stack (True == True) and with none of it
+        (False == False). Simulate each module's absence instead.
+        """
+        import remove_ai_watermarks.invisible_engine as engine_module
+        from remove_ai_watermarks._internal import watermark_remover as remover_module
+
+        for missing in REMOVAL_MODULES:
+            present = {name: name != missing for name in REMOVAL_MODULES}
+            monkeypatch.setattr(
+                "remove_ai_watermarks.optional_deps.module_available",
+                lambda *names, _p=present: all(_p.get(n, True) for n in names),
+            )
+            # The remover probes at import time, so drive its cached flags directly.
+            monkeypatch.setattr(remover_module, "_HAS_TORCH", missing != "torch")
+            monkeypatch.setattr(remover_module, "_HAS_REMOVAL_MODULES", missing == "torch")
+            assert engine_module.is_available() is False, f"engine gate ignores a missing {missing}"
+            assert remover_module.is_watermark_removal_available() is False, f"remover gate ignores a missing {missing}"
 
 
 # ── Platform-specific path handling ─────────────────────────────────

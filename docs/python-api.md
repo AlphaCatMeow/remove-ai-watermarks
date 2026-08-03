@@ -401,9 +401,9 @@ engine.remove_watermark(
 )
 ```
 
-`device=None` detects CUDA. The only other accepted value is `"cuda"`; anything
-else raises at construction rather than deferring a guaranteed failure to model
-load time.
+`device=None` and `device="auto"` both run detection. `"cuda"` pins it without
+detecting. Every other value raises at construction rather than deferring a
+guaranteed failure to model-load time.
 
 For limited CUDA memory:
 

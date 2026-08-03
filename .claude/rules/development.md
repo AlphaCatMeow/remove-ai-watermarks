@@ -11,7 +11,11 @@ Every single-image command declares `source` with `dir_okay=False`; `batch` decl
 
 Exit-code and no-signal behavior is a public contract. Read the command-line section of [`../../docs/module-internals.md`](../../docs/module-internals.md) before changing it.
 
-Do not add an option whose only outcome is an error. Model id, step count, CFG and any non-CUDA device are fixed by the profile, so none of them is a parameter of the CLI, `InvisibleEngine`, or `WatermarkRemover` -- they were accepted-then-rejected for a while, which moved the failure several frames below the caller and advertised choices the pinned stack cannot honor. If a value cannot vary, delete the knob rather than validating it. The same rule applies to install hints: name the extra that actually makes the command work (`qwen-zimage`, not `diffusion`).
+Do not add an option whose only outcome is an error. Model id, step count and CFG are fixed by the profile, so none of them is a parameter of the CLI, `InvisibleEngine`, or `WatermarkRemover` -- they were accepted-then-rejected for a while, which moved the failure several frames below the caller and advertised choices the pinned stack cannot honor. If a value cannot vary, delete the knob rather than validating it.
+
+`device` is the deliberate exception and stays a library parameter: `None`/`"auto"` detect, `"cuda"` pins without detecting, and everything else raises at construction. It is not a CLI option, because the only value a user could usefully type is the one auto-detection already finds.
+
+The same rule applies to install hints: name the extra that actually makes the command work (`qwen-zimage`, not `diffusion`), and keep the printed command shell-quoted -- bare `pkg[extra]` is a glob in zsh.
 
 ## Local gate
 

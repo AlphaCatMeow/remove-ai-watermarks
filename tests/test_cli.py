@@ -363,16 +363,21 @@ class TestInvisibleCommand:
         that advertises a capability the library does not have. Click now refuses the
         option itself, which is the honest answer and the one a caller can act on.
         """
-        for retired in (
+        retired = (
             ["--model", "org/custom-sdxl"],
             ["--steps", "20"],
             ["--guidance-scale", "5.5"],
             ["--device", "cpu"],
             ["--auto"],
-        ):
-            result = runner.invoke(main, ["invisible", str(sample_png), *retired, "--force"])
-            assert result.exit_code == 2, f"{retired[0]}: {result.output}"
-            assert "No such option" in result.output, f"{retired[0]}: {result.output}"
+        )
+        # All THREE diffusion commands, not just `invisible`. Each used to declare these
+        # inline, so removing them from one and not the others is a live possibility.
+        for command in ("invisible", "all", "batch"):
+            target = str(sample_png.parent) if command == "batch" else str(sample_png)
+            for args in retired:
+                result = runner.invoke(main, [command, target, *args, "--force"])
+                assert result.exit_code == 2, f"{command} {args[0]}: {result.output}"
+                assert "No such option" in result.output, f"{command} {args[0]}: {result.output}"
 
     def test_retired_pipeline_names_are_rejected_not_silently_remapped(self, runner, sample_png):
         """default/sdxl/controlnet/qwen were removed with their CPU code paths.
@@ -862,11 +867,12 @@ class TestBatchCommand:
         assert out[0, 0, 3] == 0
         assert out[100, 100, 3] == 255
 
-    def test_batch_explicit_adaptive_polish_overrides_the_qwen_zimage_off(self, runner, tmp_path):
-        """qwen-zimage leaves the polish off by default; a typed flag still turns it on.
+    def test_batch_forwards_an_explicit_adaptive_polish(self, runner, tmp_path):
+        """A typed --adaptive-polish must reach the engine as True, not as None.
 
-        The off is a parameter-source check, not a changed default, so it must yield to
-        an explicit --adaptive-polish rather than swallowing it.
+        This mocks the engine, so it covers the CLI's forwarding only; the per-profile
+        resolution of an UNSET flag happens inside the real engine and is guarded by
+        test_invisible_engine.py::TestEngineResolvesThePolishPerProfile.
         """
         input_dir = _make_batch_dir(tmp_path, count=2)
         output_dir = tmp_path / "output"
@@ -942,6 +948,19 @@ class TestGpuHintMarkup:
     which installs torch and diffusers but not the DiffSynth face stage both
     profiles run -- so following the advice produced a second, different failure.
     """
+
+    def test_the_hint_is_a_command_the_user_can_actually_paste(self, runner, sample_png):
+        """The extras bracket must be shell-quoted.
+
+        A bulk replace once folded these hints into one constant and dropped the quotes
+        the originals had. `pip install remove-ai-watermarks[qwen-zimage]` dies with
+        "zsh: no matches found" on the macOS default shell before pip ever runs -- an
+        install hint that does not install, which is the failure this hint was fixed to
+        stop producing in the first place.
+        """
+        with patch("remove_ai_watermarks.invisible_engine.is_available", return_value=False):
+            result = runner.invoke(main, ["invisible", str(sample_png)])
+        assert "pip install 'remove-ai-watermarks[qwen-zimage]'" in result.output
 
     def test_invisible_install_hint_names_the_working_extra(self, runner, sample_png):
         with patch("remove_ai_watermarks.invisible_engine.is_available", return_value=False):

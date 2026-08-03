@@ -502,15 +502,21 @@ mandatory global stage and YuNet while leaving the optional Z-Image and SAM face
 stack lazy until a face is detected. The default `preload()` still loads every
 stage.
 
-**What is deliberately not a parameter.** Model id, step count, CFG and any
-non-CUDA device are fixed by the profile, so none of them appears in
-`WatermarkRemover.__init__`, `remove_watermark`, `InvisibleEngine`, or the CLI.
-They used to be accepted and then rejected several frames down; a signature that
-refuses the argument outright fails where the caller can act on it, and stops a
-wrapper from threading a value that would silently do nothing. The step count and
-CFG live with the stage that runs them (`GLOBAL_STEPS`, `FACE_STEPS`, `GLOBAL_CFG`,
-`FACE_CFG` in `qwen_zimage_pipeline.py`). The dtype is likewise profile-owned: see
-"Face-stage dtype" for what an override cost the last time one existed.
+**What is deliberately not a parameter.** Model id, step count and CFG are fixed
+by the profile, so none of them appears in `WatermarkRemover.__init__`,
+`remove_watermark`, `InvisibleEngine`, or the CLI. They used to be accepted and
+then rejected several frames down; a signature that refuses the argument outright
+fails where the caller can act on it, and stops a wrapper from threading a value
+that would silently do nothing. The step count and CFG live with the stage that
+runs them (`GLOBAL_STEPS`, `FACE_STEPS`, `GLOBAL_CFG`, `FACE_CFG` in
+`qwen_zimage_pipeline.py`). The dtype is likewise profile-owned: see "Face-stage
+dtype" for what an override cost the last time one existed.
+
+`device` is the exception and remains a library parameter: `None` or `"auto"`
+detect, `"cuda"` pins without detecting (which is what a container that knows its
+hardware wants), and any other value raises at construction. It is not a CLI
+option, because the only useful value a user could type is the one detection
+already returns.
 
 [`invisible_engine.py`](../src/remove_ai_watermarks/invisible_engine.py) handles
 image sizing, postprocessing, and the public engine
@@ -523,16 +529,20 @@ and reporting it implied an Apple-silicon or Intel-GPU path that does not exist.
 The refusal names the *resolved* device, so `device=None` on a CUDA-less host says
 `'cpu'` rather than `'None'`.
 
-The Python engine and CLI do not have identical defaults for every optional
-postprocessing argument. Integrations that require reproducibility should pass
-the relevant values explicitly.
+The Python engine and the CLI now resolve the same defaults: the CLI forwards an
+unset `--adaptive-polish` and `--seed` as `None` and the engine applies the
+profile's answer, so a library caller and a CLI caller on one profile produce the
+same pixels. They diverged before, in opposite directions, for exactly this knob.
 
-The standard Qwen and ControlNet prompts are calibrated model inputs, and the
-ControlNet edge map uses fixed Canny thresholds of 100 and 200. Treat those
-values as behavioral compatibility contracts: a refactor must preserve them,
-and any deliberate change requires image-quality evaluation rather than only a
-unit-test pass. Exact prompt and edge-map regression guards live in
-`test_platform.py` and `test_invisible_engine.py`.
+The global and face prompts are calibrated model inputs, and the Canny edge map
+uses fixed thresholds of `_CANNY_LOW = 13` / `_CANNY_HIGH = 64`
+(`qwen_zimage_pipeline.py`). Treat those values as behavioral compatibility
+contracts: a refactor must preserve them, and any deliberate change requires
+image-quality evaluation rather than only a unit-test pass. The prompt and
+edge-map regression guards are
+`test_qwen_zimage_pipeline.py::test_global_kwargs_use_lightning_and_diffsynth_controlnet_shape`,
+`::test_face_kwargs_use_project_zimage_settings` and
+`::test_canny_control_image_is_three_channel_and_detects_an_edge`.
 
 Regression coverage:
 
@@ -542,9 +552,10 @@ Regression coverage:
 
 ### CPU offload
 
-CPU offload is enabled only when requested on CUDA. The standard Diffusers
-profiles call `enable_model_cpu_offload`. The `qwen-zimage` profile uses the
-same flag to force **both** its stacks out of automatic device residency.
+CPU offload is enabled only when requested. Nothing calls Diffusers'
+`enable_model_cpu_offload` any more -- that belonged to the deleted single-stage
+profiles. `--cpu-offload` now forces **both** stacks of the two-stage profiles out
+of automatic device residency.
 
 Residency is otherwise chosen from the card's total VRAM, once per stack:
 `resolve_global_model_residency` gates the mandatory Qwen stack at

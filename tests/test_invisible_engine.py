@@ -16,21 +16,19 @@ class TestIsAvailable:
         result = is_available()
         assert isinstance(result, bool)
 
-    def test_available_reflects_every_module_a_run_needs(self):
-        """True iff every module in REMOVAL_MODULES imports, diffsynth included.
+    def test_the_module_list_includes_the_face_stage_runtime(self):
+        """diffsynth is part of the answer, not an optional upgrade.
 
-        Derived from the same tuple the remover's precondition uses, so this cannot
-        pass while the two disagree -- the drift that let a torch+diffusers-only
-        environment clear the CLI gate and then die at the DiffSynth face stage.
-        Must not assume the full stack: the default+dev CI env has none of it.
+        Both profiles repair faces with the DiffSynth Z-Image stage, so a
+        torch+diffusers-only environment used to clear this gate and then die there.
+        The discriminating guard -- that this gate and the remover's precondition
+        BOTH close when any one module is missing -- lives in
+        ``test_platform.py::TestAvailability``; comparing ``is_available()`` to a
+        tuple derived from itself passes on every host and proves nothing.
         """
-        import importlib.util
-
         from remove_ai_watermarks._internal.watermark_profiles import REMOVAL_MODULES
 
         assert "diffsynth" in REMOVAL_MODULES
-        expected = all(importlib.util.find_spec(m) is not None for m in REMOVAL_MODULES)
-        assert is_available() is expected
 
 
 class TestInvisibleEngineInit:
@@ -144,3 +142,46 @@ class TestEngineConstructsWithoutAModelId:
 
         with pytest.raises(TypeError):
             engine_module.InvisibleEngine(model_id="org/custom", pipeline="qwen-zimage")  # type: ignore[call-arg]
+
+
+class TestEngineResolvesThePolishPerProfile:
+    """The engine, not the CLI, turns an unset adaptive_polish into the profile default.
+
+    This is the change that stopped a library caller and a CLI caller on one profile
+    from producing different pixels, and it had no test: rebinding
+    ``resolve_adaptive_polish`` to ``bool(value)`` -- exactly the pre-commit behaviour --
+    left the whole suite green.
+    """
+
+    @staticmethod
+    def _engine(profile: str):
+        from unittest.mock import MagicMock
+
+        engine = object.__new__(InvisibleEngine)
+        engine._progress_callback = None
+        engine._remover = MagicMock(model_profile=profile)
+        return engine
+
+    def _polish_used(self, profile: str, requested, tmp_path, monkeypatch) -> bool:
+        seen: list[bool] = []
+        monkeypatch.setattr(
+            "remove_ai_watermarks.humanizer.adaptive_polish",
+            lambda out, ref, seed=None: (seen.append(True), out)[1],
+        )
+        src = tmp_path / f"{profile}_{requested}.png"
+        Image.new("RGB", (32, 32), (90, 120, 150)).save(src)
+        engine = self._engine(profile)
+        engine._remover.remove_watermark.side_effect = lambda **kw: (
+            Image.open(kw["image_path"]).save(kw["output_path"]),
+            kw["output_path"],
+        )[1]
+        engine.remove_watermark(src, tmp_path / f"out_{profile}_{requested}.png", adaptive_polish=requested)
+        return bool(seen)
+
+    def test_unset_follows_the_profile_not_the_signature_default(self, tmp_path, monkeypatch):
+        assert self._polish_used("qwen-zimage", None, tmp_path, monkeypatch) is False
+        assert self._polish_used("sdxl-zimage", None, tmp_path, monkeypatch) is True
+
+    def test_an_explicit_value_still_wins_on_both_profiles(self, tmp_path, monkeypatch):
+        assert self._polish_used("qwen-zimage", True, tmp_path, monkeypatch) is True
+        assert self._polish_used("sdxl-zimage", False, tmp_path, monkeypatch) is False

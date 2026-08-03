@@ -433,7 +433,7 @@ The command runs:
 
 The visible options and diffusion options are also available on `all`.
 
-If diffusion is required but the `diffusion` extra is unavailable, `all` still
+If invisible removal is required but the `qwen-zimage` extra is unavailable, `all` still
 writes the result of the visible and metadata stages, prints a prominent
 warning, and exits with code 1. This prevents a partial result from being
 reported as complete.
