@@ -10,7 +10,7 @@ package:
 
 source:
   url: https://pypi.org/packages/source/r/remove-ai-watermarks/remove_ai_watermarks-${{ version }}.tar.gz
-  sha256: e68dd641c6b4d70149c30d4f6871675a9fe41567326482845847108409e2774e
+  sha256: ba2fe5d7a28950d90f72768fa5e6228ee02f74a9638c2ea84c822e1de965221e
 
 build:
   noarch: python
