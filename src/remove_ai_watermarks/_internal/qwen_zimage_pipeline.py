@@ -1039,7 +1039,7 @@ class QwenZImagePipeline:
     ) -> Image.Image:
         """Execute global regeneration and masked face repair."""
         self._require_cuda()
-        seed = resolve_seed(seed, "qwen-zimage")
+        seed = resolve_seed(seed)
         global_strength = (
             resolution_adaptive_denoise(image.width, image.height) if strength is None else float(strength)
         )

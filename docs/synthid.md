@@ -514,10 +514,17 @@ study (section 2.2) gives empirical floors:
 - **Google native 2816**: 0.15 clears (n=2, deployed controlnet worker, 2026-06-14) --
   the same rung as capped 1536, so no resolution penalty was observed.
 
-The default is **vendor-adaptive** (`watermark_profiles.resolve_strength` +
-`vendor_for_strength`): the tool reads the C2PA issuer on the original input and picks
+> **Superseded in 0.24.0.** The `sdxl`, `controlnet`, `qwen` and `default` profiles
+> were removed, and `OPENAI_STRENGTH` / `GEMINI_STRENGTH` / `UNKNOWN_STRENGTH` went
+> with them. Everything from here to the end of this section is a record of what was
+> measured on those profiles, kept because the oracle verdicts are still the evidence
+> base. For the strength policy in force now see `module-internals.md`: `qwen-zimage`
+> uses `resolution_adaptive_denoise`, `sdxl-zimage` a flat vendor ladder.
+
+The default was **vendor-adaptive** (`watermark_profiles.resolve_strength` +
+`vendor_for_strength`): the tool read the C2PA issuer on the original input and picked
 `OPENAI_STRENGTH` 0.10 / `GEMINI_STRENGTH` 0.15 / `UNKNOWN_STRENGTH` 0.15 **(LOWERED
-2026-06-14 from the 2026-06-04 cert floors 0.20/0.30/0.30)**. **The SAME ladder applies
+2026-06-14 from the 2026-06-04 cert floors 0.20/0.30/0.30)**. **The SAME ladder applied
 to both pipelines** (`sdxl` and `controlnet`). The 2026-06-14 re-test on the deployed
 Modal controlnet worker (v0.10.0) cleared SynthID on the oracle at OpenAI 0.10 (2
 photoreal) and Google 0.15 (2 NATIVE 2816x1536, contradicting the "native >= 0.30" guess

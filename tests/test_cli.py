@@ -327,7 +327,7 @@ class TestInvisibleCommand:
         expected = sample_png.with_stem(sample_png.stem + "_clean")
         assert expected.exists()
 
-    def test_invisible_adaptive_polish_on_by_default(self, runner, sample_png):
+    def test_invisible_adaptive_polish_off_by_default_under_qwen_zimage(self, runner, sample_png):
         mock_cls, mock_engine = _mock_invisible_engine()
         with (
             patch("remove_ai_watermarks.invisible_engine.is_available", return_value=True),
@@ -336,8 +336,10 @@ class TestInvisibleCommand:
         ):
             result = runner.invoke(main, ["invisible", str(sample_png), "--force"])
         assert result.exit_code == 0, result.output
-        # adaptive_polish is ON by default (self-gating, so a no-op where not needed).
-        assert mock_engine.remove_watermark.call_args.kwargs["adaptive_polish"] is True
+        # The default profile is qwen-zimage, and _resolve_profile_polish keeps its
+        # output untouched unless polish was asked for explicitly. It stays available:
+        # passing --adaptive-polish still turns it on (covered separately).
+        assert mock_engine.remove_watermark.call_args.kwargs["adaptive_polish"] is False
         # Default model is None (the SDXL base) and CFG is None (the library's 7.5).
         assert mock_cls.call_args.kwargs["model_id"] is None
         assert mock_engine.remove_watermark.call_args.kwargs["guidance_scale"] is None
@@ -368,30 +370,16 @@ class TestInvisibleCommand:
         assert mock_cls.call_args.kwargs["model_id"] == "org/custom-sdxl"
         assert mock_engine.remove_watermark.call_args.kwargs["guidance_scale"] == 5.5
 
-    def test_pipeline_default_alias_warns_and_maps_to_sdxl(self, runner, sample_png):
-        mock_cls, _mock_engine = _mock_invisible_engine()
-        with (
-            patch("remove_ai_watermarks.invisible_engine.is_available", return_value=True),
-            patch("remove_ai_watermarks.cli.InvisibleEngine", mock_cls, create=True),
-            patch("remove_ai_watermarks.invisible_engine.InvisibleEngine", mock_cls),
-        ):
-            result = runner.invoke(main, ["invisible", str(sample_png), "--pipeline", "default", "--force"])
-        assert result.exit_code == 0, result.output
-        # The legacy value warns and is normalized to "sdxl" before the engine is built.
-        assert "deprecated" in result.output.lower()
-        assert mock_cls.call_args.kwargs["pipeline"] == "sdxl"
+    def test_retired_pipeline_names_are_rejected_not_silently_remapped(self, runner, sample_png):
+        """default/sdxl/controlnet/qwen were removed with their CPU code paths.
 
-    def test_pipeline_sdxl_does_not_warn(self, runner, sample_png):
-        mock_cls, _mock_engine = _mock_invisible_engine()
-        with (
-            patch("remove_ai_watermarks.invisible_engine.is_available", return_value=True),
-            patch("remove_ai_watermarks.cli.InvisibleEngine", mock_cls, create=True),
-            patch("remove_ai_watermarks.invisible_engine.InvisibleEngine", mock_cls),
-        ):
-            result = runner.invoke(main, ["invisible", str(sample_png), "--pipeline", "sdxl", "--force"])
-        assert result.exit_code == 0, result.output
-        assert "deprecated" not in result.output.lower()
-        assert mock_cls.call_args.kwargs["pipeline"] == "sdxl"
+        Click rejects them at parse time. Mapping them onward would run a profile the
+        caller never chose, at a different strength and a different quality.
+        """
+        for retired in ("default", "sdxl", "controlnet", "qwen"):
+            result = runner.invoke(main, ["invisible", str(sample_png), "--pipeline", retired, "--force"])
+            assert result.exit_code == 2, result.output
+            assert "is not one of" in result.output
 
     def test_invisible_nonexistent_file(self, runner):
         result = runner.invoke(main, ["invisible", "/nonexistent/file.png"])
@@ -871,8 +859,10 @@ class TestBatchCommand:
         assert out[100, 100, 3] == 255
 
     def test_batch_auto_is_deprecated_and_enables_polish(self, runner, tmp_path):
-        """--auto is retired: it warns and just enables the adaptive polish (the
-        pipeline is always the default controlnet now)."""
+        """--auto is retired: it warns and just enables the adaptive polish.
+
+        It no longer selects a pipeline: qwen-zimage is the only default there is.
+        """
         input_dir = _make_batch_dir(tmp_path, count=2)
         output_dir = tmp_path / "output"
         mock_cls, mock_engine = _mock_invisible_engine()
@@ -890,7 +880,7 @@ class TestBatchCommand:
         assert "2 processed" in result.output
         assert "deprecated" in result.output.lower()
         # Pipeline stays the default controlnet; --auto only turned the polish on.
-        assert mock_cls.call_args.kwargs["pipeline"] == "controlnet"
+        assert mock_cls.call_args.kwargs["pipeline"] == "qwen-zimage"
         assert mock_engine.remove_watermark.call_args.kwargs["adaptive_polish"] is True
 
     def test_batch_default_output_dir(self, runner, tmp_path):

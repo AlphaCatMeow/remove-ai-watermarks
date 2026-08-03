@@ -20,7 +20,9 @@ from ._internal.watermark_profiles import (
     DEFAULT_MODEL_ID as DEFAULT_SDXL_MODEL_ID,
 )
 from ._internal.watermark_profiles import (
+    DEFAULT_PROFILE,
     resolve_seed,
+    resolve_steps,
 )
 
 if TYPE_CHECKING:
@@ -90,7 +92,7 @@ class InvisibleEngine:
         self,
         model_id: str | None = None,
         device: str | None = None,
-        pipeline: str = "controlnet",
+        pipeline: str = DEFAULT_PROFILE,
         hf_token: str | None = None,
         progress_callback: Callable[[str], None] | None = None,
         controlnet_conditioning_scale: float = 1.0,
@@ -101,19 +103,16 @@ class InvisibleEngine:
         Args:
             model_id: HuggingFace model ID. None = use the SDXL base default.
             device: Device for inference (auto/cpu/mps/cuda/xpu). None = auto.
-            pipeline: Pipeline profile. "controlnet" (DEFAULT; SDXL + canny ControlNet
-                that preserves text/face structure via edge conditioning while removing
-                SynthID), "sdxl" (plain SDXL img2img, lighter but leaves SynthID on
-                flat-graphic content), or "qwen" (Qwen-Image 20B img2img, best text/
-                structure preservation but CUDA/cloud-class), or "qwen-zimage"
-                (Qwen-Image-2512 Lightning + Canny, then SAM-masked Z-Image face
-                repair; CUDA-only), or "sdxl-zimage" (the same recipe and the same face
-                stage on an SDXL global pass, vendor-adaptive strength because an SDXL
-                global stage needs more of it; CUDA-only). "default" aliases "sdxl".
+            pipeline: Pipeline profile, one of "qwen-zimage" (DEFAULT;
+                Qwen-Image-2512 Lightning + Canny, then SAM-masked Z-Image face repair)
+                or "sdxl-zimage" (the same recipe and the same face stage on an SDXL
+                global pass, vendor-adaptive strength because an SDXL global stage
+                needs more of it). BOTH ARE CUDA-ONLY -- there is no CPU or MPS path
+                for invisible-watermark removal.
             hf_token: HuggingFace API token.
             progress_callback: Optional callback for progress messages.
-            controlnet_conditioning_scale: ControlNet structure-preservation
-                strength (controlnet pipeline only).
+            controlnet_conditioning_scale: Canny ControlNet structure-preservation
+                strength on the global stage of both profiles.
             cpu_offload: Offload model components to CPU between CUDA calls instead
                 of keeping the whole pipeline in VRAM, at the cost of speed. For
                 qwen-zimage, force the face stack to offload instead of using automatic
@@ -238,11 +237,8 @@ class InvisibleEngine:
         """
         import tempfile
 
-        if num_inference_steps is None:
-            profile = getattr(self._remover, "model_profile", None)
-            num_inference_steps = 4 if profile in {"qwen-zimage", "sdxl-zimage"} else 100
-        profile = getattr(self._remover, "model_profile", "controlnet")
-        seed = resolve_seed(seed, profile)
+        num_inference_steps = resolve_steps(num_inference_steps)
+        seed = resolve_seed(seed)
 
         from PIL import Image, ImageOps
 

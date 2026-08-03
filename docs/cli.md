@@ -363,10 +363,15 @@ remove-ai-watermarks invisible image.png -o clean.png --force
 
 | Pipeline | When to use it |
 | --- | --- |
-| `controlnet` | Default compatibility profile with structural conditioning |
-| `sdxl` | Lighter plain SDXL regeneration |
-| `qwen` | Large CUDA oriented Qwen Image profile |
-| `qwen-zimage` | CUDA only high fidelity profile with a separate face stage |
+| `qwen-zimage` | Default. Qwen-Image-2512 global pass plus a SAM-masked Z-Image face stage |
+| `sdxl-zimage` | The same recipe and face stage on an SDXL global pass, at a higher denoise |
+
+**Both are CUDA-only.** There is no CPU or MPS profile for invisible-watermark
+removal. The former `controlnet`, `sdxl`, `qwen` and `default` profiles were removed
+rather than kept as a CPU path: none of them matched this recipe's face preservation,
+so offering them implied a quality the library no longer delivers. Passing a retired
+name is rejected at parse time rather than remapped. Visible-mark removal and every
+identify path still run anywhere.
 
 Example:
 

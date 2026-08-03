@@ -389,7 +389,7 @@ from pathlib import Path
 from remove_ai_watermarks.invisible_engine import InvisibleEngine
 
 engine = InvisibleEngine(
-    pipeline="controlnet",
+    pipeline="qwen-zimage",  # the default; the only other value is "sdxl-zimage"
     device=None,
     cpu_offload=False,
 )
@@ -407,15 +407,16 @@ For limited CUDA memory:
 
 ```python
 engine = InvisibleEngine(
-    pipeline="controlnet",
+    pipeline="qwen-zimage",
     cpu_offload=True,
 )
 ```
 
-For the CUDA only high fidelity profile:
+Both profiles are CUDA-only, so `device=None` resolving to CPU or MPS cannot run
+invisible-watermark removal at all. For the SDXL global stage instead of Qwen:
 
 ```python
-engine = InvisibleEngine(pipeline="qwen-zimage")
+engine = InvisibleEngine(pipeline="sdxl-zimage")
 ```
 
 The `qwen-zimage` extra must be installed for that profile.

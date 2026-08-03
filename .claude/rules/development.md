@@ -23,7 +23,6 @@ Do not classify an entire module as untestable because its main path downloads a
 
 - target-size selection in `test_invisible_engine.py`;
 - unsharp and adaptive-polish helpers in `test_humanizer.py`;
-- mocked device fallback in `test_img2img_runner.py`;
 - tiling geometry and blending in `test_tiling.py`;
 - prompt-embedding cache keying, storage round-trip, and the cross-pipeline reuse
   that lets a stack load without its text encoder, in `test_qwen_zimage_pipeline.py`;

@@ -530,12 +530,10 @@ def test_profile_defaults_to_four_global_steps():
     )
 
     assert normalize_profile("qwen-zimage") == "qwen-zimage"
-    assert resolve_steps(None, "qwen-zimage") == 4
-    assert resolve_steps(None, "controlnet") == 50
-    assert resolve_steps(12, "qwen-zimage") == 12
-    assert resolve_seed(None, "qwen-zimage") == 0
-    assert resolve_seed(None, "controlnet") is None
-    assert resolve_seed(17, "qwen-zimage") == 17
+    assert resolve_steps(None) == 4
+    assert resolve_steps(12) == 12
+    assert resolve_seed(None) == 0
+    assert resolve_seed(17) == 17
 
 
 def test_cli_exposes_qwen_zimage_profile():
@@ -586,7 +584,7 @@ def test_watermark_remover_dispatches_to_full_pipeline(tmp_path, monkeypatch):
 
     runtime = MagicMock()
     runtime.run.return_value = Image.new("RGB", (64, 48), (50, 60, 70))
-    remover = WatermarkRemover(device="cpu", pipeline="qwen-zimage")
+    remover = WatermarkRemover(device="cuda", pipeline="qwen-zimage")
     monkeypatch.setattr(remover, "_load_qwen_zimage_pipeline", lambda: runtime)
     assert remover.model_id == "Qwen/Qwen-Image-2512 + Tongyi-MAI/Z-Image-Turbo"
 
@@ -612,7 +610,7 @@ def test_watermark_remover_dispatches_qwen_tiling_to_full_pipeline(tmp_path, mon
 
     runtime = MagicMock()
     runtime.run.return_value = Image.new("RGB", (96, 80), (50, 60, 70))
-    remover = WatermarkRemover(device="cpu", pipeline="qwen-zimage")
+    remover = WatermarkRemover(device="cuda", pipeline="qwen-zimage")
     monkeypatch.setattr(remover, "_load_qwen_zimage_pipeline", lambda: runtime)
 
     remover.remove_watermark(
@@ -746,11 +744,11 @@ def test_qwen_zimage_rejects_runtime_knobs_that_change_fixed_graph(tmp_path, mon
 
     _mock_watermark_runtime_deps(monkeypatch)
     with pytest.raises(ValueError, match="fixed Qwen-Image-2512"):
-        WatermarkRemover(model_id="custom/model", device="cpu", pipeline="qwen-zimage")
+        WatermarkRemover(model_id="custom/model", device="cuda", pipeline="qwen-zimage")
 
     source = tmp_path / "source.png"
     Image.new("RGB", (64, 48)).save(source)
-    remover = WatermarkRemover(device="cpu", pipeline="qwen-zimage")
+    remover = WatermarkRemover(device="cuda", pipeline="qwen-zimage")
     with pytest.raises(ValueError, match=r"CFG 1\.0"):
         remover.remove_watermark(source, guidance_scale=2.0)
     with pytest.raises(ValueError, match="requires 4 steps"):
@@ -786,10 +784,11 @@ def test_sdxl_zimage_strength_is_vendor_adaptive_and_leaves_other_profiles_alone
     assert resolve_strength(None, "google", "sdxl-zimage") == pytest.approx(SDXL_ZIMAGE_GEMINI_STRENGTH)
     # Unknown provenance takes the stricter of the two.
     assert resolve_strength(None, None, "sdxl-zimage") == pytest.approx(SDXL_ZIMAGE_GEMINI_STRENGTH)
-    # An explicit value still wins, and the older profiles are untouched.
+    # An explicit value still wins, and qwen-zimage is untouched by this ladder: it
+    # defers to its resolution curve rather than to a vendor value.
     assert resolve_strength(0.4, "google", "sdxl-zimage") == pytest.approx(0.4)
-    assert resolve_strength(None, "openai", "controlnet") == pytest.approx(0.10)
-    assert resolve_strength(None, "google", "controlnet") == pytest.approx(0.15)
+    assert resolve_strength(None, "openai", "qwen-zimage", size=(2000, 1850)) == pytest.approx(0.154)
+    assert resolve_strength(None, "google", "qwen-zimage", size=(2000, 1850)) == pytest.approx(0.154)
 
 
 def test_sdxl_zimage_shares_the_four_step_seed_and_step_contract():
@@ -800,10 +799,8 @@ def test_sdxl_zimage_shares_the_four_step_seed_and_step_contract():
     )
 
     assert normalize_profile("sdxl_zimage") == "sdxl-zimage"
-    assert resolve_steps(None, "sdxl-zimage") == 4
-    assert resolve_seed(None, "sdxl-zimage") == 0
-    assert resolve_steps(None, "controlnet") == 50
-    assert resolve_seed(None, "controlnet") is None
+    assert resolve_steps(None) == 4
+    assert resolve_seed(None) == 0
 
 
 def test_sdxl_requested_steps_compensate_for_the_diffusers_truncation():

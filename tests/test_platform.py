@@ -9,17 +9,14 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import numpy as np
 import pytest
-from PIL import Image
 
-from remove_ai_watermarks._internal.progress import is_mps_error
 from remove_ai_watermarks._internal.utils import get_image_format, is_supported_format
 from remove_ai_watermarks._internal.watermark_profiles import (
-    DEFAULT_STRENGTH,
-    GEMINI_STRENGTH,
-    OPENAI_STRENGTH,
-    UNKNOWN_STRENGTH,
+    PROFILE_CHOICES,
+    SDXL_ZIMAGE_GEMINI_STRENGTH,
+    SDXL_ZIMAGE_OPENAI_STRENGTH,
+    SDXL_ZIMAGE_UNKNOWN_STRENGTH,
     normalize_profile,
     resolve_strength,
     strength_default_help,
@@ -59,290 +56,158 @@ class TestDeviceDetection:
             assert get_device() == "xpu"
         fake_torch.tensor.assert_called_with([1.0], device="xpu")
 
-    def test_init_accepts_xpu_and_selects_fp16(self):
-        """WatermarkRemover accepts device='xpu' and picks fp16 (not fp32)."""
+    def test_non_cuda_devices_are_refused_at_construction(self):
+        """CUDA is a precondition of the object, not of the run.
+
+        Both remaining profiles raise on any other device, so accepting cpu/mps/xpu
+        here only defers a guaranteed failure to model-load time - several layers down,
+        after the dependency check and the pipeline import, under a message naming
+        whichever profile the internal pipeline happens to be.
+        """
         if not is_watermark_removal_available():
             pytest.skip("torch/diffusers not installed")
         import torch
 
         from remove_ai_watermarks._internal.watermark_remover import WatermarkRemover
 
-        remover = WatermarkRemover(device="xpu")
-        assert remover.device == "xpu"
-        assert remover.torch_dtype == torch.float16
+        for device in ("cpu", "mps", "xpu"):
+            with pytest.raises(ValueError, match="CUDA-only"):
+                WatermarkRemover(device=device)
 
-    def test_seed_generator_falls_back_to_cpu_when_device_rng_unsupported(self):
-        """A device with no RNG backend (e.g. some torch-xpu builds) falls back
-        to a CPU generator instead of raising when --seed is used."""
-        from remove_ai_watermarks._internal import watermark_remover as wr
-
-        def fake_generator(device="cpu"):
-            if device == "xpu":
-                raise RuntimeError("Device type xpu is not supported for torch.Generator()")
-            gen = MagicMock()
-            gen.manual_seed.return_value = f"gen:{device}"
-            return gen
-
-        fake_torch = MagicMock()
-        fake_torch.Generator.side_effect = fake_generator
-        with patch.object(wr, "torch", fake_torch):
-            assert wr._make_seed_generator("xpu", 123) == "gen:cpu"
-            assert wr._make_seed_generator("cuda", 123) == "gen:cuda"
+        remover = WatermarkRemover(device="cuda")
+        assert remover.device == "cuda"
+        assert remover.torch_dtype == torch.bfloat16
 
 
-class TestMpsErrorDetection:
-    """Tests for MPS error detection helper."""
+class TestEmptyDeviceCache:
+    """try_empty_device_cache is all that remains of the img2img runner.
 
-    def test_detects_mps_error(self):
-        err = RuntimeError("MPS backend out of memory")
-        assert is_mps_error(err) is True
+    Its module lost run_img2img and the MPS fallback along with the CPU/MPS profiles;
+    both surviving profiles are CUDA-only, so there is no MPS failure left to recover
+    from. The helper must stay silent on a backend that cannot empty a cache, because
+    it runs in cleanup paths where a raise would replace the real error.
+    """
 
-    def test_non_mps_error(self):
-        err = RuntimeError("CUDA out of memory")
-        assert is_mps_error(err) is False
+    def test_unknown_backend_is_a_silent_no_op(self):
+        from remove_ai_watermarks._internal.watermark_remover import try_empty_device_cache
 
-    def test_generic_error(self):
-        err = RuntimeError("something went wrong")
-        assert is_mps_error(err) is False
-
-
-# ── Model profiles ──────────────────────────────────────────────────
+        try_empty_device_cache("cpu")
+        try_empty_device_cache("definitely-not-a-backend")
 
 
 class TestModelProfiles:
-    """Tests for watermark_profiles.py profile-name normalization."""
+    """Only the two CUDA-only two-stage profiles remain."""
 
     def test_canonical_profiles_unchanged(self):
-        assert normalize_profile("sdxl") == "sdxl"
-        assert normalize_profile("controlnet") == "controlnet"
-        assert normalize_profile("qwen") == "qwen"
+        assert normalize_profile("qwen-zimage") == "qwen-zimage"
+        assert normalize_profile("sdxl-zimage") == "sdxl-zimage"
 
-    def test_default_alias_resolves_to_sdxl(self):
-        # "default" is the legacy alias for "sdxl" (back-compat for existing scripts).
-        assert normalize_profile("default") == "sdxl"
+    def test_underscore_spellings_resolve(self):
+        assert normalize_profile("qwen_zimage") == "qwen-zimage"
+        assert normalize_profile("  SDXL_ZImage ") == "sdxl-zimage"
 
-    def test_normalize_is_case_and_whitespace_insensitive(self):
-        assert normalize_profile("  Default ") == "sdxl"
-        assert normalize_profile("CONTROLNET") == "controlnet"
+    def test_retired_names_no_longer_resolve_to_a_profile(self):
+        """default/sdxl/controlnet/qwen were removed, not aliased onward.
 
-
-class TestFp16WeightVariant:
-    """_load_from_pretrained reads the fp16 weight variant on fp16, with a fallback.
-
-    Loading the fp16 ``variant`` reads the half-precision weight files (~half the bytes)
-    instead of the fp32 defaults + a downcast, which roughly halves the cold-start weight
-    read. fp32 (cpu/mps) and bf16 (qwen) must never request the variant; a checkpoint
-    without fp16 files must fall back to the default weights (prior behavior).
-    """
-
-    def _remover(self, dtype: object):
-        if not is_watermark_removal_available():
-            pytest.skip("torch/diffusers not installed")
-        from remove_ai_watermarks._internal.watermark_remover import WatermarkRemover
-
-        # device="cpu" alone would force fp32; the explicit torch_dtype override lets us
-        # exercise the fp16 path with no GPU (construction loads no weights).
-        return WatermarkRemover(device="cpu", torch_dtype=dtype)
-
-    def test_fp16_requests_variant(self):
-        import torch
-
-        remover = self._remover(torch.float16)
-        cls = MagicMock()
-        cls.from_pretrained.return_value = "PIPE"
-        out = remover._load_from_pretrained(cls, "some/model", token="t")
-        assert out == "PIPE"
-        cls.from_pretrained.assert_called_once_with("some/model", variant="fp16", token="t")
-
-    def test_fp16_falls_back_when_variant_missing(self):
-        import torch
-
-        remover = self._remover(torch.float16)
-        cls = MagicMock()
-        cls.from_pretrained.side_effect = [OSError("no fp16 weight files"), "PIPE"]
-        out = remover._load_from_pretrained(cls, "some/model", token="t")
-        assert out == "PIPE"
-        assert cls.from_pretrained.call_count == 2
-        first, second = cls.from_pretrained.call_args_list
-        assert first.kwargs.get("variant") == "fp16"
-        assert "variant" not in second.kwargs  # the fallback drops the variant
-
-    def test_fp32_never_requests_variant(self):
-        import torch
-
-        remover = self._remover(torch.float32)
-        cls = MagicMock()
-        cls.from_pretrained.return_value = "PIPE"
-        remover._load_from_pretrained(cls, "some/model")
-        cls.from_pretrained.assert_called_once_with("some/model")
-        assert "variant" not in cls.from_pretrained.call_args.kwargs
+        Silently mapping them at the alias layer would route an old script into a
+        profile it never asked for; the remover raises on the unknown name instead.
+        """
+        for retired in ("default", "sdxl", "controlnet", "qwen"):
+            assert normalize_profile(retired) not in PROFILE_CHOICES
 
 
 class TestNoReembeddedWatermark:
-    """F2 regression: the SDXL removal pipelines must disable the diffusers default
-    invisible watermarker (``add_watermarker=False``).
+    """F2 regression: the SDXL global stage must disable the diffusers watermarker.
 
     diffusers stamps an open "Stable Diffusion XL" DWT-DCT watermark onto every SDXL
     output whenever ``invisible-watermark`` is installed. A watermark REMOVER that left
-    it on would replace one detectable AI watermark (SynthID) with another -- the cleaned
-    output re-reads as AI. The ControlNet sub-model load must NOT receive the kwarg (it
-    is not a pipeline and does not accept it).
+    it on would replace one detectable AI watermark (SynthID) with another -- the
+    cleaned output re-reads as AI. The ControlNet sub-model load must NOT receive the
+    kwarg, since it is not a pipeline and does not accept it.
+
+    Only sdxl-zimage carries an SDXL pipeline now; qwen-zimage's global stage is
+    DiffSynth, which has no such watermarker.
     """
 
-    def _remover(self, profile: str):
+    def test_sdxl_global_stage_disables_watermarker(self, monkeypatch: pytest.MonkeyPatch):
         if not is_watermark_removal_available():
             pytest.skip("torch/diffusers not installed")
-        from remove_ai_watermarks._internal.watermark_remover import WatermarkRemover
+        import diffusers
 
-        return WatermarkRemover(device="cpu", pipeline=profile)
+        from remove_ai_watermarks._internal.sdxl_zimage_pipeline import SdxlZImagePipeline
 
-    def _capture(self, monkeypatch, remover):
-        from remove_ai_watermarks._internal.watermark_remover import WatermarkRemover
+        calls: dict[str, dict] = {}
 
-        calls: list[tuple[str, dict]] = []
+        def record(name):
+            def fake(*_args, **kwargs):
+                calls[name] = kwargs
+                return MagicMock()
 
-        def fake_load(self, cls, model_id, **kwargs):
-            calls.append((getattr(cls, "__name__", str(cls)), kwargs))
-            return MagicMock()
+            return fake
 
-        monkeypatch.setattr(WatermarkRemover, "_load_from_pretrained", fake_load)
-        monkeypatch.setattr(WatermarkRemover, "_move_to_device_and_optimize", lambda self, p: p)
-        return calls
+        monkeypatch.setattr(diffusers.ControlNetModel, "from_pretrained", record("controlnet"))
+        monkeypatch.setattr(diffusers.AutoencoderKL, "from_pretrained", record("vae"))
+        monkeypatch.setattr(diffusers.StableDiffusionXLControlNetImg2ImgPipeline, "from_pretrained", record("pipeline"))
+        monkeypatch.setattr("huggingface_hub.hf_hub_download", lambda *a, **k: "lora.safetensors")
+        # from_config would otherwise resolve the mock's config as a repo id.
+        monkeypatch.setattr(diffusers.EulerDiscreteScheduler, "from_config", lambda *a, **k: MagicMock())
 
-    def test_sdxl_pipeline_disables_watermarker(self, monkeypatch: pytest.MonkeyPatch):
-        remover = self._remover("sdxl")
-        calls = self._capture(monkeypatch, remover)
-        remover._load_pipeline()
-        assert any(kw.get("add_watermarker") is False for _, kw in calls), calls
+        pipeline = SdxlZImagePipeline(device="cuda", torch_dtype=None)
+        monkeypatch.setattr(type(pipeline), "_require_cuda", lambda self: None)
+        pipeline._load_sdxl()
 
-    def test_controlnet_pipeline_disables_watermarker(self, monkeypatch: pytest.MonkeyPatch):
-        remover = self._remover("controlnet")
-        calls = self._capture(monkeypatch, remover)
-        remover._load_controlnet_pipeline()
-        by_cls = dict(calls)
-        # the SDXL pipeline load disables the watermarker...
-        assert by_cls["StableDiffusionXLControlNetImg2ImgPipeline"].get("add_watermarker") is False
-        # ...but the ControlNet sub-model load must not carry the kwarg (it would error).
-        assert "add_watermarker" not in by_cls["ControlNetModel"]
-
-
-class _StubImage:
-    """Minimal PIL.Image stand-in: just the ``width``/``height`` the pure helper reads."""
-
-    def __init__(self, width: int, height: int) -> None:
-        self.width = width
-        self.height = height
-
-
-class TestQwenKwargs:
-    """_build_qwen_kwargs is pure (no torch); guards the Qwen-Image call shape.
-
-    watermark_remover imports torch under a try/except, so the module (and this pure
-    helper) imports fine in the default+dev CI env where torch is absent.
-    """
-
-    def test_uses_true_cfg_not_guidance_scale(self):
-        from remove_ai_watermarks._internal.watermark_remover import _build_qwen_kwargs
-
-        gen = object()
-        img = _StubImage(2816, 1536)
-        kwargs = _build_qwen_kwargs(img, strength=0.3, num_inference_steps=40, true_cfg_scale=4.0, generator=gen)
-        # Qwen uses true_cfg_scale, NOT SDXL's guidance_scale.
-        assert kwargs["true_cfg_scale"] == 4.0
-        assert "guidance_scale" not in kwargs
-        # The scrub still comes from strength; image + generator pass through.
-        assert kwargs["strength"] == 0.3
-        assert kwargs["image"] is img
-        assert kwargs["generator"] is gen
-        assert kwargs["prompt"] == "high quality, sharp, detailed, faithful to the original"
-        assert kwargs["negative_prompt"] == "blurry, lowres, distorted text, garbled text, artifacts"
-
-    def test_passes_explicit_aspect_preserving_size(self):
-        # Without height/width the pipeline defaults to 1024x1024 and squishes non-square
-        # input (the abba mixed-seam regression). Both already multiples of 16 -> unchanged.
-        from remove_ai_watermarks._internal.watermark_remover import _build_qwen_kwargs
-
-        kwargs = _build_qwen_kwargs(
-            _StubImage(2816, 1536), strength=0.25, num_inference_steps=40, true_cfg_scale=4.0, generator=None
-        )
-        assert kwargs["width"] == 2816
-        assert kwargs["height"] == 1536
-
-    def test_qwen_target_size_floors_to_multiple_of_16(self):
-        from remove_ai_watermarks._internal.watermark_remover import _qwen_target_size
-
-        assert _qwen_target_size(2816, 1536) == (2816, 1536)  # already /16
-        assert _qwen_target_size(1122, 1402) == (1120, 1392)  # floored
-        assert _qwen_target_size(10, 10) == (16, 16)  # min clamp, never 0
-
-    def test_qwen_model_id_is_qwen_image(self):
-        from remove_ai_watermarks._internal.watermark_profiles import QWEN_MODEL_ID
-
-        assert QWEN_MODEL_ID == "Qwen/Qwen-Image"
+        assert calls["pipeline"].get("add_watermarker") is False
+        assert "add_watermarker" not in calls["controlnet"]
 
 
 class TestResolveStrength:
-    """resolve_strength applies the vendor default only when strength is unset."""
+    """resolve_strength answers for sdxl-zimage and defers for qwen-zimage."""
 
-    def test_none_is_vendor_adaptive(self):
-        # No vendor -> unknown default; OpenAI lower, Google == unknown. The sdxl/controlnet
-        # pipelines share this ladder (the certified controlnet floors); qwen has its own
-        # (see test_qwen_pipeline_uses_its_own_higher_ladder).
-        assert resolve_strength(None) == UNKNOWN_STRENGTH
-        assert resolve_strength(None, "openai") == OPENAI_STRENGTH
-        assert resolve_strength(None, "google") == GEMINI_STRENGTH
-        assert resolve_strength(None, None) == UNKNOWN_STRENGTH
-        # An unrecognized vendor string falls through to the unknown default.
-        assert resolve_strength(None, "adobe") == UNKNOWN_STRENGTH
-        # sdxl/controlnet pipelines (and the "default" alias) use the same shared ladder.
-        assert resolve_strength(None, "google", "controlnet") == GEMINI_STRENGTH
-        assert resolve_strength(None, "google", "sdxl") == GEMINI_STRENGTH
+    def test_qwen_zimage_answers_from_the_resolution_curve(self):
+        """The function is total: it owns both policies rather than returning None.
 
-    def test_qwen_pipeline_uses_its_own_higher_ladder(self):
-        # Qwen's certified Gemini floor (0.25) is HIGHER than controlnet's (0.15); OpenAI
-        # matches (0.10). Unknown vendor on qwen tracks the higher Gemini value. This retires
-        # the old manual "pass --strength 0.25 for Gemini on qwen" workaround.
-        from remove_ai_watermarks._internal.watermark_profiles import QWEN_GEMINI_STRENGTH, QWEN_OPENAI_STRENGTH
+        qwen-zimage picks strength from image area, so it takes the size. Returning
+        None for it would push that branch onto every caller and leave one of the two
+        strength policies living outside this module. The vendor is ignored here on
+        purpose - the curve, not the issuer, is what was calibrated.
+        """
+        assert resolve_strength(None, "google", "qwen-zimage", size=(2000, 1850)) == pytest.approx(0.154)
+        assert resolve_strength(None, None, "qwen-zimage", size=(600, 500)) == pytest.approx(0.084)
 
-        assert QWEN_GEMINI_STRENGTH == 0.25
-        assert QWEN_OPENAI_STRENGTH == 0.10
-        assert resolve_strength(None, "google", "qwen") == QWEN_GEMINI_STRENGTH
-        assert resolve_strength(None, "openai", "qwen") == QWEN_OPENAI_STRENGTH
-        assert resolve_strength(None, None, "qwen") == QWEN_GEMINI_STRENGTH  # unknown -> higher floor
-        assert resolve_strength(None, "google", "qwen") > resolve_strength(None, "google", "controlnet")
-        # An explicit strength still wins on qwen.
-        assert resolve_strength(0.12, "google", "qwen") == 0.12
+    def test_qwen_zimage_without_a_size_fails_loudly(self):
+        """A missing size must not silently fall back to some vendor value."""
+        with pytest.raises(ValueError, match="size is required"):
+            resolve_strength(None, "google", "qwen-zimage")
 
-    def test_ladder_is_the_certified_controlnet_floors(self):
-        # The unified ladder == the oracle-certified controlnet floors. Lowered on the
-        # 2026-06-14 Modal re-test (OpenAI 0.10, Google/unknown 0.15); Google is the
-        # more-robust watermark, so it is higher.
-        assert OPENAI_STRENGTH == 0.10
-        assert GEMINI_STRENGTH == 0.15
-        assert UNKNOWN_STRENGTH == 0.15
-        assert OPENAI_STRENGTH < GEMINI_STRENGTH
+    def test_sdxl_zimage_uses_its_flat_vendor_ladder(self):
 
-    def test_default_strength_alias_is_unknown_vendor_value(self):
-        assert DEFAULT_STRENGTH == UNKNOWN_STRENGTH
-        assert OPENAI_STRENGTH < UNKNOWN_STRENGTH
+        assert SDXL_ZIMAGE_OPENAI_STRENGTH == 0.15
+        assert SDXL_ZIMAGE_GEMINI_STRENGTH == 0.25
+        assert SDXL_ZIMAGE_UNKNOWN_STRENGTH == SDXL_ZIMAGE_GEMINI_STRENGTH
+        assert resolve_strength(None, "openai", "sdxl-zimage") == SDXL_ZIMAGE_OPENAI_STRENGTH
+        assert resolve_strength(None, "google", "sdxl-zimage") == SDXL_ZIMAGE_GEMINI_STRENGTH
+        # An unrecognised issuer takes the stricter Gemini value, not the OpenAI one.
+        assert resolve_strength(None, "adobe", "sdxl-zimage") == SDXL_ZIMAGE_UNKNOWN_STRENGTH
+        assert resolve_strength(None, None, "sdxl-zimage") == SDXL_ZIMAGE_UNKNOWN_STRENGTH
 
     def test_strength_default_help_derives_from_constants(self):
-        # The CLI --strength help is built from this, so it can never drift from the ladder.
+
         h = strength_default_help()
-        assert str(OPENAI_STRENGTH) in h
-        assert str(GEMINI_STRENGTH) in h
-        assert str(UNKNOWN_STRENGTH) in h
+        assert str(SDXL_ZIMAGE_OPENAI_STRENGTH) in h
+        assert str(SDXL_ZIMAGE_GEMINI_STRENGTH) in h
 
     def test_explicit_value_overrides_vendor(self):
-        assert resolve_strength(0.3) == 0.3
-        assert resolve_strength(0.3, "openai") == 0.3
+
+        assert resolve_strength(0.3, "openai", "sdxl-zimage") == 0.3
+        assert resolve_strength(0.3, None, "qwen-zimage") == 0.3
 
     def test_explicit_zero_is_respected_not_treated_as_unset(self):
-        # 0.0 is falsy but explicit -- must not fall through to the vendor default
+        # 0.0 is falsy but explicit -- it must not fall through to the vendor default
         # (the old `strength or DEFAULT` bug would have). Range validation lives in
         # remove_watermark, not here.
-        assert resolve_strength(0.0) == 0.0
-        assert resolve_strength(0.0, "google") == 0.0
+
+        assert resolve_strength(0.0, "google", "sdxl-zimage") == 0.0
+        assert resolve_strength(0.0, None, "qwen-zimage") == 0.0
 
 
 class TestVendorForStrength:
@@ -467,54 +332,3 @@ class TestPlatformPaths:
         # If we get here without error, asset loading works
         assert engine._alpha_small.shape == (48, 48)
         assert engine._alpha_large.shape == (96, 96)
-
-
-class TestFp16VaeFix:
-    """The plain SDXL img2img pipeline must swap in the fp16-fixed VAE on fp16
-    GPUs to avoid the NaN/all-black decode (issue #29). Pure decision logic, no
-    torch or model download needed."""
-
-    DEFAULT = "stabilityai/stable-diffusion-xl-base-1.0"
-
-    def test_default_sdxl_on_fp16_needs_fix(self):
-        from remove_ai_watermarks._internal.watermark_remover import _needs_fp16_vae_fix
-
-        assert _needs_fp16_vae_fix(self.DEFAULT, self.DEFAULT, is_fp16=True) is True
-
-    def test_fp32_does_not_need_fix(self):
-        """cpu/mps run fp32, where the stock SDXL VAE is fine."""
-        from remove_ai_watermarks._internal.watermark_remover import _needs_fp16_vae_fix
-
-        assert _needs_fp16_vae_fix(self.DEFAULT, self.DEFAULT, is_fp16=False) is False
-
-    def test_non_default_model_keeps_own_vae(self):
-        """A custom (non-SDXL) checkpoint must not get the SDXL-specific VAE."""
-        from remove_ai_watermarks._internal.watermark_remover import _needs_fp16_vae_fix
-
-        assert _needs_fp16_vae_fix("runwayml/stable-diffusion-v1-5", self.DEFAULT, is_fp16=True) is False
-
-
-class TestDegenerateOutputGuard:
-    """The fp16 black-output safety net (#29/#41): detect an all-black/NaN frame so
-    ``remove_watermark`` can retry in fp32. Pure image statistics, no model needed."""
-
-    def test_all_black_is_degenerate(self):
-        from remove_ai_watermarks._internal.watermark_remover import _is_degenerate_image
-
-        black = Image.fromarray(np.zeros((64, 64, 3), np.uint8))
-        assert _is_degenerate_image(black) is True
-
-    def test_normal_image_is_not_degenerate(self):
-        from remove_ai_watermarks._internal.watermark_remover import _is_degenerate_image
-
-        rng = np.random.default_rng(0)
-        normal = Image.fromarray(rng.integers(0, 256, (64, 64, 3), dtype=np.uint8))
-        assert _is_degenerate_image(normal) is False
-
-    def test_dark_but_textured_image_is_not_degenerate(self):
-        """A legitimately dark photo with real detail must NOT be flagged (variance guard)."""
-        from remove_ai_watermarks._internal.watermark_remover import _is_degenerate_image
-
-        rng = np.random.default_rng(1)
-        dark = Image.fromarray(rng.integers(0, 40, (64, 64, 3), dtype=np.uint8))
-        assert _is_degenerate_image(dark) is False

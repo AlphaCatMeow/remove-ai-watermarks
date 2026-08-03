@@ -24,6 +24,9 @@ from remove_ai_watermarks import __version__, image_io, watermark_registry
 from remove_ai_watermarks._internal.constants import SUPPORTED_FORMATS
 from remove_ai_watermarks._internal.utils import is_supported_format
 from remove_ai_watermarks._internal.watermark_profiles import (
+    DEFAULT_PROFILE,
+    PROFILE_CHOICES,
+    QWEN_ZIMAGE_PROFILE,
     resolve_seed,
     resolve_steps,
     resolve_strength,
@@ -155,15 +158,15 @@ def _resolved_strength_for_display(
     vendor: str | None,
     pipeline: str,
 ) -> float:
-    """Resolve the same profile-specific strength the engine will execute."""
-    if pipeline == "qwen-zimage" and strength is None:
-        from PIL import Image
+    """Resolve the same profile-specific strength the engine will execute.
 
-        from remove_ai_watermarks._internal.qwen_zimage_pipeline import resolution_adaptive_denoise
+    One call for both profiles, so the printed value cannot drift from the executed
+    one; the size is what qwen-zimage derives its strength from.
+    """
+    from PIL import Image
 
-        with Image.open(source) as image:
-            return resolution_adaptive_denoise(image.width, image.height)
-    return resolve_strength(strength, vendor, pipeline)
+    with Image.open(source) as image:
+        return resolve_strength(strength, vendor, pipeline, size=image.size)
 
 
 # Shared option decorator for commands that run the invisible-watermark pipeline.
@@ -173,8 +176,8 @@ _controlnet_scale_option = click.option(
     "--controlnet-scale",
     type=float,
     default=1.0,
-    help="ControlNet conditioning scale (structure/text preservation strength); "
-    "applies to the controlnet pipeline (the default). Higher = closer to original structure.",
+    help="Canny ControlNet conditioning scale on the global stage "
+    "(structure/text preservation strength). Higher = closer to original structure.",
 )
 
 _min_resolution_option = click.option(
@@ -203,9 +206,9 @@ _auto_option = click.option(
     "--auto",
     is_flag=True,
     default=False,
-    help="DEPRECATED: controlnet and adaptive polish are already the defaults, so "
-    "--auto only emits a warning and changes nothing. Use --no-adaptive-polish "
-    "to disable polishing.",
+    help="DEPRECATED: it no longer selects a pipeline. It now only requests the "
+    "adaptive polish, which the two-stage profiles otherwise leave off to keep their "
+    "output untouched. Prefer --adaptive-polish.",
 )
 
 _adaptive_polish_option = click.option(
@@ -251,49 +254,29 @@ _model_option = click.option(
     "--model",
     type=str,
     default=None,
-    help="HuggingFace model ID for the diffusion pipeline. Default: the SDXL base checkpoint.",
+    help="HuggingFace model ID. Both profiles pin a fixed model stack, so anything "
+    "other than the default is rejected rather than silently ignored.",
 )
 _guidance_scale_option = click.option(
     "--guidance-scale",
     type=float,
     default=None,
-    help="Classifier-free guidance scale (CFG). Default: 7.5, except qwen-zimage "
-    "fixes CFG at 1.0. Lower = follow the prompt less / stay closer to the input.",
+    help="Classifier-free guidance scale (CFG). Both profiles are distilled and fix "
+    "CFG at 1.0, so any other value is rejected.",
 )
 
 
-def _normalize_pipeline(ctx: click.Context, param: click.Parameter, value: str | None) -> str | None:
-    """Resolve the legacy ``default`` profile name to ``sdxl`` (click option callback).
-
-    Emits a one-line deprecation notice when the user explicitly passes the outdated
-    ``default`` value, pointing at the two current choices (``sdxl`` / ``controlnet``).
-    """
-    if value is None:
-        return None
-    from remove_ai_watermarks._internal.watermark_profiles import normalize_profile
-
-    normalized = normalize_profile(value)
-    if value.strip().lower() == "default":
-        click.echo(
-            "Warning: --pipeline default is deprecated and maps to 'sdxl'. "
-            "Use --pipeline sdxl (plain SDXL) or --pipeline controlnet (the default).",
-            err=True,
-        )
-    return normalized
-
-
-# ``controlnet`` (the default-SELECTED value), ``sdxl`` (plain SDXL img2img) and
-# ``qwen`` (Qwen-Image, CUDA/cloud-class) are the current profiles; ``default`` is an
-# OUTDATED back-compat alias for ``sdxl`` (warned + normalized away by _normalize_pipeline).
-_PIPELINE_CHOICES = ["sdxl", "controlnet", "qwen", "qwen-zimage", "default"]
+# The two-stage profiles are the only ones left. The former controlnet, sdxl, qwen and
+# default profiles were removed rather than kept as a CPU path: none matched this
+# recipe's face preservation, so offering them implied a quality the library no longer
+# delivers. BOTH remaining profiles are CUDA-only.
+_PIPELINE_CHOICES = list(PROFILE_CHOICES)
 _PIPELINE_HELP = (
-    "Pipeline profile. controlnet (DEFAULT) = SDXL + canny ControlNet that preserves "
-    "text/faces via edge conditioning while removing SynthID; sdxl = plain SDXL img2img "
-    "(lighter, no extra model download, but leaves SynthID on flat-graphic content); "
-    "qwen = Qwen-Image (20B, Apache-2.0) img2img, best text/structure preservation but "
-    "CUDA/cloud-class; qwen-zimage = Qwen-Image-2512 + Lightning + Canny, followed by "
-    "SAM-masked Z-Image face repair (CUDA-only; install the qwen-zimage extra). "
-    "('default' is an OUTDATED alias for 'sdxl'.)"
+    "Pipeline profile. qwen-zimage (DEFAULT) = Qwen-Image-2512 + Lightning + Canny, "
+    "followed by SAM-masked Z-Image face repair; sdxl-zimage = the same recipe and the "
+    "same face stage on an SDXL global pass, which needs more denoise. Both are "
+    "CUDA-ONLY -- install the qwen-zimage extra. There is no CPU or MPS profile for "
+    "invisible-watermark removal."
 )
 
 # Shared --pipeline / --strength decorators so the three diffusion commands
@@ -302,8 +285,7 @@ _PIPELINE_HELP = (
 _pipeline_option = click.option(
     "--pipeline",
     type=click.Choice(_PIPELINE_CHOICES),
-    default="controlnet",
-    callback=_normalize_pipeline,
+    default=DEFAULT_PROFILE,
     help=_PIPELINE_HELP,
 )
 _strength_option = click.option(
@@ -362,12 +344,10 @@ _visible_sensitivity_option = click.option(
 def _resolve_auto_polish(auto: bool, adaptive_polish: bool) -> bool:
     """Warn on the retired ``--auto`` flag, returning ``adaptive_polish`` unchanged.
 
-    ``--auto`` used to plan the pipeline + polish from content detection, but the
-    pipeline is now always controlnet (the default) and the adaptive polish is ON by
-    default (it self-gates by detail level), so the content detectors were removed and
-    ``--auto`` is now a no-op alias: the polish it used to enable is already the default,
-    and an explicit ``--no-adaptive-polish`` still wins. So it only emits a deprecation
-    warning and passes ``adaptive_polish`` through.
+    ``--auto`` used to plan the pipeline + polish from content detection. There is now
+    only one default pipeline, and the content detectors were removed, so the flag
+    survives purely as a polish request: it emits a deprecation warning and passes
+    ``adaptive_polish`` through, with an explicit ``--no-adaptive-polish`` still winning.
     """
     if auto:
         click.echo(
@@ -379,9 +359,14 @@ def _resolve_auto_polish(auto: bool, adaptive_polish: bool) -> bool:
 
 
 def _resolve_profile_polish(auto: bool, adaptive_polish: bool, pipeline: str) -> bool:
-    """Keep the upstream qwen-zimage output unchanged unless polish was explicit."""
+    """Keep the upstream qwen-zimage output unchanged unless polish was explicit.
+
+    ``--auto`` counts as explicit. It is deprecated, but it is still a request for the
+    polish, and once qwen-zimage became the DEFAULT pipeline the source check below
+    would otherwise have silently turned that flag into a no-op for every caller.
+    """
     adaptive_polish = _resolve_auto_polish(auto, adaptive_polish)
-    if pipeline != "qwen-zimage":
+    if pipeline != QWEN_ZIMAGE_PROFILE or auto:
         return adaptive_polish
     ctx = click.get_current_context(silent=True)
     if ctx is None:
@@ -885,7 +870,7 @@ def cmd_erase(
     "--steps",
     type=int,
     default=None,
-    help="Number of denoising steps. Default: 4 for qwen-zimage, 50 otherwise.",
+    help="Number of denoising steps. Both profiles are distilled four-step schedules, so 4 is the only accepted value.",
 )
 @_pipeline_option
 @click.option(
@@ -965,8 +950,8 @@ def cmd_invisible(
     from remove_ai_watermarks.invisible_engine import InvisibleEngine
 
     source = _validate_image(source)
-    steps = resolve_steps(steps, pipeline)
-    seed = resolve_seed(seed, pipeline)
+    steps = resolve_steps(steps)
+    seed = resolve_seed(seed)
     _warn_if_esrgan_unavailable(upscaler)
     adaptive_polish = _resolve_profile_polish(auto, adaptive_polish, pipeline)
     if output is None:
@@ -1575,7 +1560,7 @@ def cmd_identify(ctx: click.Context, source: Path, no_visible: bool, as_json: bo
     "--steps",
     type=int,
     default=None,
-    help="Number of denoising steps. Default: 4 for qwen-zimage, 50 otherwise.",
+    help="Number of denoising steps. Both profiles are distilled four-step schedules, so 4 is the only accepted value.",
 )
 @_pipeline_option
 @_model_option
@@ -1651,8 +1636,8 @@ def cmd_all(
     """
     _banner()
     source = _validate_image(source)
-    steps = resolve_steps(steps, pipeline)
-    seed = resolve_seed(seed, pipeline)
+    steps = resolve_steps(steps)
+    seed = resolve_seed(seed)
     _warn_if_esrgan_unavailable(upscaler)
     adaptive_polish = _resolve_profile_polish(auto, adaptive_polish, pipeline)
 
@@ -2018,7 +2003,7 @@ def _process_batch_image(
     "--steps",
     type=int,
     default=None,
-    help="Number of denoising steps. Default: 4 for qwen-zimage, 50 otherwise.",
+    help="Number of denoising steps. Both profiles are distilled four-step schedules, so 4 is the only accepted value.",
 )
 @_visible_backend_option
 @_visible_sensitivity_option
@@ -2105,8 +2090,8 @@ def cmd_batch(
     if mode in ("invisible", "all"):
         _warn_if_esrgan_unavailable(upscaler)
     adaptive_polish = _resolve_profile_polish(auto, adaptive_polish, pipeline)
-    steps = resolve_steps(steps, pipeline)
-    seed = resolve_seed(seed, pipeline)
+    steps = resolve_steps(steps)
+    seed = resolve_seed(seed)
     options = _BatchOptions(
         strength=strength,
         steps=steps,
