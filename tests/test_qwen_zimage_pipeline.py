@@ -728,3 +728,74 @@ def test_invisible_engine_uses_qwen_zimage_step_default(tmp_image_path, tmp_path
     )
 
     assert engine._remover.remove_watermark.call_args.kwargs["num_inference_steps"] == 4
+
+
+def test_sdxl_zimage_strength_is_vendor_adaptive_and_leaves_other_profiles_alone():
+    """An SDXL global pass needs more strength than Qwen, so it gets its own policy."""
+    from remove_ai_watermarks._internal.watermark_profiles import (
+        SDXL_ZIMAGE_GEMINI_STRENGTH,
+        SDXL_ZIMAGE_OPENAI_STRENGTH,
+        resolve_strength,
+    )
+
+    assert resolve_strength(None, "openai", "sdxl-zimage") == pytest.approx(SDXL_ZIMAGE_OPENAI_STRENGTH)
+    assert resolve_strength(None, "google", "sdxl-zimage") == pytest.approx(SDXL_ZIMAGE_GEMINI_STRENGTH)
+    # Unknown provenance takes the stricter of the two.
+    assert resolve_strength(None, None, "sdxl-zimage") == pytest.approx(SDXL_ZIMAGE_GEMINI_STRENGTH)
+    # An explicit value still wins, and the older profiles are untouched.
+    assert resolve_strength(0.4, "google", "sdxl-zimage") == pytest.approx(0.4)
+    assert resolve_strength(None, "openai", "controlnet") == pytest.approx(0.10)
+    assert resolve_strength(None, "google", "controlnet") == pytest.approx(0.15)
+
+
+def test_sdxl_zimage_shares_the_four_step_seed_and_step_contract():
+    from remove_ai_watermarks._internal.watermark_profiles import (
+        normalize_profile,
+        resolve_seed,
+        resolve_steps,
+    )
+
+    assert normalize_profile("sdxl_zimage") == "sdxl-zimage"
+    assert resolve_steps(None, "sdxl-zimage") == 4
+    assert resolve_seed(None, "sdxl-zimage") == 0
+    assert resolve_steps(None, "controlnet") == 50
+    assert resolve_seed(None, "controlnet") is None
+
+
+def test_sdxl_requested_steps_compensate_for_the_diffusers_truncation():
+    """Diffusers truncates the step COUNT where DiffSynth truncates the sigma range.
+
+    Asking Diffusers for four steps at strength 0.15 runs int(4 * 0.15) = 0 and
+    returns a bare VAE round-trip, so the request has to be scaled up instead.
+    """
+    from remove_ai_watermarks._internal.sdxl_zimage_pipeline import requested_steps
+
+    for strength in (0.15, 0.25, 0.0896):
+        steps = requested_steps(4, strength)
+        assert int(steps * strength) >= 4
+        # Naively asking for four would have under-spent every time, and at the
+        # strengths this profile actually uses it would have run nothing at all.
+        assert int(4 * strength) < 4
+    assert int(4 * 0.15) == 0
+
+
+def test_sdxl_zimage_floors_to_its_own_latent_grid():
+    """SDXL aligns to 8 pixels where Qwen aligns to 16."""
+    from remove_ai_watermarks._internal.qwen_zimage_pipeline import _target_size
+    from remove_ai_watermarks._internal.sdxl_zimage_pipeline import sdxl_target_size
+
+    assert sdxl_target_size(1122, 1402) == (1120, 1400)
+    assert _target_size(1122, 1402) == (1120, 1392)
+    assert sdxl_target_size(3, 3) == (8, 8)
+
+
+def test_sdxl_zimage_inherits_the_face_stage_rather_than_copying_it():
+    """The face stage must not be able to diverge between the two profiles."""
+    from remove_ai_watermarks._internal.qwen_zimage_pipeline import QwenZImagePipeline
+    from remove_ai_watermarks._internal.sdxl_zimage_pipeline import SdxlZImagePipeline
+
+    assert issubclass(SdxlZImagePipeline, QwenZImagePipeline)
+    for shared in ("_run_faces", "_sam_masks", "_load_zimage", "_load_sam", "run"):
+        assert getattr(SdxlZImagePipeline, shared) is getattr(QwenZImagePipeline, shared)
+    # Only the global stage and what it needs may differ.
+    assert SdxlZImagePipeline._run_global is not QwenZImagePipeline._run_global

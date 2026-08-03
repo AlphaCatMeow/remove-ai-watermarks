@@ -17,6 +17,7 @@ from remove_ai_watermarks._internal.watermark_profiles import (
     DEFAULT_STRENGTH,
     QWEN_MODEL_ID,
     QWEN_ZIMAGE_PROFILE,
+    SDXL_ZIMAGE_PROFILE,
     normalize_profile,
     resolve_seed,
     resolve_steps,
@@ -29,6 +30,14 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# Both two-stage profiles share the face stage, the four-step schedule, CFG 1.0, the
+# fixed model stack and the native-resolution contract; only the global model differs.
+_ZIMAGE_PROFILES = frozenset({QWEN_ZIMAGE_PROFILE, SDXL_ZIMAGE_PROFILE})
+_ZIMAGE_STACKS = {
+    QWEN_ZIMAGE_PROFILE: "Qwen-Image-2512 and Z-Image",
+    SDXL_ZIMAGE_PROFILE: "SDXL and Z-Image",
+}
 
 try:
     import torch
@@ -195,8 +204,10 @@ class WatermarkRemover:
     ) -> None:
         requested_model = model_id or self.DEFAULT_MODEL_ID
         self.model_profile = normalize_profile(pipeline)
-        if self.model_profile == QWEN_ZIMAGE_PROFILE and model_id not in {None, self.DEFAULT_MODEL_ID}:
-            raise ValueError("The qwen-zimage profile uses a fixed Qwen-Image-2512 and Z-Image model stack.")
+        if self.model_profile in _ZIMAGE_PROFILES and model_id not in {None, self.DEFAULT_MODEL_ID}:
+            raise ValueError(
+                f"The {self.model_profile} profile uses a fixed {_ZIMAGE_STACKS[self.model_profile]} model stack."
+            )
         self.model_id = (
             "Qwen/Qwen-Image-2512 + Tongyi-MAI/Z-Image-Turbo"
             if self.model_profile == QWEN_ZIMAGE_PROFILE
@@ -212,6 +223,10 @@ class WatermarkRemover:
             self.torch_dtype = torch_dtype
         elif self.device in {"cpu", "mps"}:
             self.torch_dtype = torch.float32  # type: ignore[union-attr]
+        elif self.model_profile == SDXL_ZIMAGE_PROFILE:
+            # SDXL ships fp16 weights and an fp16-safe VAE; bf16 would give up the
+            # variant without buying anything on this architecture.
+            self.torch_dtype = torch.float16  # type: ignore[union-attr]
         elif self.model_profile in {"qwen", QWEN_ZIMAGE_PROFILE}:
             self.torch_dtype = torch.bfloat16  # type: ignore[union-attr]
         else:
@@ -233,7 +248,7 @@ class WatermarkRemover:
 
     def preload(self, *, global_only: bool = False) -> None:
         """Materialize the selected model stack before the first request."""
-        if self.model_profile == QWEN_ZIMAGE_PROFILE:
+        if self.model_profile in _ZIMAGE_PROFILES:
             self._load_qwen_zimage_pipeline().preload(global_only=global_only)
         elif self.model_profile == "qwen":
             self._load_qwen_pipeline()
@@ -344,9 +359,16 @@ class WatermarkRemover:
 
     def _load_qwen_zimage_pipeline(self) -> Any:
         if self._qwen_zimage_pipeline is None:
-            from remove_ai_watermarks._internal.qwen_zimage_pipeline import QwenZImagePipeline
+            if getattr(self, "model_profile", QWEN_ZIMAGE_PROFILE) == SDXL_ZIMAGE_PROFILE:
+                from remove_ai_watermarks._internal.sdxl_zimage_pipeline import (
+                    SdxlZImagePipeline as _Pipeline,
+                )
+            else:
+                from remove_ai_watermarks._internal.qwen_zimage_pipeline import (
+                    QwenZImagePipeline as _Pipeline,
+                )
 
-            self._qwen_zimage_pipeline = QwenZImagePipeline(
+            self._qwen_zimage_pipeline = _Pipeline(
                 device=self.device,
                 torch_dtype=self.torch_dtype,
                 hf_token=self.hf_token,
@@ -471,7 +493,7 @@ class WatermarkRemover:
         tile_size: int,
         tile_overlap: int,
     ) -> Image.Image:
-        if self.model_profile == QWEN_ZIMAGE_PROFILE:
+        if self.model_profile in _ZIMAGE_PROFILES:
             return self._run_qwen_zimage(
                 image,
                 strength,
@@ -543,14 +565,12 @@ class WatermarkRemover:
 
         resolved_seed = resolve_seed(seed, self.model_profile)
         steps = resolve_steps(num_inference_steps, self.model_profile)
-        guidance = (
-            1.0 if guidance_scale is None and self.model_profile == QWEN_ZIMAGE_PROFILE else guidance_scale or 7.5
-        )
-        if self.model_profile == QWEN_ZIMAGE_PROFILE:
+        guidance = 1.0 if guidance_scale is None and self.model_profile in _ZIMAGE_PROFILES else guidance_scale or 7.5
+        if self.model_profile in _ZIMAGE_PROFILES:
             if steps != 4:
-                raise ValueError("The qwen-zimage profile requires 4 steps.")
+                raise ValueError(f"The {self.model_profile} profile requires 4 steps.")
             if guidance != 1.0:
-                raise ValueError("The qwen-zimage profile requires CFG 1.0.")
+                raise ValueError(f"The {self.model_profile} profile requires CFG 1.0.")
         else:
             steps = viable_steps(steps, resolved_strength)
 

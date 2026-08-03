@@ -589,6 +589,56 @@ orchestration, YuNet integration, SAM selection, masks, sizing helpers, and pixe
 compositing are implemented for this runtime. Changing a calibrated model input
 requires the same provider-oracle and identity evaluation as a model change.
 
+### SDXL plus Z-Image
+
+[`_internal/sdxl_zimage_pipeline.py`](../src/remove_ai_watermarks/_internal/sdxl_zimage_pipeline.py)
+runs the same two-stage recipe on an SDXL global pass. `SdxlZImagePipeline` subclasses
+`QwenZImagePipeline` and overrides only `_run_global` and `preload`, so the face stage
+is inherited rather than copied and cannot drift between the profiles; a test asserts
+the shared methods are the same objects.
+
+Four things are architecture-bound and swap with the model: the ControlNet
+(`xinsir/controlnet-canny-sdxl-1.0`), the four-step distillation LoRA
+(`ByteDance/SDXL-Lightning` at its documented strength 1.0, not the reference graph's
+0.8, which belongs to a different LoRA), the sampler (Euler with trailing spacing, no
+AuraFlow shift), and the latent grid (8 px against Qwen's 16).
+
+**Strength is architecture-bound too, and that is the easy mistake.** An SDXL global
+pass leaves SynthID at the strength Qwen needs: verified through the Gemini app on a
+native 2816x1536 original, 0.154 is FOUND while 0.20, 0.25 and 0.30 are clean. So this
+profile takes a vendor policy (`SDXL_ZIMAGE_OPENAI_STRENGTH` 0.15,
+`SDXL_ZIMAGE_GEMINI_STRENGTH` 0.25, unknown following Gemini) rather than
+`resolution_adaptive_denoise`. Flat values are what was measured; no size dependence
+has been established for this stage, so none is asserted.
+
+`requested_steps` exists because the two runtimes truncate differently. DiffSynth sets
+`sigma_start = denoising_strength` and runs every requested step across the shortened
+sigma range; Diffusers img2img truncates the step *count*
+(`init_timestep = int(steps * strength)`), so asking it for four steps at 0.15 executes
+**zero** and returns a bare VAE round-trip.
+
+This profile is not deployed. Before it could be, it needs the other three Gemini
+originals, OpenAI re-verified at 0.15, a flat-graphic content class, and a low
+resolution case -- every verdict so far comes from one fixture and one seed.
+
+### Measured provider boundaries for qwen-zimage
+
+Both ends of the shipped curve now have oracle verdicts, and the shipped curve clears
+everything it has been tested at:
+
+| oracle | fixture size | detected at | clean from |
+|---|---|---|---|
+| openai.com/verify | 1.57 MP | 0.06 | 0.08 |
+| Gemini app | 4.33 MP | 0.08 | 0.10 |
+| Gemini app | 0.57 MP | -- | 0.0896 (the curve's own value) |
+| Gemini app | 1.40 MP | -- | 0.1066 (the curve's own value) |
+
+Read the last two rows before concluding the curve's low end is under-driven. Against
+the 4.33 MP Gemini boundary the sub-1 MP rungs of 0.084-0.094 look short, but at those
+sizes the curve's own values verify clean, which is what a resolution-scaled
+requirement would predict. There is no measured size at which the shipped curve fails,
+so it is left alone.
+
 ### Static prompt embeddings
 
 Both stages prompt with module constants, and at CFG 1.0 DiffSynth's
