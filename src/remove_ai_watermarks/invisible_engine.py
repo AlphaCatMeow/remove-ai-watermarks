@@ -107,7 +107,9 @@ class InvisibleEngine:
                 flat-graphic content), or "qwen" (Qwen-Image 20B img2img, best text/
                 structure preservation but CUDA/cloud-class), or "qwen-zimage"
                 (Qwen-Image-2512 Lightning + Canny, then SAM-masked Z-Image face
-                repair; CUDA-only). "default" aliases "sdxl".
+                repair; CUDA-only), or "sdxl-zimage" (the same recipe and the same face
+                stage on an SDXL global pass, vendor-adaptive strength because an SDXL
+                global stage needs more of it; CUDA-only). "default" aliases "sdxl".
             hf_token: HuggingFace API token.
             progress_callback: Optional callback for progress messages.
             controlnet_conditioning_scale: ControlNet structure-preservation
@@ -238,7 +240,7 @@ class InvisibleEngine:
 
         if num_inference_steps is None:
             profile = getattr(self._remover, "model_profile", None)
-            num_inference_steps = 4 if profile == "qwen-zimage" else 100
+            num_inference_steps = 4 if profile in {"qwen-zimage", "sdxl-zimage"} else 100
         profile = getattr(self._remover, "model_profile", "controlnet")
         seed = resolve_seed(seed, profile)
 
@@ -266,7 +268,7 @@ class InvisibleEngine:
         # Keep an explicit max cap available for callers, but do not apply the SDXL
         # 1024px minimum-resolution floor to this profile.
         effective_min_resolution = (
-            0 if getattr(self._remover, "model_profile", None) == "qwen-zimage" else min_resolution
+            0 if getattr(self._remover, "model_profile", None) in {"qwen-zimage", "sdxl-zimage"} else min_resolution
         )
         target = _target_size(
             image.width,
@@ -392,7 +394,7 @@ class InvisibleEngine:
         """Remove invisible watermarks from all images in a directory."""
         if steps is None:
             profile = getattr(self._remover, "model_profile", None)
-            steps = 4 if profile == "qwen-zimage" else 50
+            steps = 4 if profile in {"qwen-zimage", "sdxl-zimage"} else 50
         return self._remover.remove_watermark_batch(
             input_dir=input_dir,
             output_dir=output_dir,
