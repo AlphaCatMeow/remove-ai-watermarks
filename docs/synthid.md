@@ -544,6 +544,39 @@ detector. An explicit `--strength` always wins. If the watermark still survives 
 large native Gemini beyond the capped-1536 validation), raise toward 0.35-0.40 (0.40
 visibly corrupts dense text), using the lowest value that reads clean on the oracle.
 
+**qwen-zimage global denoise, Gemini boundary bracketed (2026-08-02).** The profile does
+not use the vendor ladder above; `resolution_adaptive_denoise` maps megapixels onto
+roughly 0.084 (sub-0.3 MP) to 0.154 (>= 3.7 MP). A ladder on one native 2816x1536 Gemini
+original, seed 0, everything else at profile defaults, verified through the Gemini app:
+
+| global denoise | Gemini app | whole-image PSNR | face-box PSNR | edge IoU |
+|---|---|---|---|---|
+| 0.154 (profile top) | clean | 24.72 | 31.19 | 0.188 |
+| 0.12 | clean | 25.65 | 31.82 | 0.202 |
+| 0.10 | **clean** | 26.26 | 32.17 | 0.212 |
+| 0.08 | **SynthID FOUND** | 26.95 | 32.51 | 0.227 |
+
+So the boundary sits between 0.08 and 0.10 for this image, and the profile's shipped
+0.154 carries roughly half a rung more strength than that content needed. Fidelity rises
+monotonically all the way down - dropping to 0.10 buys **+1.54 dB whole-image and
++0.98 dB inside the face boxes** - which is exactly why the temptation is to move the
+ceiling, and exactly why one fixture is not enough to do it.
+
+Two constraints on reading this:
+
+- **It brackets, it does not calibrate.** One image, one seed. Shipping the lowest clean
+  rung means shipping at the measured cliff edge; another sample, seed, or content class
+  can sit on the other side of it. Note §5.2's flat-graphic hard cases were not in this
+  set at all.
+- **The bottom of the curve is the untested end, not the top.** Every Gemini oracle
+  fixture is 2816x1536, so the Google-side certification only ever covered 0.154, while
+  the curve sends sub-1 MP images to 0.084-0.094 - at or below the rung that failed here.
+  That is less alarming than it first looks, because the resolution trend recorded above
+  (line ~644) says lower processing resolution needs *less* strength, which is the shape
+  the curve already has. But it is an inference, not a measurement: no small Gemini
+  original has ever been through the oracle. Downscaling is safe test material - SynthID
+  survives it by design - so a downscaled original is a valid way to close that gap.
+
 ### 5.3 Test methodology
 
 - **GitHub-recompressed JPEGs from issue attachments are valid SynthID test
