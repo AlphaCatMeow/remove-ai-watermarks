@@ -511,8 +511,8 @@ study (section 2.2) gives empirical floors:
   measured on; treat it as a lower bound, not a guarantee, and raise + oracle-recheck
   per content type (see §5.1 controlnet bullet).
 - **Google (capped 1536)**: 0.15 (n=4); 0.05 and 0.10 do not clear.
-- **Google native 2816**: not locally measured; likely needs >= 0.30 (vendor +
-  resolution stack). Use a GPU or `--max-resolution 1536`.
+- **Google native 2816**: 0.15 clears (n=2, deployed controlnet worker, 2026-06-14) --
+  the same rung as capped 1536, so no resolution penalty was observed.
 
 The default is **vendor-adaptive** (`watermark_profiles.resolve_strength` +
 `vendor_for_strength`): the tool reads the C2PA issuer on the original input and picks
@@ -570,12 +570,13 @@ Two constraints on reading this:
   set at all.
 - **The bottom of the curve is the untested end, not the top.** Every Gemini oracle
   fixture is 2816x1536, so the Google-side certification only ever covered 0.154, while
-  the curve sends sub-1 MP images to 0.084-0.094 - at or below the rung that failed here.
-  That is less alarming than it first looks, because the resolution trend recorded above
-  (line ~644) says lower processing resolution needs *less* strength, which is the shape
-  the curve already has. But it is an inference, not a measurement: no small Gemini
-  original has ever been through the oracle. Downscaling is safe test material - SynthID
-  survives it by design - so a downscaled original is a valid way to close that gap.
+  `resolution_adaptive_denoise` sends sub-1 MP images to 0.084-0.094 - at or below the
+  rung that failed here. Whether that is safe depends on how the boundary moves with
+  resolution, and **that is unproven in either direction** (see the note in §5.5): the
+  only relevant measurement, Gemini clean at 0.15 on native 2816, shows no penalty for
+  going *up*, and says nothing about going down. No small Gemini original has ever been
+  through the oracle on any pipeline. Downscaling is valid test material - SynthID
+  survives it by design - so a downscaled original closes the gap.
 
 ### 5.3 Test methodology
 
@@ -675,18 +676,25 @@ openai.com/verify):
   weight 0.5 blends ~half its pixels back, re-introducing SynthID into the
   composited face over the diffusion-cleaned result (see §5.1 face-identity bullet).
 - (Side note: reducing the processing resolution does NOT weaken SynthID -- it is
-  robust to downscaling by design, and the study's resolution trend says LOWER
-  processing res needs LESS strength, so 1024 was never the wall.)
+  robust to downscaling by design, so 1024 was never the wall. Whether a lower
+  processing resolution then needs more or less removal strength is NOT established;
+  see the note below.)
 
 **Historical controlnet certification, superseded by the current vendor-adaptive
 defaults (isolated GPU sweep + oracle,
 restore OFF, <= 1536, each vendor on its own oracle):** OpenAI **0.20** (2 photoreal x
 seed {1,2,3} = 6/6 clean; the 0.15-flipper is seed-robust at 0.20) and Gemini **0.30**
-(0.20 detected -> 0.30 clean on 2/2 seeds). OpenAI 0.20 transfers to prod
-(resolution-independent); Gemini 0.30 holds only <= 1536 -- Gemini is
-resolution-sensitive, so a native-resolution deployment should cap Gemini <= 1536 + use 0.30 or
-native-calibrate (~0.35+). See `docs/controlnet-removal-pipeline-research.md` for the
-table.
+(0.20 detected -> 0.30 clean on 2/2 seeds). Both were measured at <= 1536 only. See
+`docs/controlnet-removal-pipeline-research.md` for the table.
+
+**Whether Gemini removal is resolution-sensitive is UNPROVEN, in either direction.**
+This document previously asserted it was, and recommended capping Gemini at 1536 with
+0.30 or "native-calibrating" to ~0.35+. Nothing measured that. The one relevant
+measurement points the other way: the 2026-06-14 deployed-worker re-test cleared Gemini
+at **0.15 on two NATIVE 2816x1536 images**, the same rung as capped 1536. So there is no
+observed native-resolution penalty, and no observed benefit either -- the low-resolution
+end has simply never been through the Gemini oracle on any pipeline. Do not reason from
+a resolution trend here; measure it.
 
 **Current implication:** the old floor table remains evidence about the dated
 test set, not the current resolver. The shipped SDXL and ControlNet defaults are
