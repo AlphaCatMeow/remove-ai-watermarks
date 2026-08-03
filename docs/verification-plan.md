@@ -72,8 +72,10 @@ Run detection, removal, and re-detection over a representative local set. Confir
 
 ### A5. Contract sweep across every parameter choice
 
-`scripts/smoke_matrix.py` (exists, 68 rows, 0 skipped with `--diffusion`) covers every
-choice-valued flag on fixtures. Extend from fixtures to a stratified corpus slice
+`scripts/smoke_matrix.py` covers every choice-valued flag on fixtures. Its knob rows
+were rewritten when the CPU/MPS profiles and the ESRGAN chain were removed: most now
+assert a knob is REJECTED, and the accepted-knob rows skip without a CUDA device, so
+the row count is host-dependent rather than the fixed 68 recorded here before. Extend from fixtures to a stratified corpus slice
 (~500 images spanning format x provenance x aspect ratio), asserting exit-code semantics
 rather than just absence of crash.
 
@@ -85,7 +87,7 @@ sweep asserts on stderr, or the codes get split -- the latter is the better fix.
 
 Compare the flags and values exercised by the matrix against the options declared by
 the CLI. Include optional backends, batch modes, tiling, region-targeted composition,
-the ESRGAN upscaler, and the ffmpeg audio/video strip. The gap to find is not only
+and the ffmpeg audio/video strip. The gap to find is not only
 "logic untested" but
 "never executed on real data", which is precisely what this campaign is for.
 

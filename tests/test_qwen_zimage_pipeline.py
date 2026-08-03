@@ -767,11 +767,7 @@ def test_invisible_engine_uses_qwen_zimage_step_default(tmp_image_path, tmp_path
     engine._remover = MagicMock(model_profile="qwen-zimage")
     engine._remover.remove_watermark.return_value = tmp_path / "clean.png"
 
-    engine.remove_watermark(
-        tmp_image_path,
-        tmp_path / "clean.png",
-        min_resolution=0,
-    )
+    engine.remove_watermark(tmp_image_path, tmp_path / "clean.png")
 
     assert engine._remover.remove_watermark.call_args.kwargs["num_inference_steps"] == 4
 

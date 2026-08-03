@@ -56,7 +56,7 @@ removal.
 | Every production feature | `remove-ai-watermarks[all]` |
 
 Lower-level and specialized extras include `pixels`, `heif`, `trustmark`,
-`migan`, `lama`, `esrgan`, and `qwen-zimage`. The
+`migan`, `lama`, and `qwen-zimage`. The
 [installation guide](docs/installation.md#feature-extras) documents their exact
 dependency composition and model requirements.
 

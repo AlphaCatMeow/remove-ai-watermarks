@@ -422,7 +422,7 @@ engine = InvisibleEngine(pipeline="sdxl-zimage")
 The `qwen-zimage` extra must be installed for that profile.
 
 The full `remove_watermark` signature includes strength, steps, guidance,
-seeding, tiling, resolution, upscaling, and postprocessing controls. Read the
+seeding, tiling, resolution, and postprocessing controls. Read the
 method signature in
 [`invisible_engine.py`](../src/remove_ai_watermarks/invisible_engine.py) or use
 the CLI guide for the concepts.

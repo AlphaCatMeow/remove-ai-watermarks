@@ -150,13 +150,14 @@ deprecated, emits a warning, and changes nothing.
 
 ## Resolution and memory
 
-### Small images are enlarged before SDXL based diffusion
+### Small images are processed at their native size
 
-The SDXL, ControlNet, and base Qwen paths use a default minimum long side of
-`1024`. Smaller inputs are enlarged before diffusion and restored to their
-original dimensions afterward. Set `--min-resolution 0` to disable the floor.
+There is no minimum-resolution floor. It existed to enlarge small inputs toward
+SDXL's ~1024 training resolution and was removed with the SDXL profiles, which
+never applied it anyway. Both surviving profiles run at native geometry, so a
+small input is neither enlarged before diffusion nor restored afterward.
 
-`qwen-zimage` does not apply this SDXL minimum resolution floor.
+`--max-resolution` still caps very large inputs, and only ever scales down.
 
 ### Large images stay at native resolution unless capped
 

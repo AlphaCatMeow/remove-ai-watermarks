@@ -98,7 +98,6 @@ application actually uses:
 | `diffusion` | Diffusion-based invisible watermark removal | `pixels`, Torch, Diffusers | Yes |
 | `migan` | MI-GAN ONNX fill backend | `visible`, ONNX Runtime | Model download, no Torch |
 | `lama` | big-LaMa ONNX fill backend | `visible`, ONNX Runtime | Model download, no Torch |
-| `esrgan` | Real-ESRGAN upscaling before diffusion | `pixels`, spandrel | Yes |
 | `qwen-zimage` | CUDA-only Qwen Image plus Z-Image pipeline | `diffusion`, DiffSynth | Yes |
 | `all` | Every production feature | All rows above | Yes |
 | `dev` | Tests, linting, typing, and upstream parity checks | `visible`, `detect`, upstream invisible-watermark | Yes, for parity tests |
@@ -113,7 +112,6 @@ flowchart LR
     diffusion --> pixels
     migan --> visible
     lama --> visible
-    esrgan --> pixels
     qwen["qwen-zimage"] --> diffusion
     heif
     trustmark

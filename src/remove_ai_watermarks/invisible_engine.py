@@ -14,7 +14,7 @@ import logging
 import os
 import warnings
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from ._internal.watermark_profiles import (
     DEFAULT_MODEL_ID as DEFAULT_SDXL_MODEL_ID,
@@ -48,21 +48,19 @@ def is_available() -> bool:
     return module_available("diffusers", "torch")
 
 
-def _target_size(width: int, height: int, max_resolution: int, min_resolution: int = 0) -> tuple[int, int] | None:
+def _target_size(width: int, height: int, max_resolution: int) -> tuple[int, int] | None:
     """Compute the (width, height) to process at, or None for native.
 
-    Two opposite long-side adjustments, in precedence order:
+    One long-side adjustment: if it exceeds ``max_resolution``, scale DOWN to it
+    (integer-truncated, matching the PIL ``resize`` call site). 0/negative = no cap.
+    Set only to bound GPU/MPS memory on very large inputs (issue #10).
 
-    - ``max_resolution`` (cap): if the long side exceeds it, scale DOWN to it
-      (integer-truncated, matching the PIL ``resize`` call site). 0/negative = no
-      cap. Set only to bound GPU/MPS memory on very large inputs (issue #10).
-    - ``min_resolution`` (floor): else if the long side is below it, scale UP to it
-      (rounded) so SDXL img2img runs near its ~1024 training resolution instead of
-      degrading on a tiny latent (a 381x512 portrait distorts badly at native).
-      The output is restored to the original size by the caller, so the floor is a
-      transparent quality boost. 0 = no floor. Skipped on a ``min > max`` misconfig.
+    There was also a ``min_resolution`` floor that scaled small inputs UP toward
+    SDXL's ~1024 training size. It went with the SDXL profiles: both surviving
+    profiles run at native geometry, so the floor was forced to 0 on every path and
+    could not fire.
 
-    Returns None when neither applies (native resolution). Pure function so the
+    Returns None when the cap does not apply (native resolution). Pure function so the
     resolution decision is unit-testable without loading the diffusion model.
     """
     long_side = max(width, height)
@@ -71,9 +69,6 @@ def _target_size(width: int, height: int, max_resolution: int, min_resolution: i
         # Clamp the short side to >=1: extreme aspect ratios (e.g. 5000x3 capped
         # at 1024) would otherwise truncate it to 0 and crash image.resize().
         return (max(1, int(width * ratio)), max(1, int(height * ratio)))
-    if min_resolution > 0 and long_side < min_resolution and (max_resolution <= 0 or min_resolution <= max_resolution):
-        ratio = min_resolution / long_side
-        return (max(1, round(width * ratio)), max(1, round(height * ratio)))
     return None
 
 
@@ -144,32 +139,6 @@ class InvisibleEngine:
         """
         self._remover.preload(global_only=global_only)
 
-    def _esrgan_upscale(self, image: Any, target: tuple[int, int]) -> Any:
-        """Upscale a PIL image to ``target`` with Real-ESRGAN, else Lanczos.
-
-        Runs Real-ESRGAN at its native factor (on the remover's device, CPU fallback),
-        then resizes to the exact ``target`` with Lanczos. Falls back to a plain Lanczos
-        resize when the ``esrgan`` extra is absent or the model errors.
-        """
-        import cv2
-        import numpy as np
-        from PIL import Image
-
-        from remove_ai_watermarks import upscaler
-
-        if not upscaler.is_available():
-            logger.debug("esrgan upscaler requested but the extra is absent; using Lanczos")
-            return image.resize(target, Image.Resampling.LANCZOS)
-        try:
-            bgr = cv2.cvtColor(np.array(image.convert("RGB")), cv2.COLOR_RGB2BGR)
-            big = upscaler.upscale(bgr, device=self._remover.device)
-            if (big.shape[1], big.shape[0]) != target:
-                big = cv2.resize(big, target, interpolation=cv2.INTER_LANCZOS4)
-            return Image.fromarray(cv2.cvtColor(big, cv2.COLOR_BGR2RGB))
-        except Exception as e:  # never let an optional upscaler break removal
-            logger.warning("Real-ESRGAN upscale failed (%s); using Lanczos", e)
-            return image.resize(target, Image.Resampling.LANCZOS)
-
     def remove_watermark(
         self,
         image_path: Path,
@@ -180,11 +149,9 @@ class InvisibleEngine:
         seed: int | None = None,
         humanize: float = 0.0,
         max_resolution: int = 0,
-        min_resolution: int = 1024,
         vendor: str | None = None,
         unsharp: float = 0.0,
         adaptive_polish: bool = False,
-        upscaler: str = "lanczos",
         tile: bool = False,
         tile_size: int = 1024,
         tile_overlap: int = 128,
@@ -215,17 +182,6 @@ class InvisibleEngine:
                 = no cap. Set a positive value only to bound GPU/MPS memory on
                 very large inputs (it reintroduces a lossy downscale->upscale
                 round-trip).
-            min_resolution: Upscale the long side UP to this (px) before diffusion
-                when the input is smaller, so SDXL runs near its ~1024 training
-                resolution (small inputs degrade/distort badly at native). 1024
-                (default) = on; 0 = off. The output is restored to the original
-                input size, so this is a transparent quality boost; it adds time
-                and memory on small inputs. Ignored on a min > max misconfig.
-            upscaler: How to upscale a small input to the ``min_resolution`` floor:
-                ``"lanczos"`` (default, cv2, no model download) or ``"esrgan"`` (Real-ESRGAN
-                via the ``esrgan`` extra). Only applies when UPscaling (the floor
-                case); a ``max_resolution`` downscale always uses Lanczos. Falls back
-                to Lanczos if the extra is absent.
             tile: Process the diffusion pass in overlapping tiles instead of one
                 forward pass. This retains the input's native dimensions instead
                 of applying ``max_resolution``, but each tile is still regenerated.
@@ -244,10 +200,7 @@ class InvisibleEngine:
         from PIL import Image, ImageOps
 
         # Resolution policy: a max_resolution cap (0 = none) bounds memory on huge
-        # inputs, and a min_resolution floor (1024 = default) upscales tiny inputs so
-        # SDXL img2img runs near its ~1024 training size instead of distorting on a
-        # tiny latent (a 381x512 portrait wrecks at native -- issue #36 follow-up).
-        # The output is restored to orig_size below, so the floor is transparent.
+        # inputs. See _target_size for why it is the only lever left.
         # Register the HEIF/AVIF opener so a .heic/.avif input (now a SUPPORTED_FORMAT)
         # decodes here too. The --force skip path bypasses image_io.imread, which is
         # what would otherwise register it, so a bare Image.open would fail on HEIC.
@@ -261,34 +214,16 @@ class InvisibleEngine:
         # reassigned to the resized copy below; PIL resize returns a new object).
         reference_pil = image
 
-        # qwen-zimage operates at the input's native geometry in its reference graph.
-        # Keep an explicit max cap available for callers, but do not apply the SDXL
-        # 1024px minimum-resolution floor to this profile.
-        effective_min_resolution = (
-            0 if getattr(self._remover, "model_profile", None) in {"qwen-zimage", "sdxl-zimage"} else min_resolution
-        )
-        target = _target_size(
-            image.width,
-            image.height,
-            max_resolution,
-            effective_min_resolution,
-        )
+        # Both profiles run at the input's native geometry, so only the explicit max
+        # cap can move it, and it can only ever scale down.
+        target = _target_size(image.width, image.height, max_resolution)
         if target is not None:
-            upscaling = max(target) > max(image.width, image.height)
             if self._progress_callback:
-                reason = (
-                    f"min-resolution floor {min_resolution}px"
-                    if upscaling
-                    else f"max-resolution cap {max_resolution}px"
+                self._progress_callback(
+                    f"Downscaling {image.width}x{image.height} to {target[0]}x{target[1]} "
+                    f"(max-resolution cap {max_resolution}px)..."
                 )
-                verb = "Upscaling" if upscaling else "Downscaling"
-                self._progress_callback(f"{verb} {image.width}x{image.height} to {target[0]}x{target[1]} ({reason})...")
-            # Real-ESRGAN only helps when UPscaling (the floor case); a downscale cap
-            # always uses Lanczos. _esrgan_upscale falls back to Lanczos if the extra is absent.
-            if upscaling and upscaler == "esrgan":
-                image = self._esrgan_upscale(image, target)
-            else:
-                image = image.resize(target, Image.Resampling.LANCZOS)
+            image = image.resize(target, Image.Resampling.LANCZOS)
 
         # Always persist to a temp file, even without downscaling: WatermarkRemover
         # reloads by path, so the EXIF-transposed pixels must be saved or rotation

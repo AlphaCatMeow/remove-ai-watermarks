@@ -180,26 +180,8 @@ _controlnet_scale_option = click.option(
     "(structure/text preservation strength). Higher = closer to original structure.",
 )
 
-_min_resolution_option = click.option(
-    "--min-resolution",
-    type=int,
-    default=1024,
-    help="Upscale long side UP to this (px) before diffusion when the input is smaller, so SDXL runs "
-    "near 1024 (small inputs distort at native); output is restored to the input size. 0 = off. Default 1024.",
-)
-
 _unsharp_option = click.option(
     "--unsharp", type=float, default=0.0, help="Unsharp-mask sharpening strength (0 = off, typical: 0.3-0.8)."
-)
-
-_upscaler_option = click.option(
-    "--upscaler",
-    type=click.Choice(["lanczos", "esrgan"]),
-    default="lanczos",
-    help="How to upscale a small input to the --min-resolution floor: lanczos (default, cv2, no model) or "
-    "esrgan (Real-ESRGAN via the 'esrgan' extra; better detail, slower on CPU). Best for photo/texture "
-    "content -- as a generic GAN with no face/glyph prior it can degrade faces (diffusion mitigates) and "
-    "thin text, so lanczos stays the default. Falls back to lanczos if the extra is absent. Only when upscaling.",
 )
 
 _auto_option = click.option(
@@ -374,21 +356,6 @@ def _resolve_profile_polish(auto: bool, adaptive_polish: bool, pipeline: str) ->
     if ctx.get_parameter_source("adaptive_polish") == click.core.ParameterSource.DEFAULT:
         return False
     return adaptive_polish
-
-
-def _warn_if_esrgan_unavailable(upscaler: str) -> None:
-    """Tell the user once if ``--upscaler esrgan`` will silently fall back to Lanczos.
-
-    The engine downgrades to Lanczos when the ``esrgan`` extra is absent (fail-safe, so
-    a batch never breaks mid-run) -- but without this notice the user would believe
-    Real-ESRGAN ran. Surfaced at the CLI layer, once per invocation (not per image).
-    """
-    if upscaler != "esrgan":
-        return
-    from remove_ai_watermarks import upscaler as _upscaler
-
-    if not _upscaler.is_available():
-        console.print("  Note: --upscaler esrgan needs the 'esrgan' extra; falling back to Lanczos.")
 
 
 def _visible_provenance(path: Path | None) -> frozenset[str]:
@@ -896,9 +863,7 @@ def cmd_erase(
     help="Cap long side (px) before diffusion; 0 = native and preserves the most detail. Raise only on GPU/MPS OOM.",
 )
 @_controlnet_scale_option
-@_min_resolution_option
 @_unsharp_option
-@_upscaler_option
 @_model_option
 @_guidance_scale_option
 @_auto_option
@@ -920,9 +885,7 @@ def cmd_invisible(
     humanize: float,
     unsharp: float,
     max_resolution: int,
-    min_resolution: int,
     controlnet_scale: float,
-    upscaler: str,
     model: str | None,
     guidance_scale: float | None,
     auto: bool,
@@ -952,7 +915,6 @@ def cmd_invisible(
     source = _validate_image(source)
     steps = resolve_steps(steps)
     seed = resolve_seed(seed)
-    _warn_if_esrgan_unavailable(upscaler)
     adaptive_polish = _resolve_profile_polish(auto, adaptive_polish, pipeline)
     if output is None:
         output = source.with_stem(source.stem + "_clean")
@@ -998,8 +960,6 @@ def cmd_invisible(
         unsharp=unsharp,
         adaptive_polish=adaptive_polish,
         max_resolution=max_resolution,
-        min_resolution=min_resolution,
-        upscaler=upscaler,
         vendor=vendor,
         tile=tile,
         tile_size=tile_size,
@@ -1587,9 +1547,7 @@ def cmd_identify(ctx: click.Context, source: Path, no_visible: bool, as_json: bo
     help="Cap long side (px) before diffusion; 0 = native and preserves the most detail. Raise only on GPU/MPS OOM.",
 )
 @_controlnet_scale_option
-@_min_resolution_option
 @_unsharp_option
-@_upscaler_option
 @_guidance_scale_option
 @_auto_option
 @_adaptive_polish_option
@@ -1613,9 +1571,7 @@ def cmd_all(
     humanize: float,
     unsharp: float,
     max_resolution: int,
-    min_resolution: int,
     controlnet_scale: float,
-    upscaler: str,
     guidance_scale: float | None,
     auto: bool,
     adaptive_polish: bool,
@@ -1638,7 +1594,6 @@ def cmd_all(
     source = _validate_image(source)
     steps = resolve_steps(steps)
     seed = resolve_seed(seed)
-    _warn_if_esrgan_unavailable(upscaler)
     adaptive_polish = _resolve_profile_polish(auto, adaptive_polish, pipeline)
 
     if output is None:
@@ -1744,8 +1699,6 @@ def cmd_all(
                 unsharp=unsharp,
                 adaptive_polish=adaptive_polish,
                 max_resolution=max_resolution,
-                min_resolution=min_resolution,
-                upscaler=upscaler,
                 vendor=vendor,
                 tile=tile,
                 tile_size=tile_size,
@@ -1838,9 +1791,7 @@ class _BatchOptions:
     sensitivity: str = "auto"
     unsharp: float = 0.0
     max_resolution: int = 0
-    min_resolution: int = 1024
     controlnet_scale: float = 1.0
-    upscaler: str = "lanczos"
     model: str | None = None
     guidance_scale: float | None = None
     adaptive_polish: bool = False
@@ -1895,8 +1846,6 @@ def _run_batch_invisible(
             unsharp=options.unsharp,
             adaptive_polish=options.adaptive_polish,
             max_resolution=options.max_resolution,
-            min_resolution=options.min_resolution,
-            upscaler=options.upscaler,
             tile=options.tile,
             tile_size=options.tile_size,
             tile_overlap=options.tile_overlap,
@@ -2030,9 +1979,7 @@ def _process_batch_image(
     default=0,
     help="Cap long side (px) before diffusion; 0 = native and preserves the most detail. Raise only on GPU/MPS OOM.",
 )
-@_min_resolution_option
 @_unsharp_option
-@_upscaler_option
 @_controlnet_scale_option
 @_model_option
 @_guidance_scale_option
@@ -2058,9 +2005,7 @@ def cmd_batch(
     humanize: float,
     unsharp: float,
     max_resolution: int,
-    min_resolution: int,
     controlnet_scale: float,
-    upscaler: str,
     model: str | None,
     guidance_scale: float | None,
     auto: bool,
@@ -2087,8 +2032,6 @@ def cmd_batch(
     console.print(f"  Found {len(images)} images in {directory}")
     console.print(f"  Output -> {output_dir}")
     console.print(f"  Mode: {mode}")
-    if mode in ("invisible", "all"):
-        _warn_if_esrgan_unavailable(upscaler)
     adaptive_polish = _resolve_profile_polish(auto, adaptive_polish, pipeline)
     steps = resolve_steps(steps)
     seed = resolve_seed(seed)
@@ -2104,9 +2047,7 @@ def cmd_batch(
         sensitivity=sensitivity,
         unsharp=unsharp,
         max_resolution=max_resolution,
-        min_resolution=min_resolution,
         controlnet_scale=controlnet_scale,
-        upscaler=upscaler,
         model=model,
         guidance_scale=guidance_scale,
         adaptive_polish=adaptive_polish,

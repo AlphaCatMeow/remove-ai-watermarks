@@ -492,7 +492,7 @@ stage.
 router.
 
 [`invisible_engine.py`](../src/remove_ai_watermarks/invisible_engine.py) handles
-image sizing, optional pre-upscaling, postprocessing, and the public engine
+image sizing, postprocessing, and the public engine
 interface. It delegates model execution to
 [`_internal/watermark_remover.py`](../src/remove_ai_watermarks/_internal/watermark_remover.py).
 
@@ -725,18 +725,20 @@ Regression coverage:
 
 - [`test_tiling.py`](../tests/test_tiling.py)
 
-### Upscaling and postprocessing
-
-[`upscaler.py`](../src/remove_ai_watermarks/upscaler.py) is the optional
-Real-ESRGAN path used only when enlarging a small image to the minimum
-resolution floor. Failure or an absent extra falls back to Lanczos.
+### Postprocessing
 
 [`humanizer.py`](../src/remove_ai_watermarks/humanizer.py) contains explicit
 grain, unsharp masking, and adaptive polish helpers.
 
+`upscaler.py` held an optional Real-ESRGAN path, reachable only when enlarging a
+small image to the minimum-resolution floor. That floor existed to lift small
+inputs toward SDXL's ~1024 training size; when the SDXL profiles were removed it
+was forced to 0 on every path, so the module, the `--min-resolution` and
+`--upscaler` options and the `esrgan` extra were all unreachable and went with
+it. Only the `max_resolution` cap can move geometry now, and it only scales down.
+
 Regression coverage:
 
-- [`test_upscaler.py`](../tests/test_upscaler.py)
 - [`test_humanizer.py`](../tests/test_humanizer.py)
 
 ## Image input and output

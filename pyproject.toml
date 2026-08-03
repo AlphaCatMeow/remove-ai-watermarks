@@ -150,19 +150,6 @@ migan = [
     "onnxruntime>=1.16.0; python_version >= '3.11'",
     "huggingface-hub>=0.20.0",
 ]
-# Optional pre-diffusion super-resolution for small inputs (Real-ESRGAN). Loaded via
-# spandrel (MIT) -- a pure model-loader with NO basicsr dependency (it pulls only
-# torch / torchvision / safetensors / numpy / einops).
-# The Real-ESRGAN weights (BSD-3-Clause) download on first use and are cached; they
-# are never bundled. CPU works but is slow on large inputs -- it is meant for the
-# pre-diffusion upscale of SMALL inputs (and the GPU worker). Guarded by
-# upscaler.is_available(); the default upscaler stays Lanczos (cv2, no deps). The
-# weights are fetched with torch.hub (bundled with spandrel's torch), so no extra
-# download dependency is needed.
-esrgan = [
-    "remove-ai-watermarks[pixels]",
-    "spandrel>=0.3.0",
-]
 dev = [
     "remove-ai-watermarks[video]",
     "remove-ai-watermarks[detect]",
@@ -178,7 +165,7 @@ dev = [
     "uv-outdated>=0.1.0; python_version >= '3.12'",
     "uv-secure>=0.12.0; python_version >= '3.12'",
 ]
-all = ["remove-ai-watermarks[video,heif,detect,trustmark,diffusion,qwen-zimage,lama,migan,esrgan]"]
+all = ["remove-ai-watermarks[video,heif,detect,trustmark,diffusion,qwen-zimage,lama,migan]"]
 
 # PyTorch Intel-GPU (XPU) wheel index. ``explicit = true`` keeps it inert for
 # the default CPU/CUDA install: uv consults it only when a torch install

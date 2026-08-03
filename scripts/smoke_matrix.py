@@ -354,18 +354,16 @@ def main() -> None:
 def _knob_rows(r: Runner, tmp: Path, img: Path) -> None:
     """Every diffusion knob the matrix never touched.
 
-    Deliberately cheap (`--steps 4`, `--max-resolution 384`): these rows answer "is the
-    knob accepted and does the run complete", NOT "is the output good". Quality per knob
-    needs a per-knob oracle and most of them have none (`--humanize` has no oracle at
-    all), so claiming more here would be dishonest.
+    Deliberately cheap (`--max-resolution 384`): these rows answer "is the knob accepted
+    and does the run complete", NOT "is the output good". Quality per knob needs a
+    per-knob oracle and most of them have none (`--humanize` has no oracle at all), so
+    claiming more here would be dishonest.
     """
-    from remove_ai_watermarks import upscaler
-
-    # --steps 20 is the floor that WORKS, not an arbitrary choice: effective timesteps
-    # are int(steps * strength), so at the default strength 0.15 anything below
-    # --steps 7 rounds to ZERO and the pipeline dies inside torch. The first version of
-    # these rows used --steps 4 and every single one failed with the same reshape error.
-    fast = ["--max-resolution", "384", "--min-resolution", "0", "--steps", "20", "--force", "--seed", "0"]
+    # Both surviving profiles are CUDA-only and pin a distilled four-step schedule at
+    # CFG 1.0, so most rows here now assert a knob is REJECTED rather than accepted.
+    # That is the coverage worth having: a knob the CLI takes and the library refuses
+    # several layers down is exactly what this matrix exists to catch.
+    fast = ["--max-resolution", "384", "--force", "--seed", "0"]
 
     def run(name: str, extra: list[str], *, tag: str, expect: int | None = 0) -> None:
         r.run(
@@ -375,61 +373,52 @@ def _knob_rows(r: Runner, tmp: Path, img: Path) -> None:
             timeout=2400,
         )
 
-    run("--pipeline sdxl", ["--pipeline", "sdxl"], tag="sdxl")
-    run("--pipeline controlnet", ["--pipeline", "controlnet"], tag="cnet")
-    run("--strength", ["--strength", "0.2"], tag="strength")
-    run("--guidance-scale", ["--guidance-scale", "5.0"], tag="gs")
-    run("--controlnet-scale", ["--controlnet-scale", "0.5"], tag="cns")
-    run("--humanize", ["--humanize", "0.3"], tag="hum")
-    run("--unsharp", ["--unsharp", "0.5"], tag="uns")
-    run("--no-adaptive-polish", ["--no-adaptive-polish"], tag="nap")
-    run("--tile", ["--tile", "--tile-size", "256", "--tile-overlap", "64"], tag="tile")
-    run("--device mps", ["--device", "mps"], tag="mps")
-    run("--upscaler lanczos", ["--upscaler", "lanczos"], tag="lanczos")
-    run("--auto (deprecated no-op)", ["--auto"], tag="auto")
+    # Click rejects a retired profile at parse time (exit 2) rather than remapping it.
+    for retired in ("sdxl", "controlnet", "qwen", "default"):
+        run(f"--pipeline {retired} is rejected", ["--pipeline", retired], tag=f"retired_{retired}", expect=2)
 
-    if upscaler.is_available():
-        run("--upscaler esrgan", ["--upscaler", "esrgan"], tag="esrgan")
-    else:
-        r.skip("--upscaler esrgan", "the `esrgan` extra is not installed")
+    # Fixed-graph knobs: accepted by Click, refused by the library (exit 1).
+    run("--steps 20 is rejected", ["--steps", "20"], tag="steps20", expect=1)
+    run("--guidance-scale 5.0 is rejected", ["--guidance-scale", "5.0"], tag="gs5", expect=1)
+    run("--model override is rejected", ["--model", "org/custom"], tag="model", expect=1)
 
-    # CPU is correctness-relevant (it is the documented MPS-OOM fallback) but slow, so
-    # it gets the smallest possible run rather than being skipped.
-    r.run(
-        "--device cpu",
-        [
-            "invisible",
-            str(img),
-            "-o",
-            str(tmp / "k_cpu.png"),
-            "--device",
-            "cpu",
-            "--max-resolution",
-            "256",
-            "--min-resolution",
-            "0",
-            "--steps",
-            "20",
-            "--force",
-            "--seed",
-            "0",
-        ],
-        timeout=3600,
-    )
-
-    # qwen is CUDA-class by design (bf16 MMDiT, no MPS fallback). On this host the
-    # honest outcome is a CLEAN failure, not a crash -- assert it does not hang or
-    # dump a traceback at the user.
     try:
         import torch
 
         cuda = bool(torch.cuda.is_available())
     except Exception:
         cuda = False
-    if cuda:
-        run("--pipeline qwen", ["--pipeline", "qwen"], tag="qwen")
-    else:
-        r.skip("--pipeline qwen", "CUDA-class pipeline; no CUDA device on this host")
+
+    if not cuda:
+        # Without CUDA the honest outcome is a CLEAN refusal naming the reason, not a
+        # traceback from inside a half-built pipeline.
+        run("no CUDA fails cleanly", [], tag="nocuda", expect=1)
+        for name, extra, tag in (
+            ("--device cpu fails cleanly", ["--device", "cpu"], "cpu"),
+            ("--device mps fails cleanly", ["--device", "mps"], "mps"),
+        ):
+            run(name, extra, tag=tag, expect=1)
+        for label in (
+            "--strength",
+            "--controlnet-scale",
+            "--humanize",
+            "--unsharp",
+            "--no-adaptive-polish",
+            "--tile",
+            "--auto",
+            "--pipeline sdxl-zimage",
+        ):
+            r.skip(label, "accepted-knob rows need a CUDA device")
+        return
+
+    run("--pipeline sdxl-zimage", ["--pipeline", "sdxl-zimage"], tag="sdxlz")
+    run("--strength", ["--strength", "0.2"], tag="strength")
+    run("--controlnet-scale", ["--controlnet-scale", "0.5"], tag="cns")
+    run("--humanize", ["--humanize", "0.3"], tag="hum")
+    run("--unsharp", ["--unsharp", "0.5"], tag="uns")
+    run("--no-adaptive-polish", ["--no-adaptive-polish"], tag="nap")
+    run("--tile", ["--tile", "--tile-size", "256", "--tile-overlap", "64"], tag="tile")
+    run("--auto (deprecated, requests polish only)", ["--auto"], tag="auto")
 
     # --model and --hf-token are deliberately not exercised: one would download a second
     # multi-GB checkpoint, the other needs a real credential. Skipped loudly, not passed.
@@ -596,9 +585,11 @@ def _diffusion_rows(r: Runner, tmp: Path, doubao: Path) -> None:
         src = imread(str(mj))
         h, w = src.shape[:2]
         box = (w // 4, h // 4, w // 4, h // 4)
-        rem = WatermarkRemover(pipeline="controlnet")
+        # Default profile, default four-step schedule: the remover rejects any other
+        # step count now, and the retired controlnet profile no longer exists.
+        rem = WatermarkRemover()
         rout = tmp / "region_composite.png"
-        rem.remove_watermark(mj, rout, strength=0.15, num_inference_steps=20, seed=0, region=box)
+        rem.remove_watermark(mj, rout, strength=0.15, seed=0, region=box)
         got = imread(str(rout))
         if got is None or got.shape != src.shape:
             r.check("region composite keeps the frame outside the box", False, "shape changed or unreadable")
