@@ -14,9 +14,6 @@ AI_METADATA_KEYS = _tokens(
     "parameters|postprocessing|extras|workflow|prompt|Dream|SD:mode|StableDiffusionVersion|"
     "generation_time|Model|Model hash|Seed"
 )
-PNG_METADATA_KEYS = _tokens(
-    "Author|Title|Description|Copyright|Creation Time|Software|Disclaimer|Warning|Source|Comment"
-)
 AI_KEYWORDS = _tokens(
     "prompt|negative_prompt|sampler|cfg_scale|lora|diffusion|comfy|midjourney|dall-e|dalle|imagen|firefly|c2pa|chatgpt|gpt-4|sora|openai|truepic|stable_diffusion|invokeai"
 )

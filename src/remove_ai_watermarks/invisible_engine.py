@@ -1,7 +1,7 @@
 """Diffusion engine for regenerating images that carry invisible AI watermarks.
 
-This module requires the 'gpu' extra dependencies:
-    uv pip install 'remove-ai-watermarks[diffusion]'
+Requires the 'qwen-zimage' extra and a CUDA device:
+    uv pip install 'remove-ai-watermarks[qwen-zimage]'
 """
 
 # cv2/torch boundary: this engine wraps cv2 (resize/imwrite/cvtColor) and the
@@ -17,12 +17,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ._internal.watermark_profiles import (
-    DEFAULT_MODEL_ID as DEFAULT_SDXL_MODEL_ID,
-)
-from ._internal.watermark_profiles import (
     DEFAULT_PROFILE,
+    REMOVAL_MODULES,
+    resolve_adaptive_polish,
     resolve_seed,
-    resolve_steps,
 )
 
 if TYPE_CHECKING:
@@ -42,10 +40,15 @@ logger = logging.getLogger(__name__)
 
 
 def is_available() -> bool:
-    """Check if invisible watermark removal dependencies are installed."""
+    """Whether the dependencies for a real removal run are installed.
+
+    Shares :data:`REMOVAL_MODULES` with the remover's own precondition so the two
+    cannot drift. When they did, a torch+diffusers-only environment passed this gate
+    and then died at the DiffSynth face stage.
+    """
     from .optional_deps import module_available
 
-    return module_available("diffusers", "torch")
+    return module_available(*REMOVAL_MODULES)
 
 
 def _target_size(width: int, height: int, max_resolution: int) -> tuple[int, int] | None:
@@ -79,13 +82,8 @@ class InvisibleEngine:
     to break watermark patterns, and reconstructs via reverse diffusion.
     """
 
-    # SDXL base is the default since May 2026; the vendor-adaptive strength
-    # removes the current SynthID (see watermark_profiles + docs/synthid.md).
-    DEFAULT_MODEL_ID = DEFAULT_SDXL_MODEL_ID
-
     def __init__(
         self,
-        model_id: str | None = None,
         device: str | None = None,
         pipeline: str = DEFAULT_PROFILE,
         hf_token: str | None = None,
@@ -96,8 +94,9 @@ class InvisibleEngine:
         """Initialize the invisible watermark removal engine.
 
         Args:
-            model_id: HuggingFace model ID. None = use the SDXL base default.
-            device: Device for inference (auto/cpu/mps/cuda/xpu). None = auto.
+            device: Device for inference. Both profiles are CUDA-only, so the
+                usable values are "cuda" and None/"auto" (which detects it);
+                anything else raises rather than falling back.
             pipeline: Pipeline profile, one of "qwen-zimage" (DEFAULT;
                 Qwen-Image-2512 Lightning + Canny, then SAM-masked Z-Image face repair)
                 or "sdxl-zimage" (the same recipe and the same face stage on an SDXL
@@ -116,11 +115,7 @@ class InvisibleEngine:
 
         from remove_ai_watermarks._internal.watermark_remover import WatermarkRemover
 
-        # Pass model_id through untouched. Substituting DEFAULT_MODEL_ID for None here
-        # meant the engine always supplied a model the remover is required to reject,
-        # so EVERY construction raised once that check tightened to "is not None".
         self._remover = WatermarkRemover(
-            model_id=model_id,
             device=device,
             progress_callback=progress_callback,
             hf_token=hf_token,
@@ -144,14 +139,12 @@ class InvisibleEngine:
         image_path: Path,
         output_path: Path | None = None,
         strength: float | None = None,
-        num_inference_steps: int | None = None,
-        guidance_scale: float | None = None,
         seed: int | None = None,
         humanize: float = 0.0,
         max_resolution: int = 0,
         vendor: str | None = None,
         unsharp: float = 0.0,
-        adaptive_polish: bool = False,
+        adaptive_polish: bool | None = None,
         tile: bool = False,
         tile_size: int = 1024,
         tile_overlap: int = 128,
@@ -161,27 +154,26 @@ class InvisibleEngine:
         Args:
             image_path: Path to the watermarked image.
             output_path: Output path (None = overwrite source).
-            strength: Denoising strength (0.0-1.0). None -> the vendor-adaptive
-                default.
-            num_inference_steps: Number of denoising steps. None keeps the existing
-                100-step library default, except qwen-zimage uses its required
-                four-step Lightning schedule.
-            guidance_scale: Classifier-free guidance scale.
-            seed: Random seed for reproducibility. None resolves to 0 for
-                qwen-zimage and stays random for the other profiles.
+            strength: Denoising strength (0.0-1.0). None -> the profile's calibrated
+                default (resolution-adaptive for qwen-zimage, vendor-adaptive for
+                sdxl-zimage).
+            seed: Random seed for reproducibility. None resolves to 0, because both
+                profiles are certified at a fixed seed.
             humanize: Intensity of Analog Humanizer film grain (0 = off).
             unsharp: Final unsharp-mask sharpening strength (0 = off, default).
                 Applied last to counter the soft / over-smoothed look of the
                 diffusion pass; ~0.5-0.8 is a safe range, higher risks edge halos.
-            adaptive_polish: When True (the CLI default), restore the input's detail
-                level in the softened output: a capped unsharp + edge-masked grain
-                targeting the input's Laplacian variance. Self-limiting -- a no-op when
-                the output already meets the input's detail level (text/flat graphics),
-                so it only acts on over-smoothed photo/face texture. Runs LAST.
+            adaptive_polish: Restore the input's detail level in the softened
+                output: a capped unsharp + edge-masked grain targeting the input's
+                Laplacian variance. Self-limiting -- a no-op when the output already
+                meets the input's detail level (text/flat graphics), so it only acts on
+                over-smoothed photo/face texture. Runs LAST. None (the default) follows
+                the profile: off for qwen-zimage, on for sdxl-zimage. This resolves
+                through the same ``resolve_adaptive_polish`` the CLI uses, so a library
+                caller and a CLI caller on one profile get the same output.
             max_resolution: Cap the long side (px) before diffusion. 0 (default)
-                = no cap. Set a positive value only to bound GPU/MPS memory on
-                very large inputs (it reintroduces a lossy downscale->upscale
-                round-trip).
+                = no cap. Set a positive value only to bound GPU memory on very large
+                inputs (it reintroduces a lossy downscale->upscale round-trip).
             tile: Process the diffusion pass in overlapping tiles instead of one
                 forward pass. This retains the input's native dimensions instead
                 of applying ``max_resolution``, but each tile is still regenerated.
@@ -194,8 +186,8 @@ class InvisibleEngine:
         """
         import tempfile
 
-        num_inference_steps = resolve_steps(num_inference_steps)
         seed = resolve_seed(seed)
+        adaptive_polish = resolve_adaptive_polish(adaptive_polish, self._remover.model_profile)
 
         from PIL import Image, ImageOps
 
@@ -243,8 +235,6 @@ class InvisibleEngine:
                 image_path=image_path,
                 output_path=output_path,
                 strength=strength,
-                num_inference_steps=num_inference_steps,
-                guidance_scale=guidance_scale,
                 seed=seed,
                 vendor=vendor,
                 tile=tile,
@@ -315,21 +305,3 @@ class InvisibleEngine:
             # _tmp_path is always set above (we persist the image unconditionally).
             if _tmp_path.exists():
                 _tmp_path.unlink()
-
-    def remove_watermark_batch(
-        self,
-        input_dir: Path,
-        output_dir: Path,
-        strength: float | None = None,
-        steps: int | None = None,
-    ) -> list[Path]:
-        """Remove invisible watermarks from all images in a directory."""
-        if steps is None:
-            profile = getattr(self._remover, "model_profile", None)
-            steps = 4 if profile in {"qwen-zimage", "sdxl-zimage"} else 50
-        return self._remover.remove_watermark_batch(
-            input_dir=input_dir,
-            output_dir=output_dir,
-            strength=strength,
-            num_inference_steps=steps,
-        )

@@ -1,11 +1,11 @@
 """Sliding-window tiled diffusion for large images.
 
-The img2img / ControlNet pipeline denoises the WHOLE image in one forward pass,
-so it OOMs on MPS/GPU above ~2K (issue #10). Tiling splits the image into
-overlapping tiles -- each kept near SDXL's ~1024 training size -- regenerates
-each tile independently, and feather-blends the overlaps. The result retains the
-input's native dimensions without an explicit ``--max-resolution`` downscale, but
-it is not pixel-lossless because every tile is regenerated.
+The global stage denoises the WHOLE image in one forward pass, so it OOMs on a
+GPU above ~2K (issue #10). Tiling splits the image into overlapping tiles -- each
+kept near the ~1024 training size -- regenerates each tile independently, and
+feather-blends the overlaps. The result retains the input's native dimensions
+without an explicit ``--max-resolution`` downscale, but it is not pixel-lossless
+because every tile is regenerated.
 
 The geometry (``plan_tiles``) and the blend weighting (``feather_weights``) are
 pure functions, unit-tested without the diffusion model. ``run_tiled`` is the
@@ -98,59 +98,6 @@ def feather_weights(width: int, height: int, overlap: int) -> NDArray[Any]:
     weights = np.outer(ramp(height), ramp(width))
     np.maximum(weights, _WEIGHT_EPS, out=weights)
     return weights
-
-
-def feather_region_composite(
-    base: NDArray[Any],
-    regenerated: NDArray[Any],
-    box: tuple[int, int, int, int],
-    *,
-    feather: int = 64,
-) -> NDArray[Any]:
-    """Composite ``regenerated`` over ``base`` inside ``box`` only, feathering the seam.
-
-    For AI-ENHANCED composites (digitalSourceType ``compositeWithTrainedAlgorithmicMedia``):
-    the diffusion remover regenerates the whole frame, but only the AI-composited
-    REGION should change -- the rest is a real photo that must be preserved. This
-    blends the regenerated pixels in over ``box = (x, y, w, h)`` with a separable
-    linear taper of ``feather`` px at the box edges, so the result equals ``base``
-    EXACTLY outside the box and ramps smoothly (no hard seam) at the boundary.
-
-    Pure and model-free (unit-tested): ``base`` and ``regenerated`` must be the same
-    shape (H x W, or H x W x C). The output preserves ``base``'s dtype. ``feather`` is
-    clamped to half the box on each axis, so a small region still tapers symmetrically;
-    ``feather=0`` is a hard-edged paste.
-    """
-    import numpy as np
-
-    if base.shape != regenerated.shape:
-        raise ValueError(f"shape mismatch: base {base.shape} vs regenerated {regenerated.shape}")
-    h, w = base.shape[:2]
-    x, y, bw, bh = box
-    x0, y0 = max(0, x), max(0, y)
-    x1, y1 = min(w, x + bw), min(h, y + bh)
-    out = base.copy()
-    if x1 <= x0 or y1 <= y0:
-        return out  # empty / off-image box -> nothing regenerated
-
-    def taper(n: int) -> NDArray[Any]:
-        win = np.ones(n, dtype=np.float32)
-        f = min(max(feather, 0), n // 2)
-        if f > 0:
-            ramp = (np.arange(f, dtype=np.float32) + 1.0) / (f + 1.0)  # in (0, 1), 0 at the edge
-            win[:f] = ramp
-            win[n - f :] = ramp[::-1]
-        return win
-
-    rh, rw = y1 - y0, x1 - x0
-    wmap = np.outer(taper(rh), taper(rw))  # ~0 at the box edge, 1 in the interior
-    if base.ndim == 3:
-        wmap = wmap[:, :, None]
-    roi_base = base[y0:y1, x0:x1].astype(np.float32)
-    roi_gen = regenerated[y0:y1, x0:x1].astype(np.float32)
-    blended = roi_base * (1.0 - wmap) + roi_gen * wmap
-    out[y0:y1, x0:x1] = np.clip(blended, 0, 255).astype(base.dtype)
-    return out
 
 
 def run_tiled(

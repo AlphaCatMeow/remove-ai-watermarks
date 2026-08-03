@@ -17,9 +17,10 @@ WHAT IT COVERS AND WHY THAT SHAPE
     work" report); a no-op must be byte-identical; `metadata --remove` must actually
     strip; a JPEG strip must not touch the pixels. Note the pixel-lossless contract is
     the DEFAULT path's -- `--remove-all` deliberately re-encodes (see metadata.py).
-  * The diffusion bodies under `--diffusion`, at `--max-resolution 512` so they fit MPS
-    (~1 min/image on 32 GB unified memory). Not just exit codes: `invisible` must
-    restore the input resolution and must NOT re-stamp SDXL's own open watermark.
+  * The diffusion bodies under `--diffusion`, at a small `--max-resolution`. Both
+    profiles are CUDA-only, so those rows need an NVIDIA GPU and are reported as
+    skips elsewhere. Not just exit codes: `invisible` must restore the input
+    resolution and must NOT re-stamp SDXL's own open watermark.
 
 WHAT IT DOES NOT COVER, DELIBERATELY AND LOUDLY
   * Without `--diffusion`, the model-running bodies are reported as SKIPPED with a
@@ -34,7 +35,7 @@ WHAT IT DOES NOT COVER, DELIBERATELY AND LOUDLY
 
     uv run python scripts/smoke_matrix.py                 # corpus + fixtures
     uv run python scripts/smoke_matrix.py --quick         # fixtures only, no corpus
-    uv run python scripts/smoke_matrix.py --diffusion     # + the SDXL model paths
+    uv run python scripts/smoke_matrix.py --diffusion     # + the model paths (needs CUDA)
 """
 
 from __future__ import annotations
@@ -113,7 +114,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--quick", action="store_true", help="fixtures only; skip the corpus rows")
     ap.add_argument(
-        "--diffusion", action="store_true", help="also run the model-running paths (SDXL weights, ~1 min/image)"
+        "--diffusion", action="store_true", help="also run the model-running paths (needs CUDA, ~1 min/image)"
     )
     a = ap.parse_args()
 
@@ -359,10 +360,12 @@ def _knob_rows(r: Runner, tmp: Path, img: Path) -> None:
     per-knob oracle and most of them have none (`--humanize` has no oracle at all), so
     claiming more here would be dishonest.
     """
-    # Both surviving profiles are CUDA-only and pin a distilled four-step schedule at
-    # CFG 1.0, so most rows here now assert a knob is REJECTED rather than accepted.
-    # That is the coverage worth having: a knob the CLI takes and the library refuses
-    # several layers down is exactly what this matrix exists to catch.
+    # Both surviving profiles are CUDA-only, pin a fixed model stack and let each stage
+    # own its schedule and CFG. The knobs that used to contradict that (--model, --steps,
+    # --guidance-scale, --device, --auto) are gone from the parser, so the rows below
+    # assert Click itself refuses them. That is the coverage worth having: an option the
+    # CLI accepts and the library refuses several layers down is what this matrix exists
+    # to catch, and the cheapest way to keep it caught is for the option not to exist.
     fast = ["--max-resolution", "384", "--force", "--seed", "0"]
 
     def run(name: str, extra: list[str], *, tag: str, expect: int | None = 0) -> None:
@@ -377,10 +380,15 @@ def _knob_rows(r: Runner, tmp: Path, img: Path) -> None:
     for retired in ("sdxl", "controlnet", "qwen", "default"):
         run(f"--pipeline {retired} is rejected", ["--pipeline", retired], tag=f"retired_{retired}", expect=2)
 
-    # Fixed-graph knobs: accepted by Click, refused by the library (exit 1).
-    run("--steps 20 is rejected", ["--steps", "20"], tag="steps20", expect=1)
-    run("--guidance-scale 5.0 is rejected", ["--guidance-scale", "5.0"], tag="gs5", expect=1)
-    run("--model override is rejected", ["--model", "org/custom"], tag="model", expect=1)
+    # Retired options: no longer parsed at all (exit 2, "No such option").
+    for args, tag in (
+        (["--steps", "20"], "steps20"),
+        (["--guidance-scale", "5.0"], "gs5"),
+        (["--model", "org/custom"], "model"),
+        (["--device", "cpu"], "devcpu"),
+        (["--auto"], "auto"),
+    ):
+        run(f"{args[0]} is no longer an option", args, tag=tag, expect=2)
 
     try:
         import torch
@@ -393,11 +401,6 @@ def _knob_rows(r: Runner, tmp: Path, img: Path) -> None:
         # Without CUDA the honest outcome is a CLEAN refusal naming the reason, not a
         # traceback from inside a half-built pipeline.
         run("no CUDA fails cleanly", [], tag="nocuda", expect=1)
-        for name, extra, tag in (
-            ("--device cpu fails cleanly", ["--device", "cpu"], "cpu"),
-            ("--device mps fails cleanly", ["--device", "mps"], "mps"),
-        ):
-            run(name, extra, tag=tag, expect=1)
         for label in (
             "--strength",
             "--controlnet-scale",
@@ -405,7 +408,6 @@ def _knob_rows(r: Runner, tmp: Path, img: Path) -> None:
             "--unsharp",
             "--no-adaptive-polish",
             "--tile",
-            "--auto",
             "--pipeline sdxl-zimage",
         ):
             r.skip(label, "accepted-knob rows need a CUDA device")
@@ -418,11 +420,9 @@ def _knob_rows(r: Runner, tmp: Path, img: Path) -> None:
     run("--unsharp", ["--unsharp", "0.5"], tag="uns")
     run("--no-adaptive-polish", ["--no-adaptive-polish"], tag="nap")
     run("--tile", ["--tile", "--tile-size", "256", "--tile-overlap", "64"], tag="tile")
-    run("--auto (deprecated, requests polish only)", ["--auto"], tag="auto")
 
-    # --model and --hf-token are deliberately not exercised: one would download a second
-    # multi-GB checkpoint, the other needs a real credential. Skipped loudly, not passed.
-    r.skip("--model", "would download a second multi-GB checkpoint")
+    # --hf-token needs a real credential, so it cannot be exercised meaningfully here.
+    # Skipped loudly rather than silently passed over.
     r.skip("--hf-token", "needs a real credential; cannot be exercised meaningfully here")
 
     # CONTRACT, not just execution: the same seed must reproduce the same pixels.

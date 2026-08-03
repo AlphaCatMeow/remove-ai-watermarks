@@ -3477,7 +3477,7 @@ requires-dist = [
     { name = "remove-ai-watermarks", extras = ["pixels"], marker = "extra == 'diffusion'" },
     { name = "remove-ai-watermarks", extras = ["pixels"], marker = "extra == 'visible'" },
     { name = "remove-ai-watermarks", extras = ["video"], marker = "extra == 'dev'" },
-    { name = "remove-ai-watermarks", extras = ["video", "heif", "detect", "trustmark", "diffusion", "qwen-zimage", "lama", "migan"], marker = "extra == 'all'" },
+    { name = "remove-ai-watermarks", extras = ["video", "heif", "detect", "trustmark", "qwen-zimage", "lama", "migan"], marker = "extra == 'all'" },
     { name = "remove-ai-watermarks", extras = ["visible"], marker = "extra == 'lama'" },
     { name = "remove-ai-watermarks", extras = ["visible"], marker = "extra == 'migan'" },
     { name = "remove-ai-watermarks", extras = ["visible"], marker = "extra == 'video'" },

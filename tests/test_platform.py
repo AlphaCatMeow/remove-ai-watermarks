@@ -1,7 +1,7 @@
-"""Tests for cross-platform and cross-device compatibility.
+"""Tests for device detection, profile resolution, and platform-specific paths.
 
-Verifies that device detection, MPS fallback, and platform-specific
-code paths work correctly on CPU, MPS (macOS), and CUDA (Linux/Windows).
+Invisible-watermark removal is CUDA-only, so the device tests here assert a binary
+answer and a clean refusal rather than a fallback ladder.
 """
 
 from __future__ import annotations
@@ -27,34 +27,38 @@ from remove_ai_watermarks._internal.watermark_remover import get_device, is_wate
 
 
 class TestDeviceDetection:
-    """Tests for get_device() across platforms."""
+    """get_device() is binary: CUDA, or the "cpu" that names its absence."""
 
-    def test_returns_valid_device(self):
-        device = get_device()
-        assert device in ("cpu", "mps", "cuda", "xpu")
+    def test_answer_is_cuda_or_cpu(self):
+        """No mps/xpu answer exists. Both would travel one frame to the same refusal.
 
-    def test_cpu_fallback_when_no_gpu(self):
-        """On CI / machines without GPU, should fall back to cpu or mps."""
-        device = get_device()
-        # Just verify it doesn't crash and returns a valid string
-        assert isinstance(device, str)
+        Reporting them anyway cost a device probe each and let a caller believe the
+        library had an Apple-silicon or Intel-GPU path that it does not.
+        """
+        assert get_device() in ("cpu", "cuda")
 
     @patch("remove_ai_watermarks._internal.watermark_remover._HAS_TORCH", False)
     def test_no_torch_returns_cpu(self):
         assert get_device() == "cpu"
 
-    def test_xpu_selected_when_available(self):
-        """An XPU-enabled torch (no CUDA) routes to the Intel GPU backend.
+    def test_working_cuda_is_selected_and_probed(self):
+        """A reported CUDA device is smoke-tested before it is returned.
 
-        The whole torch module is mocked so the smoke-test ops succeed without
-        any real device; cuda must read False so the cuda branch is skipped.
+        torch.cuda.is_available() can be True on a build whose CUDA backend then
+        raises on the first real op; without the probe that surfaced much later.
         """
         fake_torch = MagicMock()
-        fake_torch.cuda.is_available.return_value = False
-        fake_torch.xpu.is_available.return_value = True
+        fake_torch.cuda.is_available.return_value = True
         with patch("remove_ai_watermarks._internal.watermark_remover.torch", fake_torch):
-            assert get_device() == "xpu"
-        fake_torch.tensor.assert_called_with([1.0], device="xpu")
+            assert get_device() == "cuda"
+        fake_torch.tensor.assert_called_with([1.0], device="cuda")
+
+    def test_broken_cuda_backend_falls_back_to_cpu(self):
+        fake_torch = MagicMock()
+        fake_torch.cuda.is_available.return_value = True
+        fake_torch.tensor.side_effect = RuntimeError("no kernel image")
+        with patch("remove_ai_watermarks._internal.watermark_remover.torch", fake_torch):
+            assert get_device() == "cpu"
 
     def test_non_cuda_devices_are_refused_at_construction(self):
         """CUDA is a precondition of the object, not of the run.
@@ -78,21 +82,21 @@ class TestDeviceDetection:
         assert remover.device == "cuda"
         assert remover.torch_dtype == torch.bfloat16
 
+    def test_the_refusal_names_the_resolved_device_not_a_bare_none(self):
+        """``device=None`` on a CUDA-less host must report "cpu", not "None".
 
-class TestEmptyDeviceCache:
-    """try_empty_device_cache is all that remains of the img2img runner.
+        The message used to interpolate the raw argument, so the common auto-detect
+        path told the user that ``'None'`` cannot run the removal.
+        """
+        if not is_watermark_removal_available():
+            pytest.skip("torch/diffusers not installed")
+        from remove_ai_watermarks._internal import watermark_remover as module
 
-    Its module lost run_img2img and the MPS fallback along with the CPU/MPS profiles;
-    both surviving profiles are CUDA-only, so there is no MPS failure left to recover
-    from. The helper must stay silent on a backend that cannot empty a cache, because
-    it runs in cleanup paths where a raise would replace the real error.
-    """
-
-    def test_unknown_backend_is_a_silent_no_op(self):
-        from remove_ai_watermarks._internal.watermark_remover import try_empty_device_cache
-
-        try_empty_device_cache("cpu")
-        try_empty_device_cache("definitely-not-a-backend")
+        with (
+            patch.object(module, "get_device", return_value="cpu"),
+            pytest.raises(ValueError, match="'cpu' cannot run it"),
+        ):
+            module.WatermarkRemover(device=None)
 
 
 class TestModelProfiles:
@@ -114,6 +118,26 @@ class TestModelProfiles:
         """
         for retired in ("default", "sdxl", "controlnet", "qwen"):
             assert normalize_profile(retired) not in PROFILE_CHOICES
+
+
+class TestResolveAdaptivePolish:
+    """The polish default is per-profile data, not a CLI parameter-source inference."""
+
+    def test_unset_follows_the_profile(self):
+        from remove_ai_watermarks._internal.watermark_profiles import resolve_adaptive_polish
+
+        # qwen-zimage already matches the input's detail level, so polishing it only
+        # moves the output away from upstream. An SDXL global pass leaves the softer
+        # result the polish exists for.
+        assert resolve_adaptive_polish(None, "qwen-zimage") is False
+        assert resolve_adaptive_polish(None, "sdxl-zimage") is True
+        assert resolve_adaptive_polish(None, "qwen_zimage") is False
+
+    def test_an_explicit_choice_always_wins(self):
+        from remove_ai_watermarks._internal.watermark_profiles import resolve_adaptive_polish
+
+        assert resolve_adaptive_polish(True, "qwen-zimage") is True
+        assert resolve_adaptive_polish(False, "sdxl-zimage") is False
 
 
 class TestNoReembeddedWatermark:

@@ -1138,14 +1138,6 @@ def _scan_video_detectors(
     }
 
 
-def _scan_video(
-    source: Path,
-    detector: Any,
-) -> VideoScan:
-    """Decode a video once and collect one untrusted candidate per frame."""
-    return _scan_video_detectors(source, {"selected": detector})["selected"]
-
-
 def scan_video_marks(
     source: Path,
     marks: tuple[str, ...] = VIDEO_VISIBLE_MARKS,
@@ -1179,36 +1171,6 @@ def scan_video_marks(
         {mark: detectors[mark] for mark in marks},
         collect_timestamps=collect_timestamps,
     )
-
-
-def scan_sora_video(source: Path) -> VideoScan:
-    """Decode a video once and collect one untrusted Sora candidate per frame."""
-    return _scan_video(source, detect_sora_frame)
-
-
-def scan_veo_video(source: Path) -> VideoScan:
-    """Decode a video once and collect one untrusted Veo candidate per frame."""
-    return _scan_video(source, detect_veo_frame)
-
-
-def scan_seedance_video(source: Path) -> VideoScan:
-    """Decode a video once and collect one untrusted Seedance candidate per frame."""
-    return _scan_video(source, detect_seedance_frame)
-
-
-def scan_dola_video(source: Path) -> VideoScan:
-    """Decode a video once and collect one untrusted Dola candidate per frame."""
-    return _scan_video(source, detect_dola_frame)
-
-
-def scan_hailuo_video(source: Path) -> VideoScan:
-    """Decode a video once and collect one untrusted Hailuo candidate per frame."""
-    return _scan_video(source, detect_hailuo_frame)
-
-
-def scan_kling_video(source: Path) -> VideoScan:
-    """Decode a video once and collect one untrusted Kling candidate per frame."""
-    return _scan_video(source, detect_kling_frame)
 
 
 def _mask_for_region(

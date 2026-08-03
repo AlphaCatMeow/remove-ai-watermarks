@@ -30,9 +30,9 @@ from remove_ai_watermarks._internal.qwen_zimage_pipeline import (
 )
 from remove_ai_watermarks._internal.watermark_profiles import (
     CONTROLNET_CANNY_MODEL,
-    DEFAULT_MODEL_ID,
     SDXL_LIGHTNING_MODEL_ID,
     SDXL_LIGHTNING_PATTERN,
+    SDXL_MODEL_ID,
 )
 
 log = logging.getLogger(__name__)
@@ -88,7 +88,7 @@ class SdxlZImagePipeline(QwenZImagePipeline):
         controlnet = ControlNetModel.from_pretrained(CONTROLNET_CANNY_MODEL, torch_dtype=torch.float16, **token)
         vae = AutoencoderKL.from_pretrained(SDXL_VAE_MODEL_ID, torch_dtype=torch.float16, **token)
         pipe = StableDiffusionXLControlNetImg2ImgPipeline.from_pretrained(
-            DEFAULT_MODEL_ID,
+            SDXL_MODEL_ID,
             controlnet=controlnet,
             vae=vae,
             torch_dtype=torch.float16,

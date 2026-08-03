@@ -13,20 +13,20 @@ WHAT IT COVERS
   metadata   real AI-metadata files -> --check detects, --remove strip-and-verifies clean
   visible    real marked images per mark -> the mark is gone on re-detect, output written
   erase      a real image, each fill backend (cv2 / migan / lama) -> output written
-  invisible  a real SynthID image on MPS at reduced resolution -> a CHANGED image is written
+  invisible  a real SynthID image at reduced resolution -> a CHANGED image is written
   all        a real marked image through the full pipeline -> output written
   batch      a real directory -> every input produces an output
 
   invisible/all run the diffusion model, so they are gated behind --diffusion and run at a
-  small --max-resolution on MPS (the user's "reduced size on MPS" path). Everything else is
-  cv2/numpy and fast.
+  small --max-resolution. Both profiles are CUDA-only, so that section needs an NVIDIA
+  GPU; everything else is cv2/numpy, fast, and runs anywhere.
 
 DATA SAFETY
   Treat input datasets as sensitive and read-only. Output stays in a gitignored temp
   dir. Records example uids and pass/fail, never image content.
 
     uv run python scripts/real_examples_e2e.py                 # fast surface (no diffusion)
-    uv run python scripts/real_examples_e2e.py --diffusion     # + invisible/all on MPS
+    uv run python scripts/real_examples_e2e.py --diffusion     # + invisible/all (needs CUDA)
 """
 
 from __future__ import annotations
@@ -239,12 +239,16 @@ def check_erase(res: Results, tmp: Path) -> None:
 
 
 def check_diffusion(res: Results, tmp: Path, gemini_src: str, openai_src: str) -> None:
-    """The GPU path: invisible + all on MPS at reduced resolution -> a CHANGED image."""
+    """The GPU path: invisible + all at reduced resolution -> a CHANGED image.
+
+    CUDA-only. On a machine without an NVIDIA GPU every row here fails with the
+    library's clean refusal; run this section on a GPU box.
+    """
     import numpy as np
 
     from remove_ai_watermarks.image_io import imread
 
-    print("\ninvisible / all -- real SynthID image on MPS, reduced resolution")
+    print("\ninvisible / all -- real SynthID image, reduced resolution (CUDA required)")
     for label, src in (("invisible/gemini", gemini_src), ("invisible/openai", openai_src)):
         if not src:
             res.add(label, "-", True, "no real positive found (skipped)")
@@ -252,7 +256,7 @@ def check_diffusion(res: Results, tmp: Path, gemini_src: str, openai_src: str) -
         sp = Path(src)
         outp = tmp / f"inv_{sp.stem}.png"
         code, out = run(
-            ["invisible", src, "-o", str(outp), "--device", "mps", "--max-resolution", "512", "--seed", "0"],
+            ["invisible", src, "-o", str(outp), "--max-resolution", "512", "--seed", "0"],
             timeout=1200,
         )
         if not outp.exists():
@@ -276,7 +280,7 @@ def check_diffusion(res: Results, tmp: Path, gemini_src: str, openai_src: str) -
         sp = Path(gemini_src)
         outp = tmp / f"all_{sp.stem}.png"
         code, out = run(
-            ["all", gemini_src, "-o", str(outp), "--device", "mps", "--max-resolution", "512", "--seed", "0"],
+            ["all", gemini_src, "-o", str(outp), "--max-resolution", "512", "--seed", "0"],
             timeout=1200,
         )
         ok = outp.exists() and outp.stat().st_size > 0
@@ -304,7 +308,7 @@ def check_batch(res: Results, tmp: Path) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--diffusion", action="store_true", help="also run invisible/all on MPS (slow)")
+    ap.add_argument("--diffusion", action="store_true", help="also run invisible/all (slow, needs CUDA)")
     ap.add_argument("--gemini", default="")
     ap.add_argument("--openai", default="")
     a = ap.parse_args()
@@ -320,7 +324,7 @@ def main() -> None:
         if a.diffusion:
             check_diffusion(res, tmp, a.gemini, a.openai)
         else:
-            print("\n(diffusion skipped -- pass --diffusion to run invisible/all on MPS)")
+            print("\n(diffusion skipped -- pass --diffusion to run invisible/all)")
     raise SystemExit(res.report())
 
 

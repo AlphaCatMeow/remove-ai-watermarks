@@ -11,6 +11,8 @@ Every single-image command declares `source` with `dir_okay=False`; `batch` decl
 
 Exit-code and no-signal behavior is a public contract. Read the command-line section of [`../../docs/module-internals.md`](../../docs/module-internals.md) before changing it.
 
+Do not add an option whose only outcome is an error. Model id, step count, CFG and any non-CUDA device are fixed by the profile, so none of them is a parameter of the CLI, `InvisibleEngine`, or `WatermarkRemover` -- they were accepted-then-rejected for a while, which moved the failure several frames below the caller and advertised choices the pinned stack cannot honor. If a value cannot vary, delete the knob rather than validating it. The same rule applies to install hints: name the extra that actually makes the command work (`qwen-zimage`, not `diffusion`).
+
 ## Local gate
 
 Run `bash maintain.sh` from the repository root. The authoritative type gate is scoped to `src/`; full-project Pyright can exhaust Node memory on the ML dependency graph.

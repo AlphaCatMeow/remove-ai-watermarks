@@ -17,8 +17,10 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 # SDXL base is no longer a profile of its own, but it is still the global stage of
-# sdxl-zimage, so the checkpoint id stays.
-DEFAULT_MODEL_ID = "stabilityai/stable-diffusion-xl-base-1.0"
+# sdxl-zimage, so the checkpoint id stays. Named for what it is rather than
+# ``DEFAULT_MODEL_ID``: there is no user-selectable model any more, so "default"
+# implied an override that both profiles reject.
+SDXL_MODEL_ID = "stabilityai/stable-diffusion-xl-base-1.0"
 CONTROLNET_CANNY_MODEL = "xinsir/controlnet-canny-sdxl-1.0"
 
 QWEN_ZIMAGE_PROFILE = "qwen-zimage"
@@ -26,14 +28,27 @@ SDXL_ZIMAGE_PROFILE = "sdxl-zimage"
 DEFAULT_PROFILE = QWEN_ZIMAGE_PROFILE
 PROFILE_CHOICES = (QWEN_ZIMAGE_PROFILE, SDXL_ZIMAGE_PROFILE)
 
+# The modules a real removal run needs, and the extra that installs them. Both live
+# here, in the only profile module that imports nothing heavy, because the CLI's
+# availability gate and the remover's own precondition must agree: when they drifted,
+# the CLI passed on a torch+diffusers environment and the run then died at the
+# DiffSynth face stage, telling the user to install an extra that does not contain it.
+REMOVAL_MODULES = ("torch", "diffusers", "diffsynth")
+INVISIBLE_EXTRA = "remove-ai-watermarks[qwen-zimage]"
+
+# qwen-zimage's output already matches the input's detail level, so polishing it is a
+# no-op at best. sdxl-zimage's global pass leaves the softer output the polish exists
+# for. This is per-profile data, not a CLI concern: the flag defaults to None so that
+# "the user did not choose" stays a value rather than an inference from Click state.
+PROFILE_ADAPTIVE_POLISH = {QWEN_ZIMAGE_PROFILE: False, SDXL_ZIMAGE_PROFILE: True}
+
 SDXL_LIGHTNING_MODEL_ID = "ByteDance/SDXL-Lightning"
 SDXL_LIGHTNING_PATTERN = "sdxl_lightning_4step_lora.safetensors"
 
-# Both profiles run the same distilled four-step schedule, and both are certified at a
-# fixed seed because SynthID removal near the strength floor is seed-dependent.
-PROFILE_STEPS = 4
+# Both profiles are certified at a fixed seed because SynthID removal near the
+# strength floor is seed-dependent. The step count and CFG are not settable at all --
+# each stage owns them (``GLOBAL_STEPS`` / ``FACE_STEPS`` in qwen_zimage_pipeline).
 PROFILE_SEED = 0
-PROFILE_CFG = 1.0
 
 # sdxl-zimage runs the qwen-zimage recipe on an SDXL global stage, and strength is
 # architecture-bound: at Qwen's 0.154 an SDXL global pass leaves SynthID on a native
@@ -77,14 +92,16 @@ def normalize_profile(profile: str) -> str:
     return _ALIASES.get(value, value)
 
 
-def resolve_steps(num_inference_steps: int | None) -> int:
-    """Return an explicit step count or the distilled four-step default."""
-    return PROFILE_STEPS if num_inference_steps is None else num_inference_steps
-
-
 def resolve_seed(seed: int | None) -> int:
     """Keep both profiles reproducible by default."""
     return PROFILE_SEED if seed is None else seed
+
+
+def resolve_adaptive_polish(adaptive_polish: bool | None, pipeline: str) -> bool:
+    """Return an explicit polish choice, or the profile's calibrated default."""
+    if adaptive_polish is not None:
+        return adaptive_polish
+    return PROFILE_ADAPTIVE_POLISH.get(normalize_profile(pipeline), True)
 
 
 def strength_default_help() -> str:

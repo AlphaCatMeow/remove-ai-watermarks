@@ -327,7 +327,13 @@ class TestInvisibleCommand:
         expected = sample_png.with_stem(sample_png.stem + "_clean")
         assert expected.exists()
 
-    def test_invisible_adaptive_polish_off_by_default_under_qwen_zimage(self, runner, sample_png):
+    def test_invisible_leaves_the_polish_default_to_the_library(self, runner, sample_png):
+        """An untyped --adaptive-polish reaches the engine as None, not as a value.
+
+        The per-profile default lives in watermark_profiles, so the CLI must pass the
+        user's non-choice through rather than resolving it here. Resolving in the CLI
+        is how the library and the CLI came to disagree on the same profile.
+        """
         mock_cls, mock_engine = _mock_invisible_engine()
         with (
             patch("remove_ai_watermarks.invisible_engine.is_available", return_value=True),
@@ -336,13 +342,7 @@ class TestInvisibleCommand:
         ):
             result = runner.invoke(main, ["invisible", str(sample_png), "--force"])
         assert result.exit_code == 0, result.output
-        # The default profile is qwen-zimage, and _resolve_profile_polish keeps its
-        # output untouched unless polish was asked for explicitly. It stays available:
-        # passing --adaptive-polish still turns it on (covered separately).
-        assert mock_engine.remove_watermark.call_args.kwargs["adaptive_polish"] is False
-        # Default model is None (the SDXL base) and CFG is None (the library's 7.5).
-        assert mock_cls.call_args.kwargs["model_id"] is None
-        assert mock_engine.remove_watermark.call_args.kwargs["guidance_scale"] is None
+        assert mock_engine.remove_watermark.call_args.kwargs["adaptive_polish"] is None
 
     def test_invisible_no_adaptive_polish_disables(self, runner, sample_png):
         mock_cls, mock_engine = _mock_invisible_engine()
@@ -355,20 +355,24 @@ class TestInvisibleCommand:
         assert result.exit_code == 0, result.output
         assert mock_engine.remove_watermark.call_args.kwargs["adaptive_polish"] is False
 
-    def test_invisible_model_and_guidance_scale_flow_to_engine(self, runner, sample_png):
-        mock_cls, mock_engine = _mock_invisible_engine()
-        with (
-            patch("remove_ai_watermarks.invisible_engine.is_available", return_value=True),
-            patch("remove_ai_watermarks.cli.InvisibleEngine", mock_cls, create=True),
-            patch("remove_ai_watermarks.invisible_engine.InvisibleEngine", mock_cls),
+    def test_knobs_the_fixed_stack_cannot_honor_are_not_offered(self, runner, sample_png):
+        """--model/--steps/--guidance-scale/--device/--auto are gone, not rejected.
+
+        Each pinned a value the profiles fix (model stack, per-stage schedule, CFG 1.0,
+        CUDA), so accepting one only produced an error several layers down -- a flag
+        that advertises a capability the library does not have. Click now refuses the
+        option itself, which is the honest answer and the one a caller can act on.
+        """
+        for retired in (
+            ["--model", "org/custom-sdxl"],
+            ["--steps", "20"],
+            ["--guidance-scale", "5.5"],
+            ["--device", "cpu"],
+            ["--auto"],
         ):
-            result = runner.invoke(
-                main,
-                ["invisible", str(sample_png), "--model", "org/custom-sdxl", "--guidance-scale", "5.5", "--force"],
-            )
-        assert result.exit_code == 0, result.output
-        assert mock_cls.call_args.kwargs["model_id"] == "org/custom-sdxl"
-        assert mock_engine.remove_watermark.call_args.kwargs["guidance_scale"] == 5.5
+            result = runner.invoke(main, ["invisible", str(sample_png), *retired, "--force"])
+            assert result.exit_code == 2, f"{retired[0]}: {result.output}"
+            assert "No such option" in result.output, f"{retired[0]}: {result.output}"
 
     def test_retired_pipeline_names_are_rejected_not_silently_remapped(self, runner, sample_png):
         """default/sdxl/controlnet/qwen were removed with their CPU code paths.
@@ -530,7 +534,7 @@ class TestAllCommand:
             result = runner.invoke(main, ["all", str(sample_png), "-o", str(output)])
         assert result.exit_code != 0, result.output
         assert "NOT removed" in result.output
-        assert "remove-ai-watermarks[diffusion]" in result.output
+        assert "remove-ai-watermarks[qwen-zimage]" in result.output
         assert output.exists()  # visible + metadata still produced a file
 
     def test_all_reports_metadata_that_survived_stripping(self, runner, sample_png, tmp_path):
@@ -858,10 +862,11 @@ class TestBatchCommand:
         assert out[0, 0, 3] == 0
         assert out[100, 100, 3] == 255
 
-    def test_batch_auto_is_deprecated_and_enables_polish(self, runner, tmp_path):
-        """--auto is retired: it warns and just enables the adaptive polish.
+    def test_batch_explicit_adaptive_polish_overrides_the_qwen_zimage_off(self, runner, tmp_path):
+        """qwen-zimage leaves the polish off by default; a typed flag still turns it on.
 
-        It no longer selects a pipeline: qwen-zimage is the only default there is.
+        The off is a parameter-source check, not a changed default, so it must yield to
+        an explicit --adaptive-polish rather than swallowing it.
         """
         input_dir = _make_batch_dir(tmp_path, count=2)
         output_dir = tmp_path / "output"
@@ -874,12 +879,19 @@ class TestBatchCommand:
         ):
             result = runner.invoke(
                 main,
-                ["batch", str(input_dir), "-o", str(output_dir), "--mode", "invisible", "--auto", "--force"],
+                [
+                    "batch",
+                    str(input_dir),
+                    "-o",
+                    str(output_dir),
+                    "--mode",
+                    "invisible",
+                    "--adaptive-polish",
+                    "--force",
+                ],
             )
         assert result.exit_code == 0, result.output
         assert "2 processed" in result.output
-        assert "deprecated" in result.output.lower()
-        # Pipeline stays the default controlnet; --auto only turned the polish on.
         assert mock_cls.call_args.kwargs["pipeline"] == "qwen-zimage"
         assert mock_engine.remove_watermark.call_args.kwargs["adaptive_polish"] is True
 
@@ -923,21 +935,26 @@ class TestBatchCommand:
 
 
 class TestGpuHintMarkup:
-    """The diffusion install hint must reach the user with the ``[diffusion]`` token
-    intact (plain output prints it verbatim, with no markup parsing)."""
+    """The install hint must name the extra that actually makes a removal run.
 
-    def test_invisible_install_hint_keeps_gpu_extra(self, runner, sample_png):
+    It must also survive to the user with its ``[...]`` token intact (plain output
+    prints it verbatim, with no markup parsing). It used to say ``[diffusion]``,
+    which installs torch and diffusers but not the DiffSynth face stage both
+    profiles run -- so following the advice produced a second, different failure.
+    """
+
+    def test_invisible_install_hint_names_the_working_extra(self, runner, sample_png):
         with patch("remove_ai_watermarks.invisible_engine.is_available", return_value=False):
             result = runner.invoke(main, ["invisible", str(sample_png)])
         assert result.exit_code != 0
-        assert "remove-ai-watermarks[diffusion]" in result.output
+        assert "remove-ai-watermarks[qwen-zimage]" in result.output
 
-    def test_all_install_hint_keeps_gpu_extra(self, runner, sample_png):
+    def test_all_install_hint_names_the_working_extra(self, runner, sample_png):
         # The `all` pipeline skips the invisible step with a warning that carries
-        # the same hint; it must keep the [diffusion] extra too.
+        # the same hint; it must name the same extra.
         with patch("remove_ai_watermarks.invisible_engine.is_available", return_value=False):
             result = runner.invoke(main, ["all", str(sample_png)])
-        assert "remove-ai-watermarks[diffusion]" in result.output
+        assert "remove-ai-watermarks[qwen-zimage]" in result.output
 
 
 class TestEraseCommand:

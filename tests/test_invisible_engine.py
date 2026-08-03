@@ -16,23 +16,25 @@ class TestIsAvailable:
         result = is_available()
         assert isinstance(result, bool)
 
-    def test_available_reflects_dependencies(self):
-        """is_available() is True iff torch + diffusers (the diffusion extra) import.
+    def test_available_reflects_every_module_a_run_needs(self):
+        """True iff every module in REMOVAL_MODULES imports, diffsynth included.
 
-        Must not assume the full stack: the default+dev CI env has no diffusers.
+        Derived from the same tuple the remover's precondition uses, so this cannot
+        pass while the two disagree -- the drift that let a torch+diffusers-only
+        environment clear the CLI gate and then die at the DiffSynth face stage.
+        Must not assume the full stack: the default+dev CI env has none of it.
         """
         import importlib.util
 
-        expected = all(importlib.util.find_spec(m) is not None for m in ("torch", "diffusers"))
+        from remove_ai_watermarks._internal.watermark_profiles import REMOVAL_MODULES
+
+        assert "diffsynth" in REMOVAL_MODULES
+        expected = all(importlib.util.find_spec(m) is not None for m in REMOVAL_MODULES)
         assert is_available() is expected
 
 
 class TestInvisibleEngineInit:
     """Tests for InvisibleEngine construction (no GPU required)."""
-
-    def test_default_model_id(self):
-        # SDXL base became the default in May 2026 (defeats SynthID v2).
-        assert InvisibleEngine.DEFAULT_MODEL_ID == "stabilityai/stable-diffusion-xl-base-1.0"
 
     def test_preload_forwards_global_only(self):
         engine = object.__new__(InvisibleEngine)
@@ -55,7 +57,7 @@ class TestNativeOutputSize:
             Image.open(image_path).crop((0, 0, 24, 16)).save(out)
             return out
 
-        engine._remover = SimpleNamespace(remove_watermark=_remove_watermark)
+        engine._remover = SimpleNamespace(remove_watermark=_remove_watermark, model_profile="qwen-zimage")
         engine._progress_callback = None
         src = tmp_path / "src.png"
         out = tmp_path / "out.png"
@@ -113,30 +115,32 @@ class TestTargetSize:
         assert _target_size(381, 512, 4096) is None
 
 
-class TestEngineDoesNotFabricateAModelId:
-    """The engine must forward model_id untouched, including None.
+class TestEngineConstructsWithoutAModelId:
+    """Plain construction must reach the remover, and must not name a model.
 
-    It used to substitute DEFAULT_MODEL_ID for None. Once the remover tightened its
-    "you may not override the fixed stack" check from `not in {None, DEFAULT_MODEL_ID}`
-    to `is not None`, that substitution made EVERY InvisibleEngine construction raise -
-    and no test saw it, because the library tests build WatermarkRemover directly while
-    the engine tests mock it. A deployed Modal worker caught it instead.
+    The engine used to take a ``model_id`` and substitute the SDXL default for None.
+    Once the remover tightened its "you may not override the fixed stack" check to
+    ``is not None``, that substitution made EVERY construction raise -- and no test
+    saw it, because the library tests build WatermarkRemover directly while the engine
+    tests mock it. A deployed Modal worker caught it instead. The parameter is gone on
+    both sides now, so guard the property that broke: a default construction reaches
+    the remover, carrying no model at all.
     """
 
-    def test_none_stays_none(self):
+    def test_default_construction_names_no_model(self):
         from unittest.mock import patch
 
         import remove_ai_watermarks.invisible_engine as engine_module
 
         with patch("remove_ai_watermarks._internal.watermark_remover.WatermarkRemover") as remover:
             engine_module.InvisibleEngine(pipeline="qwen-zimage")
-        assert remover.call_args.kwargs["model_id"] is None
+        assert remover.call_count == 1
+        assert "model_id" not in remover.call_args.kwargs
 
-    def test_an_explicit_model_id_still_reaches_the_remover_to_be_rejected(self):
-        from unittest.mock import patch
+    def test_a_model_id_is_not_accepted(self):
+        import pytest
 
         import remove_ai_watermarks.invisible_engine as engine_module
 
-        with patch("remove_ai_watermarks._internal.watermark_remover.WatermarkRemover") as remover:
-            engine_module.InvisibleEngine(model_id="org/custom", pipeline="qwen-zimage")
-        assert remover.call_args.kwargs["model_id"] == "org/custom"
+        with pytest.raises(TypeError):
+            engine_module.InvisibleEngine(model_id="org/custom", pipeline="qwen-zimage")  # type: ignore[call-arg]

@@ -52,11 +52,11 @@ removal.
 | Visible video processing | `remove-ai-watermarks[video]` |
 | Video SynthID removal | `remove-ai-watermarks[video,diffusion]` |
 | Torch-free DWT-DCT detection | `remove-ai-watermarks[detect]` |
-| Diffusion removal | `remove-ai-watermarks[diffusion]` |
+| Invisible image removal (needs CUDA) | `remove-ai-watermarks[qwen-zimage]` |
 | Every production feature | `remove-ai-watermarks[all]` |
 
 Lower-level and specialized extras include `pixels`, `heif`, `trustmark`,
-`migan`, `lama`, and `qwen-zimage`. The
+`migan`, `lama`, and `diffusion`. The
 [installation guide](docs/installation.md#feature-extras) documents their exact
 dependency composition and model requirements.
 
@@ -180,10 +180,11 @@ check. Google does not publish a local decoder, so a fresh provider check
 remains useful for unusually important files or after provider changes, but it
 is not a product result state.
 
-For invisible watermark removal, install the diffusion dependencies:
+For invisible watermark removal, install the `qwen-zimage` extra. **An NVIDIA GPU
+is required**: both profiles are CUDA-only, and there is no CPU or MPS fallback.
 
 ```bash
-uv tool install --force "remove-ai-watermarks[diffusion]"
+uv tool install --force "remove-ai-watermarks[qwen-zimage]"
 remove-ai-watermarks invisible image.png -o clean.png
 ```
 
@@ -207,14 +208,14 @@ features, and development setup.
 
 ### High quality invisible removal
 
-The `qwen-zimage` profile is the highest fidelity option for face heavy images.
-It is CUDA only and uses a much larger model stack than the default ControlNet
-profile.
+`qwen-zimage` is the default profile: a Qwen-Image-2512 Lightning pass under Canny
+ControlNet, followed by SAM-masked Z-Image repair of any detected face. The
+alternative, `sdxl-zimage`, swaps the global stage for SDXL and keeps the same face
+stage. Both are CUDA only.
 
 ```bash
 uv tool install --force "remove-ai-watermarks[qwen-zimage]"
-remove-ai-watermarks invisible image.png -o clean.png \
-  --pipeline qwen-zimage --force
+remove-ai-watermarks invisible image.png -o clean.png --force
 ```
 
 | OpenAI example before | OpenAI example after |
@@ -273,7 +274,7 @@ remove-ai-watermarks invisible image.png -o clean.png \
 ```
 
 CPU offload lowers CUDA memory pressure by moving model components between CPU
-and GPU. It is slower and has no effect on CPU or MPS.
+and GPU, at the cost of speed.
 
 ### Process a directory
 
@@ -378,8 +379,9 @@ invisible removal.
   The shipped profile is oracle-certified, but no public local decoder can
   certify an arbitrary output at runtime. Recheck unusually important outputs
   after provider changes.
-- `qwen-zimage` requires CUDA. The other diffusion profiles also support the
-  devices listed by `remove-ai-watermarks invisible --help`.
+- Invisible-watermark removal requires CUDA. Both profiles refuse any other
+  device at construction rather than falling back to one that cannot run them.
+  Visible removal, metadata stripping and `identify` still run anywhere.
 - Provider watermark systems can change. Validate important outputs with the
   provider's own verifier when one is available.
 

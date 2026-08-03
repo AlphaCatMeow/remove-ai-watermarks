@@ -175,6 +175,7 @@ def test_cpu_offload_forces_both_stacks_to_stream(monkeypatch, cpu_offload, expe
     monkeypatch.setattr(pipeline_module, "QwenZImagePipeline", Recorder)
 
     remover = module.WatermarkRemover.__new__(module.WatermarkRemover)
+    remover.model_profile = "qwen-zimage"
     remover.device = "cuda"
     remover.torch_dtype = None
     remover.hf_token = None
@@ -526,16 +527,13 @@ def test_face_composite_preserves_every_pixel_outside_mask():
     assert np.all(result[12:20, 12:20] == 240)
 
 
-def test_profile_defaults_to_four_global_steps():
-    from remove_ai_watermarks._internal.watermark_profiles import (
-        normalize_profile,
-        resolve_seed,
-        resolve_steps,
-    )
+def test_profile_defaults_to_four_global_steps_and_a_fixed_seed():
+    """The step count belongs to the stage, not to a caller-settable profile knob."""
+    from remove_ai_watermarks._internal.qwen_zimage_pipeline import GLOBAL_STEPS
+    from remove_ai_watermarks._internal.watermark_profiles import normalize_profile, resolve_seed
 
     assert normalize_profile("qwen-zimage") == "qwen-zimage"
-    assert resolve_steps(None) == 4
-    assert resolve_steps(12) == 12
+    assert GLOBAL_STEPS == 4
     assert resolve_seed(None) == 0
     assert resolve_seed(17) == 17
 
@@ -560,8 +558,11 @@ def test_cli_qwen_zimage_keeps_profile_postprocess_default(tmp_image_path, monke
     )
 
     assert result.exit_code == 0, result.output
-    assert mock_engine.remove_watermark.call_args.kwargs["adaptive_polish"] is False
-    assert mock_engine.remove_watermark.call_args.kwargs["seed"] == 0
+    # Both defaults are the profile's, resolved once by the library rather than
+    # pre-resolved here: the CLI passes them through unset so a library caller on the
+    # same profile gets the same answer.
+    assert mock_engine.remove_watermark.call_args.kwargs["adaptive_polish"] is None
+    assert mock_engine.remove_watermark.call_args.kwargs["seed"] is None
 
     result = CliRunner().invoke(
         cli.main,
@@ -590,7 +591,6 @@ def test_watermark_remover_dispatches_to_full_pipeline(tmp_path, monkeypatch):
     runtime.run.return_value = Image.new("RGB", (64, 48), (50, 60, 70))
     remover = WatermarkRemover(device="cuda", pipeline="qwen-zimage")
     monkeypatch.setattr(remover, "_load_qwen_zimage_pipeline", lambda: runtime)
-    assert remover.model_id == "Qwen/Qwen-Image-2512 + Tongyi-MAI/Z-Image-Turbo"
 
     remover.remove_watermark(
         source,
@@ -743,23 +743,30 @@ def test_watermark_remover_forwards_global_only_preload(monkeypatch):
     runtime.preload.assert_called_once_with(global_only=True)
 
 
-def test_qwen_zimage_rejects_runtime_knobs_that_change_fixed_graph(tmp_path, monkeypatch):
+def test_the_fixed_graph_offers_no_runtime_knob_to_reject(tmp_path, monkeypatch):
+    """model_id, steps and CFG are not parameters at any layer.
+
+    They used to be accepted and then rejected, which put the failure several frames
+    below the caller and made the surface advertise choices the pinned stack cannot
+    honor. TypeError from the signature is the earlier, clearer answer -- and it is
+    what keeps a wrapper from threading a value that would silently do nothing.
+    """
     from remove_ai_watermarks._internal.watermark_remover import WatermarkRemover
 
     _mock_watermark_runtime_deps(monkeypatch)
-    with pytest.raises(ValueError, match="fixed Qwen-Image-2512"):
-        WatermarkRemover(model_id="custom/model", device="cuda", pipeline="qwen-zimage")
+    with pytest.raises(TypeError):
+        WatermarkRemover(model_id="custom/model", device="cuda", pipeline="qwen-zimage")  # type: ignore[call-arg]
 
     source = tmp_path / "source.png"
     Image.new("RGB", (64, 48)).save(source)
     remover = WatermarkRemover(device="cuda", pipeline="qwen-zimage")
-    with pytest.raises(ValueError, match=r"CFG 1\.0"):
-        remover.remove_watermark(source, guidance_scale=2.0)
-    with pytest.raises(ValueError, match="requires 4 steps"):
-        remover.remove_watermark(source, num_inference_steps=8)
+    with pytest.raises(TypeError):
+        remover.remove_watermark(source, guidance_scale=2.0)  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        remover.remove_watermark(source, num_inference_steps=8)  # type: ignore[call-arg]
 
 
-def test_invisible_engine_uses_qwen_zimage_step_default(tmp_image_path, tmp_path):
+def test_invisible_engine_passes_the_seed_but_never_a_step_count(tmp_image_path, tmp_path):
     from remove_ai_watermarks.invisible_engine import InvisibleEngine
 
     engine = InvisibleEngine.__new__(InvisibleEngine)
@@ -769,7 +776,10 @@ def test_invisible_engine_uses_qwen_zimage_step_default(tmp_image_path, tmp_path
 
     engine.remove_watermark(tmp_image_path, tmp_path / "clean.png")
 
-    assert engine._remover.remove_watermark.call_args.kwargs["num_inference_steps"] == 4
+    kwargs = engine._remover.remove_watermark.call_args.kwargs
+    assert kwargs["seed"] == 0
+    assert "num_inference_steps" not in kwargs
+    assert "guidance_scale" not in kwargs
 
 
 def test_sdxl_zimage_strength_is_vendor_adaptive_and_leaves_other_profiles_alone():
@@ -791,15 +801,10 @@ def test_sdxl_zimage_strength_is_vendor_adaptive_and_leaves_other_profiles_alone
     assert resolve_strength(None, "google", "qwen-zimage", size=(2000, 1850)) == pytest.approx(0.154)
 
 
-def test_sdxl_zimage_shares_the_four_step_seed_and_step_contract():
-    from remove_ai_watermarks._internal.watermark_profiles import (
-        normalize_profile,
-        resolve_seed,
-        resolve_steps,
-    )
+def test_sdxl_zimage_shares_the_fixed_seed_contract():
+    from remove_ai_watermarks._internal.watermark_profiles import normalize_profile, resolve_seed
 
     assert normalize_profile("sdxl_zimage") == "sdxl-zimage"
-    assert resolve_steps(None) == 4
     assert resolve_seed(None) == 0
 
 

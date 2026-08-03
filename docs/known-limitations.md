@@ -120,33 +120,42 @@ prefix so it can reuse identical latents across candidate strengths.
 
 ### Strength is content and seed dependent
 
-For SDXL and ControlNet, the CLI resolves an unset strength from the detected
-vendor:
+The two profiles resolve an unset strength differently, because different things
+were measured for each.
 
-- OpenAI: `0.10`;
-- Google: `0.15`;
-- unknown: `0.15`.
+`qwen-zimage` reads it from image area, through the resolution-adaptive denoise
+curve. The vendor is deliberately ignored: the curve, not the issuer, is what was
+calibrated.
 
-An explicit `--strength` overrides these defaults. The defaults are operating
-points, not universal guarantees. Near a removal threshold, different content
-or a different random seed may change the verifier result.
+`sdxl-zimage` reads it from the C2PA issuer, on a flat ladder:
 
-The base Qwen and `qwen-zimage` profiles have profile specific strength
-behavior. Consult `remove-ai-watermarks invisible --help` and the source of
-[`watermark_profiles.py`](../src/remove_ai_watermarks/_internal/watermark_profiles.py)
-for the current resolver.
+- OpenAI: `0.15`;
+- Google: `0.25`;
+- unknown: `0.25`, following the stricter of the two.
+
+An SDXL global pass needs more denoise than Qwen at the same fidelity, and the
+values are flat rather than a curve because flat values are what was measured: each
+verdict came from a fixed strength at one size, and no size dependence has been
+established for that stage.
+
+An explicit `--strength` overrides both. The defaults are operating points, not
+universal guarantees. Near a removal threshold, different content or a different
+random seed may change the verifier result, which is why both profiles are
+certified at a fixed seed. The live resolver is
+[`watermark_profiles.py`](../src/remove_ai_watermarks/_internal/watermark_profiles.py).
 
 ### Pipelines have different quality tradeoffs
 
 | Pipeline | Main limit |
 | --- | --- |
-| `controlnet` | Edge conditioning can preserve a watermark carrying region too closely, and faces may drift. |
-| `sdxl` | Flat graphics and precise structure may receive too little or unhelpful change. |
-| `qwen` | Large CUDA oriented model; face smoothing can still be significant. |
 | `qwen-zimage` | CUDA only, large model stack, and limited broad certification across seeds and content. |
+| `sdxl-zimage` | CUDA only. Its strength ladder is flat per vendor, not a resolution curve, because flat values are what was measured. |
 
-The legacy `default` profile name maps to `sdxl`. The `--auto` flag is
-deprecated, emits a warning, and changes nothing.
+The `controlnet`, `sdxl`, `qwen` and `default` profiles were removed, not aliased
+onward: a retired name is rejected at parse time rather than routed into a profile
+the caller never chose. There is no `--model`, `--steps`, `--guidance-scale`,
+`--device` or `--auto` option either; each profile pins its model stack, its
+per-stage schedule, CFG 1.0 and CUDA.
 
 ## Resolution and memory
 

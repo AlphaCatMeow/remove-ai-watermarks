@@ -15,7 +15,6 @@ from PIL import Image
 from remove_ai_watermarks._internal.tiling import (
     Tile,
     _axis_positions,
-    feather_region_composite,
     feather_weights,
     plan_tiles,
     run_tiled,
@@ -139,72 +138,3 @@ class TestRunTiled:
         image = Image.new("RGB", (1500, 1100), (200, 100, 50))
         out = run_tiled(generate, image, tile_size=1024, overlap=128)
         assert out.size == (1500, 1100)
-
-
-class TestFeatherRegionComposite:
-    """Region-targeted compositing for AI-enhanced composites: only the AI box is
-    regenerated, the real photo outside it stays pixel-exact (roadmap P1#8)."""
-
-    @staticmethod
-    def _frames(h=200, w=300):
-        base = np.full((h, w, 3), 80, np.uint8)
-        regenerated = np.full((h, w, 3), 200, np.uint8)
-        return base, regenerated
-
-    def test_outside_box_is_pixel_exact(self):
-        base, regen = self._frames()
-        out = feather_region_composite(base, regen, (100, 60, 80, 50), feather=8)
-        # Far corners are well outside the box -> identical to base.
-        assert np.array_equal(out[:50, :80], base[:50, :80])
-        assert np.array_equal(out[150:, 220:], base[150:, 220:])
-
-    def test_interior_equals_regenerated(self):
-        base, regen = self._frames()
-        out = feather_region_composite(base, regen, (100, 60, 80, 50), feather=8)
-        # Deep interior of the box (past the feather ramp) is fully regenerated.
-        assert np.array_equal(out[80:90, 130:150], regen[80:90, 130:150])
-
-    def test_hard_paste_when_no_feather(self):
-        base, regen = self._frames()
-        out = feather_region_composite(base, regen, (100, 60, 80, 50), feather=0)
-        assert np.array_equal(out[60:110, 100:180], regen[60:110, 100:180])
-        assert np.array_equal(out[:60], base[:60])
-
-    def test_seam_is_monotonic_ramp(self):
-        base, regen = self._frames()
-        out = feather_region_composite(base, regen, (100, 60, 80, 50), feather=10).astype(np.float32)
-        # Along a horizontal line crossing the left edge, values rise from base(80)
-        # toward regenerated(200) monotonically through the feather band.
-        row = out[85, 100:115, 0]
-        assert row[0] < row[-1]
-        assert np.all(np.diff(row) >= -1e-3)
-
-    def test_dtype_preserved(self):
-        base, regen = self._frames()
-        out = feather_region_composite(base, regen, (50, 50, 40, 40), feather=4)
-        assert out.dtype == base.dtype
-
-    def test_grayscale_2d_supported(self):
-        base = np.full((100, 120), 30, np.uint8)
-        regen = np.full((100, 120), 220, np.uint8)
-        out = feather_region_composite(base, regen, (40, 30, 30, 30), feather=4)
-        assert out.shape == base.shape
-        assert np.array_equal(out[:30], base[:30])
-
-    def test_empty_or_offimage_box_returns_base(self):
-        base, regen = self._frames()
-        assert np.array_equal(feather_region_composite(base, regen, (0, 0, 0, 0)), base)
-        assert np.array_equal(feather_region_composite(base, regen, (500, 500, 40, 40)), base)
-
-    def test_box_clamped_to_image_bounds(self):
-        base, regen = self._frames()
-        # Box overhangs the bottom-right; only the in-image part is composited.
-        out = feather_region_composite(base, regen, (280, 180, 60, 60), feather=0)
-        assert np.array_equal(out[180:, 280:], regen[180:, 280:])
-        assert out.shape == base.shape
-
-    def test_shape_mismatch_raises(self):
-        base, _ = self._frames(200, 300)
-        bad = np.full((100, 100, 3), 200, np.uint8)
-        with pytest.raises(ValueError, match="shape mismatch"):
-            feather_region_composite(base, bad, (10, 10, 20, 20))

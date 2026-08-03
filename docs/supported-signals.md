@@ -114,13 +114,13 @@ The `invisible` command uses diffusion regeneration. It targets watermark
 patterns by changing the image rather than decoding and deleting a known
 payload.
 
-Current pipeline values:
+Current pipeline values, both CUDA-only:
 
-- `controlnet`;
-- `sdxl`;
-- `qwen`;
-- `qwen-zimage`;
-- legacy alias `default`, which resolves to `sdxl`.
+- `qwen-zimage`, the default;
+- `sdxl-zimage`, the same recipe and the same face stage on an SDXL global pass.
+
+The `controlnet`, `sdxl`, `qwen` and `default` values were removed. A retired name
+is rejected at parse time rather than remapped onto a surviving profile.
 
 SynthID does not have a public local pixel decoder in this project. The tool can
 infer likely presence from supported provenance metadata, but after that

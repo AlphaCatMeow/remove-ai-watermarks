@@ -91,20 +91,26 @@ and the ffmpeg audio/video strip. The gap to find is not only
 "logic untested" but
 "never executed on real data", which is precisely what this campaign is for.
 
-#### Bug found by the extension: `--steps` below ~7 crashes inside torch
+#### Bug found by the extension: `--steps` below ~7 crashed inside torch
 
-Effective timesteps are `int(steps * strength)`. At the vendor-adaptive default strength
-(0.15, or 0.10 for OpenAI) any `--steps` under 7 rounds to **zero**, and the pipeline dies
-with a raw traceback:
+**Fixed by deletion.** `--steps` no longer exists, on the CLI or in the Python API,
+so this class of failure is unreachable. Kept as a record of why.
+
+Effective timesteps were `int(steps * strength)`. At the vendor-adaptive default
+strength (0.15, or 0.10 for OpenAI) any `--steps` under 7 rounded to **zero**, and the
+pipeline died with a raw traceback:
 
 ```
-$ remove-ai-watermarks invisible img.png --steps 5
 RuntimeError: cannot reshape tensor of 0 elements into shape [0, -1, 1, 512]
 ```
 
-Fully valid CLI arguments, no special flags, no `--force`. The value is accepted, the
-crash is a torch internal, and nothing tells the user that steps and strength interact.
-Fix is either a clamp to >=1 effective step or an up-front validation naming both values.
+Fully valid CLI arguments, no special flags, no `--force`. The value was accepted, the
+crash was a torch internal, and nothing told the user that steps and strength interact.
+The considered fixes were a clamp to >=1 effective step or an up-front validation
+naming both values; what shipped instead is that each stage owns its own distilled
+schedule and no caller can set it. The general lesson stands: a knob whose valid range
+depends on another knob's value needs the interaction validated where both are known,
+or it needs to not be a knob.
 
 Method note: the first run of the knob rows failed 12 times with this identical error,
 which read like twelve broken features. It was one bad harness parameter (`--steps 4`)

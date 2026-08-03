@@ -20,8 +20,7 @@ defaults. This page focuses on choosing the right command.
 | `visible` and `erase` with OpenCV | `remove-ai-watermarks[visible]` (`pixels` is the minimal runtime) |
 | `visible` or `erase` with MI-GAN | `remove-ai-watermarks[migan]` |
 | `visible` or `erase` with big-LaMa | `remove-ai-watermarks[lama]` |
-| `invisible` | `remove-ai-watermarks[diffusion]` |
-| `invisible --pipeline qwen-zimage` | `remove-ai-watermarks[qwen-zimage]` |
+| `invisible` and `all` (needs CUDA) | `remove-ai-watermarks[qwen-zimage]` |
 | `video metadata` and `video identify --no-visible` | Default package |
 | `video identify`, `video visible`, and visible/all batch modes | `remove-ai-watermarks[video]` |
 | `video invisible` and `video all --invisible` | `remove-ai-watermarks[video,diffusion]` |
@@ -340,10 +339,11 @@ failed encode does not overwrite an existing result.
 
 ## Remove invisible watermarks
 
-Install the diffusion dependencies first:
+Install the removal dependencies first. Both profiles are CUDA-only and both
+run the DiffSynth Z-Image face stage, so this is the extra either one needs:
 
 ```bash
-uv tool install --force "remove-ai-watermarks[diffusion]"
+uv tool install --force "remove-ai-watermarks[qwen-zimage]"
 ```
 
 Then run:
@@ -380,8 +380,11 @@ remove-ai-watermarks invisible image.png -o clean.png \
   --pipeline qwen-zimage --force
 ```
 
-The legacy `default` value is an alias for `sdxl`. The `--auto` option is
-deprecated, emits a warning, and changes nothing.
+There is no `--model`, `--steps`, `--guidance-scale` or `--device` option, and the
+deprecated `--auto` is gone. Each profile pins its model stack, its per-stage
+schedule, CFG 1.0 and CUDA, so every one of those flags existed only to be refused
+several layers down. They are not parsed at all now, which fails at the point the
+user can act on rather than after a model load.
 
 ### Work with limited memory
 
@@ -415,7 +418,7 @@ It is a memory strategy, not a guarantee of better quality.
 The `all` command and the `all` installation extra are separate concepts. The
 command runs every applicable stage. Installing `remove-ai-watermarks[all]`
 makes every production backend available; a smaller installation such as
-`remove-ai-watermarks[visible,diffusion]` can also run the command with fewer
+`remove-ai-watermarks[visible,qwen-zimage]` can also run the command with fewer
 optional backends.
 
 ```bash

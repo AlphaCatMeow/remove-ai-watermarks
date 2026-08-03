@@ -25,10 +25,8 @@ from remove_ai_watermarks._internal.constants import SUPPORTED_FORMATS
 from remove_ai_watermarks._internal.utils import is_supported_format
 from remove_ai_watermarks._internal.watermark_profiles import (
     DEFAULT_PROFILE,
+    INVISIBLE_EXTRA,
     PROFILE_CHOICES,
-    QWEN_ZIMAGE_PROFILE,
-    resolve_seed,
-    resolve_steps,
     resolve_strength,
     strength_default_help,
     vendor_for_strength,
@@ -184,23 +182,14 @@ _unsharp_option = click.option(
     "--unsharp", type=float, default=0.0, help="Unsharp-mask sharpening strength (0 = off, typical: 0.3-0.8)."
 )
 
-_auto_option = click.option(
-    "--auto",
-    is_flag=True,
-    default=False,
-    help="DEPRECATED: it no longer selects a pipeline. It now only requests the "
-    "adaptive polish, which the two-stage profiles otherwise leave off to keep their "
-    "output untouched. Prefer --adaptive-polish.",
-)
-
 _adaptive_polish_option = click.option(
     "--adaptive-polish/--no-adaptive-polish",
-    default=True,
+    default=None,
     help="Restore the input's detail level after removal (capped unsharp + edge-masked grain "
-    "targeting the input's sharpness, sparing text), countering the over-smoothed look. ON by "
-    "default except for qwen-zimage, whose upstream-matching output is left unchanged; it "
-    "self-limits where there is no detail deficit (text/flat graphics). Pass --adaptive-polish "
-    "or --no-adaptive-polish to override. Independent of --unsharp/--humanize.",
+    "targeting the input's sharpness, sparing text), countering the over-smoothed look. "
+    "Unset follows the profile: ON for sdxl-zimage, OFF for qwen-zimage, whose "
+    "upstream-matching output is left unchanged. It self-limits where there is no detail "
+    "deficit (text/flat graphics). Independent of --unsharp/--humanize.",
 )
 
 
@@ -230,23 +219,11 @@ def _tile_options(f: Any) -> Any:
     )(f)
 
 
-# HuggingFace model + CFG knobs, shared by the diffusion commands (invisible/all/batch)
-# so the surface stays identical across them.
-_model_option = click.option(
-    "--model",
-    type=str,
-    default=None,
-    help="HuggingFace model ID. Both profiles pin a fixed model stack, so anything "
-    "other than the default is rejected rather than silently ignored.",
-)
-_guidance_scale_option = click.option(
-    "--guidance-scale",
-    type=float,
-    default=None,
-    help="Classifier-free guidance scale (CFG). Both profiles are distilled and fix "
-    "CFG at 1.0, so any other value is rejected.",
-)
-
+# There is deliberately no --model, --steps, --guidance-scale or --device option.
+# Each profile pins a fixed model stack, a distilled per-stage schedule, CFG 1.0 and
+# CUDA; every one of those knobs existed only so the library could reject it several
+# layers down. A flag whose sole outcome is an error is worse than no flag at all --
+# it advertises a capability that does not exist.
 
 # The two-stage profiles are the only ones left. The former controlnet, sdxl, qwen and
 # default profiles were removed rather than kept as a CPU path: none matched this
@@ -275,6 +252,23 @@ _strength_option = click.option(
     type=float,
     default=None,
     help=f"Denoising strength (0.0-1.0). Default: {strength_default_help()}.",
+)
+_seed_option = click.option(
+    "--seed",
+    type=int,
+    default=None,
+    help="Random seed for reproducibility. Default 0: both profiles are certified "
+    "at a fixed seed, because SynthID removal near the strength floor is seed-dependent.",
+)
+_hf_token_option = click.option("--hf-token", type=str, default=None, help="HuggingFace API token.")
+_humanize_option = click.option(
+    "--humanize", type=float, default=0.0, help="Analog Humanizer film grain intensity (0 = off, typical: 2.0-6.0)."
+)
+_max_resolution_option = click.option(
+    "--max-resolution",
+    type=int,
+    default=0,
+    help="Cap long side (px) before diffusion; 0 = native and preserves the most detail. Raise only on GPU OOM.",
 )
 _force_option = click.option(
     "--force/--no-force",
@@ -321,41 +315,6 @@ _visible_sensitivity_option = click.option(
     "see but the detector missed, use 'erase --region' or '--mark <name> --no-detect' "
     "rather than a blanket relaxation.",
 )
-
-
-def _resolve_auto_polish(auto: bool, adaptive_polish: bool) -> bool:
-    """Warn on the retired ``--auto`` flag, returning ``adaptive_polish`` unchanged.
-
-    ``--auto`` used to plan the pipeline + polish from content detection. There is now
-    only one default pipeline, and the content detectors were removed, so the flag
-    survives purely as a polish request: it emits a deprecation warning and passes
-    ``adaptive_polish`` through, with an explicit ``--no-adaptive-polish`` still winning.
-    """
-    if auto:
-        click.echo(
-            "Warning: --auto is deprecated and now does nothing (the adaptive polish it "
-            "enabled is ON by default). Use --no-adaptive-polish to turn the polish off.",
-            err=True,
-        )
-    return adaptive_polish
-
-
-def _resolve_profile_polish(auto: bool, adaptive_polish: bool, pipeline: str) -> bool:
-    """Keep the upstream qwen-zimage output unchanged unless polish was explicit.
-
-    ``--auto`` counts as explicit. It is deprecated, but it is still a request for the
-    polish, and once qwen-zimage became the DEFAULT pipeline the source check below
-    would otherwise have silently turned that flag into a no-op for every caller.
-    """
-    adaptive_polish = _resolve_auto_polish(auto, adaptive_polish)
-    if pipeline != QWEN_ZIMAGE_PROFILE or auto:
-        return adaptive_polish
-    ctx = click.get_current_context(silent=True)
-    if ctx is None:
-        return adaptive_polish
-    if ctx.get_parameter_source("adaptive_polish") == click.core.ParameterSource.DEFAULT:
-        return False
-    return adaptive_polish
 
 
 def _visible_provenance(path: Path | None) -> frozenset[str]:
@@ -833,40 +792,13 @@ def cmd_erase(
     "-o", "--output", type=click.Path(path_type=Path), default=None, help="Output path (default: <source>_clean.<ext>)."
 )
 @_strength_option
-@click.option(
-    "--steps",
-    type=int,
-    default=None,
-    help="Number of denoising steps. Both profiles are distilled four-step schedules, so 4 is the only accepted value.",
-)
 @_pipeline_option
-@click.option(
-    "--device",
-    type=click.Choice(["auto", "cpu", "mps", "cuda", "xpu"]),
-    default="auto",
-    help="Inference device.",
-)
-@click.option(
-    "--seed",
-    type=int,
-    default=None,
-    help="Random seed for reproducibility. Default: 0 for qwen-zimage, random otherwise.",
-)
-@click.option("--hf-token", type=str, default=None, help="HuggingFace API token.")
-@click.option(
-    "--humanize", type=float, default=0.0, help="Analog Humanizer film grain intensity (0 = off, typical: 2.0-6.0)."
-)
-@click.option(
-    "--max-resolution",
-    type=int,
-    default=0,
-    help="Cap long side (px) before diffusion; 0 = native and preserves the most detail. Raise only on GPU/MPS OOM.",
-)
+@_seed_option
+@_hf_token_option
+@_humanize_option
+@_max_resolution_option
 @_controlnet_scale_option
 @_unsharp_option
-@_model_option
-@_guidance_scale_option
-@_auto_option
 @_adaptive_polish_option
 @_tile_options
 @_force_option
@@ -877,19 +809,14 @@ def cmd_invisible(
     source: Path,
     output: Path | None,
     strength: float | None,
-    steps: int | None,
     pipeline: str,
-    device: str,
     seed: int | None,
     hf_token: str | None,
     humanize: float,
     unsharp: float,
     max_resolution: int,
     controlnet_scale: float,
-    model: str | None,
-    guidance_scale: float | None,
-    auto: bool,
-    adaptive_polish: bool,
+    adaptive_polish: bool | None,
     tile: bool,
     tile_size: int,
     tile_overlap: int,
@@ -898,28 +825,23 @@ def cmd_invisible(
 ) -> None:
     """Remove invisible AI watermarks (SynthID, StableSignature, TreeRing).
 
-    Uses diffusion-based regeneration. Requires GPU for reasonable speed.
-    Requires the [diffusion] extra: pip install 'remove-ai-watermarks[diffusion]'
+    Regenerates the pixels with the two-stage diffusion profile. CUDA-only:
+    pip install 'remove-ai-watermarks[qwen-zimage]'
     """
     from remove_ai_watermarks.invisible_engine import is_available as invisible_available
 
     if not invisible_available():
         console.print(
-            "Error: Diffusion dependencies not installed.\n"
-            "  Install them with: pip install 'remove-ai-watermarks[diffusion]'"
+            "Error: the invisible-removal dependencies are not installed.\n"
+            f"  Install them with: pip install {INVISIBLE_EXTRA}"
         )
         raise SystemExit(1)
 
     from remove_ai_watermarks.invisible_engine import InvisibleEngine
 
     source = _validate_image(source)
-    steps = resolve_steps(steps)
-    seed = resolve_seed(seed)
-    adaptive_polish = _resolve_profile_polish(auto, adaptive_polish, pipeline)
     if output is None:
         output = source.with_stem(source.stem + "_clean")
-
-    device_str = None if device == "auto" else device
 
     # Gate BEFORE building the engine: skip the destructive regeneration when no
     # invisible AI watermark is locally detectable (it would only degrade a clean
@@ -932,8 +854,6 @@ def cmd_invisible(
         console.print(f"  {msg}")
 
     engine = InvisibleEngine(
-        model_id=model,
-        device=device_str,
         pipeline=pipeline,
         hf_token=hf_token,
         progress_callback=progress_cb,
@@ -946,15 +866,13 @@ def cmd_invisible(
     vendor = vendor_for_strength(source)
     console.print(f"  Input:    {source.name}")
     console.print(f"  Pipeline: {pipeline}")
-    console.print(f"  Strength: {_resolved_strength_for_display(source, strength, vendor, pipeline)}  Steps: {steps}")
+    console.print(f"  Strength: {_resolved_strength_for_display(source, strength, vendor, pipeline)}")
 
     t0 = time.monotonic()
     result_path = engine.remove_watermark(
         image_path=source,
         output_path=output,
         strength=strength,
-        num_inference_steps=steps,
-        guidance_scale=guidance_scale,
         seed=seed,
         humanize=humanize,
         unsharp=unsharp,
@@ -1516,40 +1434,13 @@ def cmd_identify(ctx: click.Context, source: Path, no_visible: bool, as_json: bo
 @_visible_backend_option
 @_visible_sensitivity_option
 @_strength_option
-@click.option(
-    "--steps",
-    type=int,
-    default=None,
-    help="Number of denoising steps. Both profiles are distilled four-step schedules, so 4 is the only accepted value.",
-)
 @_pipeline_option
-@_model_option
-@click.option(
-    "--device",
-    type=click.Choice(["auto", "cpu", "mps", "cuda", "xpu"]),
-    default="auto",
-    help="Inference device.",
-)
-@click.option(
-    "--seed",
-    type=int,
-    default=None,
-    help="Random seed for reproducibility. Default: 0 for qwen-zimage, random otherwise.",
-)
-@click.option("--hf-token", type=str, default=None, help="HuggingFace API token.")
-@click.option(
-    "--humanize", type=float, default=0.0, help="Analog Humanizer film grain intensity (0 = off, typical: 2.0-6.0)."
-)
-@click.option(
-    "--max-resolution",
-    type=int,
-    default=0,
-    help="Cap long side (px) before diffusion; 0 = native and preserves the most detail. Raise only on GPU/MPS OOM.",
-)
+@_seed_option
+@_hf_token_option
+@_humanize_option
+@_max_resolution_option
 @_controlnet_scale_option
 @_unsharp_option
-@_guidance_scale_option
-@_auto_option
 @_adaptive_polish_option
 @_tile_options
 @_force_option
@@ -1562,19 +1453,14 @@ def cmd_all(
     backend: str,
     sensitivity: str,
     strength: float | None,
-    steps: int | None,
     pipeline: str,
-    model: str | None,
-    device: str,
     seed: int | None,
     hf_token: str | None,
     humanize: float,
     unsharp: float,
     max_resolution: int,
     controlnet_scale: float,
-    guidance_scale: float | None,
-    auto: bool,
-    adaptive_polish: bool,
+    adaptive_polish: bool | None,
     tile: bool,
     tile_size: int,
     tile_overlap: int,
@@ -1592,9 +1478,6 @@ def cmd_all(
     """
     _banner()
     source = _validate_image(source)
-    steps = resolve_steps(steps)
-    seed = resolve_seed(seed)
-    adaptive_polish = _resolve_profile_polish(auto, adaptive_polish, pipeline)
 
     if output is None:
         output = source.with_stem(source.stem + "_clean")
@@ -1649,7 +1532,7 @@ def cmd_all(
             synthid_skipped = True
             console.print(
                 "    Warning: Skipped - GPU dependencies not installed.\n"
-                "    Install them with: pip install 'remove-ai-watermarks[diffusion]'"
+                f"    Install them with: pip install {INVISIBLE_EXTRA}"
             )
         elif _should_skip_invisible_scrub(force, source):
             # No locally-detectable invisible watermark -> skip the destructive
@@ -1666,14 +1549,10 @@ def cmd_all(
         else:
             from remove_ai_watermarks.invisible_engine import InvisibleEngine
 
-            device_str = None if device == "auto" else device
-
             def progress_cb(msg: str) -> None:
                 console.print(f"    {msg}")
 
             inv_engine = InvisibleEngine(
-                model_id=model,
-                device=device_str,
                 pipeline=pipeline,
                 hf_token=hf_token,
                 progress_callback=progress_cb,
@@ -1685,15 +1564,11 @@ def cmd_all(
             # already lost its C2PA to the visible-removal pass, so reading it would
             # always resolve to the unknown-vendor default.
             vendor = vendor_for_strength(source)
-            console.print(
-                f"    Strength: {_resolved_strength_for_display(source, strength, vendor, pipeline)}  Steps: {steps}"
-            )
+            console.print(f"    Strength: {_resolved_strength_for_display(source, strength, vendor, pipeline)}")
             inv_engine.remove_watermark(
                 image_path=tmp_path,
                 output_path=tmp_path,
                 strength=strength,
-                num_inference_steps=steps,
-                guidance_scale=guidance_scale,
                 seed=seed,
                 humanize=humanize,
                 unsharp=unsharp,
@@ -1753,7 +1628,7 @@ def cmd_all(
             "  visible mark and metadata were stripped.\n"
             "\n"
             "  Install the extra and rerun to remove it:\n"
-            "    pip install 'remove-ai-watermarks[diffusion]'\n"
+            f"    pip install {INVISIBLE_EXTRA}\n"
             "  ====================================================================="
         )
         raise SystemExit(1)
@@ -1775,15 +1650,13 @@ class _BatchOptions:
     """Validated processing options shared by every image in one batch.
 
     Click necessarily exposes these as individual command parameters, but the
-    processing core should receive one coherent value instead of a 21-argument
+    processing core should receive one coherent value instead of a long positional
     call. Keeping the object immutable also makes it safe to reuse while the
     batch caches model instances in ``ctx.obj``.
     """
 
     strength: float | None
-    steps: int
     pipeline: str
-    device: str
     seed: int | None
     hf_token: str | None
     humanize: float
@@ -1792,9 +1665,8 @@ class _BatchOptions:
     unsharp: float = 0.0
     max_resolution: int = 0
     controlnet_scale: float = 1.0
-    model: str | None = None
-    guidance_scale: float | None = None
-    adaptive_polish: bool = False
+    # None means "the user did not choose"; the library resolves it per profile.
+    adaptive_polish: bool | None = None
     tile: bool = False
     tile_size: int = 1024
     tile_overlap: int = 128
@@ -1828,8 +1700,6 @@ def _run_batch_invisible(
         engines = ctx.obj.setdefault("_inv_engines", {})
         if options.pipeline not in engines:
             engines[options.pipeline] = InvisibleEngine(
-                model_id=options.model,
-                device=None if options.device == "auto" else options.device,
                 pipeline=options.pipeline,
                 hf_token=options.hf_token,
                 controlnet_conditioning_scale=options.controlnet_scale,
@@ -1839,8 +1709,6 @@ def _run_batch_invisible(
             img_path if mode == "invisible" else out_path,
             out_path,
             strength=options.strength,
-            num_inference_steps=options.steps,
-            guidance_scale=options.guidance_scale,
             seed=options.seed,
             humanize=options.humanize,
             unsharp=options.unsharp,
@@ -1948,42 +1816,15 @@ def _process_batch_image(
     "--mode", type=click.Choice(["visible", "invisible", "metadata", "all"]), default="visible", help="Processing mode."
 )
 @_strength_option
-@click.option(
-    "--steps",
-    type=int,
-    default=None,
-    help="Number of denoising steps. Both profiles are distilled four-step schedules, so 4 is the only accepted value.",
-)
 @_visible_backend_option
 @_visible_sensitivity_option
-@click.option(
-    "--humanize", type=float, default=0.0, help="Analog Humanizer film grain intensity (0 = off, typical: 2.0-6.0)."
-)
+@_humanize_option
 @_pipeline_option
-@click.option(
-    "--device",
-    type=click.Choice(["auto", "cpu", "mps", "cuda", "xpu"]),
-    default="auto",
-    help="Inference device.",
-)
-@click.option(
-    "--seed",
-    type=int,
-    default=None,
-    help="Random seed for reproducibility. Default: 0 for qwen-zimage, random otherwise.",
-)
-@click.option("--hf-token", type=str, default=None, help="HuggingFace API token.")
-@click.option(
-    "--max-resolution",
-    type=int,
-    default=0,
-    help="Cap long side (px) before diffusion; 0 = native and preserves the most detail. Raise only on GPU/MPS OOM.",
-)
+@_seed_option
+@_hf_token_option
+@_max_resolution_option
 @_unsharp_option
 @_controlnet_scale_option
-@_model_option
-@_guidance_scale_option
-@_auto_option
 @_adaptive_polish_option
 @_tile_options
 @_force_option
@@ -1995,9 +1836,7 @@ def cmd_batch(
     mode: str,
     output_dir: Path | None,
     strength: float | None,
-    steps: int | None,
     pipeline: str,
-    device: str,
     seed: int | None,
     hf_token: str | None,
     backend: str,
@@ -2006,10 +1845,7 @@ def cmd_batch(
     unsharp: float,
     max_resolution: int,
     controlnet_scale: float,
-    model: str | None,
-    guidance_scale: float | None,
-    auto: bool,
-    adaptive_polish: bool,
+    adaptive_polish: bool | None,
     tile: bool,
     tile_size: int,
     tile_overlap: int,
@@ -2032,14 +1868,9 @@ def cmd_batch(
     console.print(f"  Found {len(images)} images in {directory}")
     console.print(f"  Output -> {output_dir}")
     console.print(f"  Mode: {mode}")
-    adaptive_polish = _resolve_profile_polish(auto, adaptive_polish, pipeline)
-    steps = resolve_steps(steps)
-    seed = resolve_seed(seed)
     options = _BatchOptions(
         strength=strength,
-        steps=steps,
         pipeline=pipeline,
-        device=device,
         seed=seed,
         hf_token=hf_token,
         humanize=humanize,
@@ -2048,8 +1879,6 @@ def cmd_batch(
         unsharp=unsharp,
         max_resolution=max_resolution,
         controlnet_scale=controlnet_scale,
-        model=model,
-        guidance_scale=guidance_scale,
         adaptive_polish=adaptive_polish,
         tile=tile,
         tile_size=tile_size,
@@ -2103,7 +1932,7 @@ def cmd_batch(
             f"\n  WARNING: the invisible (SynthID) watermark was NOT removed on "
             f"{synthid_skipped_count} image(s) -- the GPU dependencies are not installed, "
             f"so those outputs still carry the invisible watermark.\n"
-            f"  Install the extra and rerun: pip install 'remove-ai-watermarks[diffusion]'"
+            f"  Install the extra and rerun: pip install {INVISIBLE_EXTRA}"
         )
 
     # Non-zero exit so a wrapping service detects an incomplete/failed run (batch used

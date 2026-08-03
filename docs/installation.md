@@ -65,22 +65,24 @@ uv tool install --force "remove-ai-watermarks[video,diffusion]"
 
 ## Invisible watermark removal
 
-Diffusion based removal needs the `diffusion` extra:
-
-```bash
-uv tool install --force "remove-ai-watermarks[diffusion]"
-```
-
-The code supports CUDA, XPU, MPS, and CPU devices. A GPU is recommended because
-CPU inference is slow.
-
-For the CUDA only Qwen Image plus Z-Image profile:
+Install the `qwen-zimage` extra:
 
 ```bash
 uv tool install --force "remove-ai-watermarks[qwen-zimage]"
 ```
 
-The `qwen-zimage` extra includes the normal `diffusion` dependencies.
+Both remaining profiles run a Z-Image face stage on the DiffSynth runtime, so
+both need this extra. It includes the `diffusion` dependencies; `diffusion` on its
+own covers the torch and diffusers imports but not the face stage, so it is not
+enough to run a removal.
+
+**An NVIDIA GPU is required.** `qwen-zimage` and `sdxl-zimage` are CUDA-only, and
+construction refuses any other device rather than falling back to a slow or broken
+one. There is no CPU, MPS or XPU path for invisible-watermark removal. Visible-mark
+removal, metadata stripping and every `identify` command still run anywhere.
+
+Video SynthID regeneration is a separate VAE path and does still run on CPU or MPS;
+it needs the `diffusion` extra, not this one.
 
 ## Feature extras
 
@@ -95,10 +97,10 @@ application actually uses:
 | `video` | Visible video identification/removal and timestamp preservation | `visible`, PyAV | No |
 | `detect` | Open DWT-DCT detection for Stable Diffusion, SDXL, and FLUX | `pixels`, PyWavelets | No |
 | `trustmark` | Adobe TrustMark detection | trustmark | Yes |
-| `diffusion` | Diffusion-based invisible watermark removal | `pixels`, Torch, Diffusers | Yes |
+| `diffusion` | Torch and Diffusers runtime; video SynthID regeneration | `pixels`, Torch, Diffusers | Yes |
 | `migan` | MI-GAN ONNX fill backend | `visible`, ONNX Runtime | Model download, no Torch |
 | `lama` | big-LaMa ONNX fill backend | `visible`, ONNX Runtime | Model download, no Torch |
-| `qwen-zimage` | CUDA-only Qwen Image plus Z-Image pipeline | `diffusion`, DiffSynth | Yes |
+| `qwen-zimage` | Invisible image-watermark removal, both CUDA-only profiles | `diffusion`, DiffSynth | Yes |
 | `all` | Every production feature | All rows above | Yes |
 | `dev` | Tests, linting, typing, and upstream parity checks | `visible`, `detect`, upstream invisible-watermark | Yes, for parity tests |
 
@@ -214,5 +216,7 @@ The normal behavior is to skip diffusion when no supported local signal is
 found. A missing signal does not prove that the image is clean. If you know the
 image came from a relevant generator, use `--force`.
 
-If the CLI reports that diffusion dependencies are unavailable, install the
-`diffusion` extra. Video SynthID removal needs both `video` and `diffusion`.
+If the CLI reports that the removal dependencies are unavailable, install the
+`qwen-zimage` extra. `diffusion` alone covers Torch and Diffusers but not the
+DiffSynth face stage that both profiles run. Video SynthID removal is a separate
+path and needs `video` and `diffusion`.

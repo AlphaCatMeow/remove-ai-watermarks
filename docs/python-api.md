@@ -6,8 +6,9 @@ and pipeline modules are intended for maintainers and specialized workflows.
 Dependency groups are identical for the CLI and Python API. The default install
 covers metadata extraction, normalization, verdict logic, and stripping.
 Array/pixel APIs use `pixels`; visible removal uses `visible`; DWT-DCT detection
-uses `detect`; diffusion removal uses `diffusion`; and visible video processing
-uses `video`. Video SynthID removal combines `video` and `diffusion`. Add `heif`
+uses `detect`; invisible image removal uses `qwen-zimage` and an NVIDIA GPU; and
+visible video processing uses `video`. Video SynthID removal is a separate VAE
+path that still runs on CPU and combines `video` and `diffusion`. Add `heif`
 independently when path-based pixel APIs must decode HEIC, HEIF, or AVIF. See
 the complete [feature-extra matrix](installation.md#feature-extras).
 
@@ -380,8 +381,8 @@ to 8-bit SDR.
 
 ## Remove invisible watermarks
 
-Install `remove-ai-watermarks[diffusion]` for the standard pipelines or
-`remove-ai-watermarks[qwen-zimage]` for the CUDA-only high-fidelity profile.
+Install `remove-ai-watermarks[qwen-zimage]`. Both profiles need it, and both
+need an NVIDIA GPU.
 
 ```python
 from pathlib import Path
@@ -400,8 +401,9 @@ engine.remove_watermark(
 )
 ```
 
-`device=None` selects the device automatically. Supported explicit values are
-defined by the CLI and runtime device resolver.
+`device=None` detects CUDA. The only other accepted value is `"cuda"`; anything
+else raises at construction rather than deferring a guaranteed failure to model
+load time.
 
 For limited CUDA memory:
 
@@ -412,18 +414,22 @@ engine = InvisibleEngine(
 )
 ```
 
-Both profiles are CUDA-only, so `device=None` resolving to CPU or MPS cannot run
-invisible-watermark removal at all. For the SDXL global stage instead of Qwen:
+Both profiles are CUDA-only, so on a machine without an NVIDIA GPU `device=None`
+resolves to `cpu` and construction raises. For the SDXL global stage instead of
+Qwen:
 
 ```python
 engine = InvisibleEngine(pipeline="sdxl-zimage")
 ```
 
-The `qwen-zimage` extra must be installed for that profile.
+The `qwen-zimage` extra is required for both profiles: each runs the same
+DiffSynth Z-Image face stage.
 
-The full `remove_watermark` signature includes strength, steps, guidance,
-seeding, tiling, resolution, and postprocessing controls. Read the
-method signature in
+`remove_watermark` takes strength, seed, tiling, resolution, and postprocessing
+controls. It takes no model id, step count or guidance scale, and neither does the
+constructor: each profile pins its model stack, its per-stage schedule and CFG
+1.0, so passing one raises `TypeError` at the call rather than being accepted and
+refused several layers down. Read the method signature in
 [`invisible_engine.py`](../src/remove_ai_watermarks/invisible_engine.py) or use
 the CLI guide for the concepts.
 Defaults can differ between the Python method and CLI profile resolution, so
