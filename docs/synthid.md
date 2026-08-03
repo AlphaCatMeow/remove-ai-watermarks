@@ -511,8 +511,8 @@ study (section 2.2) gives empirical floors:
   measured on; treat it as a lower bound, not a guarantee, and raise + oracle-recheck
   per content type (see §5.1 controlnet bullet).
 - **Google (capped 1536)**: 0.15 (n=4); 0.05 and 0.10 do not clear.
-- **Google native 2816**: not locally measured; likely needs >= 0.30 (vendor +
-  resolution stack). Use a GPU or `--max-resolution 1536`.
+- **Google native 2816**: 0.15 clears (n=2, deployed controlnet worker, 2026-06-14) --
+  the same rung as capped 1536, so no resolution penalty was observed.
 
 The default is **vendor-adaptive** (`watermark_profiles.resolve_strength` +
 `vendor_for_strength`): the tool reads the C2PA issuer on the original input and picks
@@ -543,6 +543,50 @@ overkill of a single high default on OpenAI images, without needing a local pixe
 detector. An explicit `--strength` always wins. If the watermark still survives (e.g. a
 large native Gemini beyond the capped-1536 validation), raise toward 0.35-0.40 (0.40
 visibly corrupts dense text), using the lowest value that reads clean on the oracle.
+
+**qwen-zimage global denoise, Gemini boundary bracketed (2026-08-02).** The profile does
+not use the vendor ladder above; `resolution_adaptive_denoise` maps megapixels onto
+roughly 0.084 (sub-0.3 MP) to 0.154 (>= 3.7 MP). A ladder on one native 2816x1536 Gemini
+original, seed 0, everything else at profile defaults, verified through the Gemini app:
+
+| global denoise | Gemini app | whole-image PSNR | face-box PSNR | edge IoU |
+|---|---|---|---|---|
+| 0.154 (profile top) | clean | 24.72 | 31.19 | 0.188 |
+| 0.12 | clean | 25.65 | 31.82 | 0.202 |
+| 0.10 | **clean** | 26.26 | 32.17 | 0.212 |
+| 0.08 | **SynthID FOUND** | 26.95 | 32.51 | 0.227 |
+
+So the boundary sits between 0.08 and 0.10 for this image, and the profile's shipped
+0.154 carries roughly half a rung more strength than that content needed. Fidelity rises
+monotonically all the way down - dropping to 0.10 buys **+1.54 dB whole-image and
++0.98 dB inside the face boxes** - which is exactly why the temptation is to move the
+ceiling, and exactly why one fixture is not enough to do it.
+
+Two constraints on reading this:
+
+- **It brackets, it does not calibrate.** One image, one seed. Shipping the lowest clean
+  rung means shipping at the measured cliff edge; another sample, seed, or content class
+  can sit on the other side of it. Note §5.2's flat-graphic hard cases were not in this
+  set at all.
+- **The bottom of the curve was the untested end. It has now been measured, and it
+  holds.** Every Gemini oracle fixture is 2816x1536, so the Google-side certification
+  only ever covered 0.154, while `resolution_adaptive_denoise` sends sub-1 MP images to
+  0.084-0.094 - at or below the rung that failed at 4.33 MP. Downscaling a Gemini
+  original (valid test material: SynthID survives it by design) and running the deployed
+  worker on it gives, through the Gemini app:
+
+  | processing size | profile denoise | Gemini app |
+  |---|---|---|
+  | 1024x559 (0.57 MP) | 0.0896 | clean |
+  | 1600x873 (1.40 MP) | 0.1066 | clean |
+
+  So production's own low end clears Google, and the "small images are under-processed"
+  failure mode is ruled out at these two sizes. **Read this as validation of the shipped
+  curve, not as proof that the boundary moves with resolution.** 0.0896 sits inside the
+  untested gap at 4.33 MP, where only 0.08 (found) and 0.10 (clean) were probed, so it
+  may well clear at both sizes. The direction of any resolution dependence remains
+  unproven (§5.5). Also note these are downscales of a 2816x1536 original rather than
+  natively small Gemini outputs, which have still never been tested.
 
 ### 5.3 Test methodology
 
@@ -642,18 +686,25 @@ openai.com/verify):
   weight 0.5 blends ~half its pixels back, re-introducing SynthID into the
   composited face over the diffusion-cleaned result (see §5.1 face-identity bullet).
 - (Side note: reducing the processing resolution does NOT weaken SynthID -- it is
-  robust to downscaling by design, and the study's resolution trend says LOWER
-  processing res needs LESS strength, so 1024 was never the wall.)
+  robust to downscaling by design, so 1024 was never the wall. Whether a lower
+  processing resolution then needs more or less removal strength is NOT established;
+  see the note below.)
 
 **Historical controlnet certification, superseded by the current vendor-adaptive
 defaults (isolated GPU sweep + oracle,
 restore OFF, <= 1536, each vendor on its own oracle):** OpenAI **0.20** (2 photoreal x
 seed {1,2,3} = 6/6 clean; the 0.15-flipper is seed-robust at 0.20) and Gemini **0.30**
-(0.20 detected -> 0.30 clean on 2/2 seeds). OpenAI 0.20 transfers to prod
-(resolution-independent); Gemini 0.30 holds only <= 1536 -- Gemini is
-resolution-sensitive, so a native-resolution deployment should cap Gemini <= 1536 + use 0.30 or
-native-calibrate (~0.35+). See `docs/controlnet-removal-pipeline-research.md` for the
-table.
+(0.20 detected -> 0.30 clean on 2/2 seeds). Both were measured at <= 1536 only. See
+`docs/controlnet-removal-pipeline-research.md` for the table.
+
+**Whether Gemini removal is resolution-sensitive is UNPROVEN, in either direction.**
+This document previously asserted it was, and recommended capping Gemini at 1536 with
+0.30 or "native-calibrating" to ~0.35+. Nothing measured that. The one relevant
+measurement points the other way: the 2026-06-14 deployed-worker re-test cleared Gemini
+at **0.15 on two NATIVE 2816x1536 images**, the same rung as capped 1536. So there is no
+observed native-resolution penalty, and no observed benefit either -- the low-resolution
+end has simply never been through the Gemini oracle on any pipeline. Do not reason from
+a resolution trend here; measure it.
 
 **Current implication:** the old floor table remains evidence about the dated
 test set, not the current resolver. The shipped SDXL and ControlNet defaults are
