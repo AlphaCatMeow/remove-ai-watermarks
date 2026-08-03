@@ -568,15 +568,25 @@ Two constraints on reading this:
   rung means shipping at the measured cliff edge; another sample, seed, or content class
   can sit on the other side of it. Note §5.2's flat-graphic hard cases were not in this
   set at all.
-- **The bottom of the curve is the untested end, not the top.** Every Gemini oracle
-  fixture is 2816x1536, so the Google-side certification only ever covered 0.154, while
-  `resolution_adaptive_denoise` sends sub-1 MP images to 0.084-0.094 - at or below the
-  rung that failed here. Whether that is safe depends on how the boundary moves with
-  resolution, and **that is unproven in either direction** (see the note in §5.5): the
-  only relevant measurement, Gemini clean at 0.15 on native 2816, shows no penalty for
-  going *up*, and says nothing about going down. No small Gemini original has ever been
-  through the oracle on any pipeline. Downscaling is valid test material - SynthID
-  survives it by design - so a downscaled original closes the gap.
+- **The bottom of the curve was the untested end. It has now been measured, and it
+  holds.** Every Gemini oracle fixture is 2816x1536, so the Google-side certification
+  only ever covered 0.154, while `resolution_adaptive_denoise` sends sub-1 MP images to
+  0.084-0.094 - at or below the rung that failed at 4.33 MP. Downscaling a Gemini
+  original (valid test material: SynthID survives it by design) and running the deployed
+  worker on it gives, through the Gemini app:
+
+  | processing size | profile denoise | Gemini app |
+  |---|---|---|
+  | 1024x559 (0.57 MP) | 0.0896 | clean |
+  | 1600x873 (1.40 MP) | 0.1066 | clean |
+
+  So production's own low end clears Google, and the "small images are under-processed"
+  failure mode is ruled out at these two sizes. **Read this as validation of the shipped
+  curve, not as proof that the boundary moves with resolution.** 0.0896 sits inside the
+  untested gap at 4.33 MP, where only 0.08 (found) and 0.10 (clean) were probed, so it
+  may well clear at both sizes. The direction of any resolution dependence remains
+  unproven (§5.5). Also note these are downscales of a 2816x1536 original rather than
+  natively small Gemini outputs, which have still never been tested.
 
 ### 5.3 Test methodology
 
