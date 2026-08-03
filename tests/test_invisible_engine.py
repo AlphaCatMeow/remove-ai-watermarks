@@ -138,6 +138,35 @@ class TestTargetSize:
         assert _target_size(500, 400, 800, 1024) is None
 
 
+class TestEngineDoesNotFabricateAModelId:
+    """The engine must forward model_id untouched, including None.
+
+    It used to substitute DEFAULT_MODEL_ID for None. Once the remover tightened its
+    "you may not override the fixed stack" check from `not in {None, DEFAULT_MODEL_ID}`
+    to `is not None`, that substitution made EVERY InvisibleEngine construction raise -
+    and no test saw it, because the library tests build WatermarkRemover directly while
+    the engine tests mock it. A deployed Modal worker caught it instead.
+    """
+
+    def test_none_stays_none(self):
+        from unittest.mock import patch
+
+        import remove_ai_watermarks.invisible_engine as engine_module
+
+        with patch("remove_ai_watermarks._internal.watermark_remover.WatermarkRemover") as remover:
+            engine_module.InvisibleEngine(pipeline="qwen-zimage")
+        assert remover.call_args.kwargs["model_id"] is None
+
+    def test_an_explicit_model_id_still_reaches_the_remover_to_be_rejected(self):
+        from unittest.mock import patch
+
+        import remove_ai_watermarks.invisible_engine as engine_module
+
+        with patch("remove_ai_watermarks._internal.watermark_remover.WatermarkRemover") as remover:
+            engine_module.InvisibleEngine(model_id="org/custom", pipeline="qwen-zimage")
+        assert remover.call_args.kwargs["model_id"] == "org/custom"
+
+
 class TestEsrganUpscale:
     """Branches of InvisibleEngine._esrgan_upscale (no diffusion model loaded).
 

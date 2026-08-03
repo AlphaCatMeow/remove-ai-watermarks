@@ -121,10 +121,11 @@ class InvisibleEngine:
 
         from remove_ai_watermarks._internal.watermark_remover import WatermarkRemover
 
-        effective_model = model_id or self.DEFAULT_MODEL_ID
-
+        # Pass model_id through untouched. Substituting DEFAULT_MODEL_ID for None here
+        # meant the engine always supplied a model the remover is required to reject,
+        # so EVERY construction raised once that check tightened to "is not None".
         self._remover = WatermarkRemover(
-            model_id=effective_model,
+            model_id=model_id,
             device=device,
             progress_callback=progress_callback,
             hf_token=hf_token,
