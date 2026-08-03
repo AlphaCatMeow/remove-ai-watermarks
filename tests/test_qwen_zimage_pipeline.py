@@ -203,8 +203,12 @@ def test_face_stage_loads_in_its_own_dtype_when_the_global_stage_differs(monkeyp
     consistently-wrong value.
     """
     import torch
-    import transformers
-    from diffsynth.pipelines import z_image
+
+    # The loaders this asserts on are monkeypatched, not called, but the modules still
+    # have to be importable to be patched -- and CI's base job installs the library
+    # without the qwen-zimage extra.
+    transformers = pytest.importorskip("transformers")
+    z_image = pytest.importorskip("diffsynth.pipelines.z_image")
 
     from remove_ai_watermarks._internal.sdxl_zimage_pipeline import SdxlZImagePipeline
 
