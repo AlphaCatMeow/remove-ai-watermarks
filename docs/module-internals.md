@@ -617,6 +617,38 @@ sigma range; Diffusers img2img truncates the step *count*
 (`init_timestep = int(steps * strength)`), so asking it for four steps at 0.15 executes
 **zero** and returns a bare VAE round-trip.
 
+**The face stage keeps its own dtype, and 0.23.0 shipped without that.** The remover
+gives this profile `torch.float16`, because SDXL ships fp16 weights and an fp16-safe
+VAE. That dtype reached the inherited `_load_zimage`, while `_zimage_vram_config()`
+hardcodes bfloat16 for its offload, onload and computation dtypes -- so the Z-Image
+modules were built bf16 and handed fp16 latents, and every image containing a face
+died in the VAE with `Input type (c10::Half) and bias type (c10::BFloat16) should be
+the same`. Every face-stage loader now reads `_face_stage_dtype()`, which returns the
+computation dtype of the VRAM config it is paired with, so the two cannot drift again.
+
+Two things hid this. Zero-face inputs never enter `_run_faces`, so the profile looked
+healthy on exactly the images used to time it; and the profile's tests deliberately
+avoid model downloads, so nothing exercised the loader. The lesson is narrower than
+"add a GPU test": inheriting a stage means inheriting its *invariants*, and this one
+was a dtype the subclass silently changed out from under it.
+
+Note what the seam is, because it decides where the fix belongs.
+`SdxlZImagePipeline._load_sdxl` hardcodes fp16 for its own ControlNet, VAE and
+pipeline, so `self.torch_dtype` was never actually the global stage's dtype on this
+profile -- its only remaining readers were face-stage code. SAM was the second one:
+it never crashed, because it casts its own inputs and leaves through `.float()`, but it
+was reading the same wrong field and would have re-landed the bug for the next profile
+with a different global dtype. It is routed through the same accessor, which for
+`qwen-zimage` is the bfloat16 it already used.
+
+The guard is `test_face_stage_loads_in_its_own_dtype_when_the_global_stage_differs`.
+It asserts the dtype the Z-Image and SAM loaders actually receive, not the accessor
+against the config it is derived from -- that comparison would restate the
+implementation and pass for any consistently wrong value. Both assertions were
+mutation-tested against the pre-fix line. For `qwen-zimage` the whole change is a
+strict no-op: the remover already handed it bfloat16, the same value
+`_face_stage_dtype()` returns.
+
 This profile is not deployed. Before it could be, it needs the other three Gemini
 originals, OpenAI re-verified at 0.15, a flat-graphic content class, and a low
 resolution case -- every verdict so far comes from one fixture and one seed.

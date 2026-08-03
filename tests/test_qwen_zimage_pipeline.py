@@ -189,6 +189,50 @@ def test_cpu_offload_forces_both_stacks_to_stream(monkeypatch, cpu_offload, expe
     assert captured["keep_face_models_on_device"] is expected
 
 
+def test_face_stage_loads_in_its_own_dtype_when_the_global_stage_differs(monkeypatch, tmp_path):
+    """A subclass that changes the pipeline dtype must not change the face stage's.
+
+    ``sdxl-zimage`` is constructed fp16 for its global model. That dtype used to reach
+    the inherited ``_load_zimage``, which builds its modules bf16 from
+    ``_zimage_vram_config``, so Z-Image got fp16 latents into bf16 convolutions and
+    every image containing a face died in the VAE. Zero-face inputs never enter the
+    face stage, so the profile looked healthy right up to the first portrait.
+
+    Asserts the dtype the loaders actually RECEIVE. Comparing the accessor against the
+    config it is derived from would restate the implementation and pass for any
+    consistently-wrong value.
+    """
+    import torch
+    import transformers
+    from diffsynth.pipelines import z_image
+
+    from remove_ai_watermarks._internal.sdxl_zimage_pipeline import SdxlZImagePipeline
+
+    monkeypatch.setenv("HF_HOME", str(tmp_path))
+    captured: dict[str, object] = {}
+
+    def fake_zimage(**kwargs):
+        captured["zimage"] = kwargs["torch_dtype"]
+        return MagicMock(units=[])
+
+    def fake_sam(_model_id, **kwargs):
+        captured["sam"] = kwargs["torch_dtype"]
+        return MagicMock()
+
+    monkeypatch.setattr(z_image.ZImagePipeline, "from_pretrained", staticmethod(fake_zimage))
+    monkeypatch.setattr(transformers.AutoProcessor, "from_pretrained", staticmethod(lambda *a, **k: MagicMock()))
+    monkeypatch.setattr(transformers.AutoModelForMaskGeneration, "from_pretrained", staticmethod(fake_sam))
+
+    pipeline = SdxlZImagePipeline(device="cuda", torch_dtype=torch.float16)
+    pipeline._load_zimage()
+    pipeline._load_sam()
+
+    assert pipeline.torch_dtype == torch.float16, "the global stage keeps its own dtype"
+    # Z-Image is the one that crashed; SAM never did, but it read the same wrong field.
+    assert captured["zimage"] == torch.bfloat16
+    assert captured["sam"] == torch.bfloat16
+
+
 def test_resident_face_models_disable_vram_offload():
     from remove_ai_watermarks._internal.qwen_zimage_pipeline import (
         QwenZImagePipeline,

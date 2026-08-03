@@ -706,6 +706,23 @@ class QwenZImagePipeline:
             "computation_device": "cuda",
         }
 
+    @classmethod
+    def _face_stage_dtype(cls) -> Any:
+        """The dtype every face-stage model loads and computes in.
+
+        Deliberately independent of ``self.torch_dtype``, which belongs to the global
+        stage. ``sdxl-zimage`` runs its global model in fp16, and inheriting that here
+        built the Z-Image modules bf16 (per the VRAM config below) while handing them
+        fp16 latents -- a Half/BFloat16 conv mismatch that crashed every face image
+        while zero-face inputs passed, so no unit test could see it.
+
+        Read by Z-Image and by SAM alike, so the whole stage moves together. SAM never
+        crashed, because it casts its own inputs and leaves through ``.float()``, but it
+        was reading the same wrong field and would re-land the bug for the next profile
+        that changes its global dtype.
+        """
+        return cls._zimage_vram_config()["computation_dtype"]
+
     @staticmethod
     def _zimage_vram_config() -> dict[str, Any]:
         import torch
@@ -837,7 +854,7 @@ class QwenZImagePipeline:
             model_configs.remove(text_encoder_config)
             log.info("Z-Image prompt embedding is cached; loading the stack without its text encoder")
         pipe = ZImagePipeline.from_pretrained(
-            torch_dtype=self.torch_dtype,
+            torch_dtype=self._face_stage_dtype(),
             device=self.device,
             model_configs=model_configs,
             tokenizer_config=ModelConfig(
@@ -872,7 +889,7 @@ class QwenZImagePipeline:
         processor = AutoProcessor.from_pretrained(SAM_MODEL_ID, **kwargs)
         model = AutoModelForMaskGeneration.from_pretrained(
             SAM_MODEL_ID,
-            torch_dtype=self.torch_dtype,
+            torch_dtype=self._face_stage_dtype(),
             **kwargs,
         ).to(self.device)
         model.eval()
@@ -901,7 +918,7 @@ class QwenZImagePipeline:
             )
             original_sizes = inputs["original_sizes"].clone()
             reshaped_sizes = inputs["reshaped_input_sizes"].clone()
-            inputs = _prepare_sam_inputs(inputs, self.device, self.torch_dtype)
+            inputs = _prepare_sam_inputs(inputs, self.device, self._face_stage_dtype())
             with torch.inference_mode():
                 outputs = model(**inputs, multimask_output=True)
             processed = processor.post_process_masks(

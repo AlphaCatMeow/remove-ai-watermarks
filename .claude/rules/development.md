@@ -26,7 +26,12 @@ Do not classify an entire module as untestable because its main path downloads a
 - mocked device fallback in `test_img2img_runner.py`;
 - tiling geometry and blending in `test_tiling.py`;
 - prompt-embedding cache keying, storage round-trip, and the cross-pipeline reuse
-  that lets a stack load without its text encoder, in `test_qwen_zimage_pipeline.py`.
+  that lets a stack load without its text encoder, in `test_qwen_zimage_pipeline.py`;
+- the face stack's dtype, in `test_qwen_zimage_pipeline.py`. A subclass that changes
+  the pipeline dtype for its own global model must not change the inherited face
+  stage's; `sdxl-zimage` shipped doing exactly that and crashed on every image with a
+  face. When one profile inherits another's stage, guard the invariants that stage
+  relies on, not just the code path.
 
 Use availability checks only for paths that actually load large models.
 
