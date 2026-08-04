@@ -26,13 +26,16 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from remove_ai_watermarks import _text_mark_engine
-from remove_ai_watermarks._text_mark_engine import TextMarkConfig, TextMarkDetection, TextMarkEngine
+from remove_ai_watermarks._text_mark_engine import (
+    TextMarkConfig,
+    TextMarkDetection,
+    TextMarkEngine,
+    TextMarkScan,
+)
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from numpy.typing import NDArray
 
 WM_WIDTH_FRAC = 0.20
@@ -75,22 +78,10 @@ _CONFIG = TextMarkConfig(
     provenance_ncc_factor=1.0,
 )
 
-YuanbaoDetection = TextMarkDetection
-
 
 def _alpha_template() -> NDArray[Any] | None:
     """The bundled Yuanbao alpha template (float [0,1]), or None."""
     return _text_mark_engine.load_alpha_template(_CONFIG.asset_name)
-
-
-def _glyph_silhouette() -> NDArray[Any] | None:
-    """Binary two-line Yuanbao silhouette (255 = glyph), or None."""
-    return _text_mark_engine.glyph_silhouette(_CONFIG.asset_name)
-
-
-def _template_match_score(box_mask: NDArray[Any], scale_base: int) -> float:
-    """TM_CCOEFF_NORMED of the Yuanbao silhouette against ``box_mask``."""
-    return _text_mark_engine.template_match_score(box_mask, scale_base, _CONFIG)
 
 
 class YuanbaoEngine(TextMarkEngine):
@@ -102,37 +93,28 @@ class YuanbaoEngine(TextMarkEngine):
     def __init__(self) -> None:
         super().__init__(_CONFIG)
 
-    def detect(self, image: NDArray[Any] | None, *, provenance: bool = False) -> TextMarkDetection:
-        if image is None or not image.size:
-            return TextMarkDetection()
-        detection = super().detect(image, provenance=provenance)
-        if not detection.detected:
-            return detection
-        location = self.locate(image)
-        _, box = self._contrast_best(image, location)
+    def _post_gate(self, det: TextMarkDetection, scan: TextMarkScan) -> TextMarkDetection:
+        """Demote a match that does not hug the bottom-right corner.
+
+        A shared post-gate rather than a ``detect`` override, so the single-pass
+        perception path (``detect_both``) cannot skip it.
+        """
+        if not det.detected or scan.loc is None:
+            return det
+        box = det.match_box  # the sweep the scan already ran on this same loc
         if box is None:
-            detection.detected = False
-            return detection
-        h, w = image.shape[:2]
+            det.detected = False
+            return det
+        h, w = scan.frame
         base = min(h, w)
-        right = (w - (location.x + box[2] + 1)) / base
-        bottom = (h - (location.y + box[3] + 1)) / base
+        right = (w - (scan.loc.x + box[2] + 1)) / base
+        bottom = (h - (scan.loc.y + box[3] + 1)) / base
         if not (0 <= right <= self._ANCHOR_MAX_RIGHT and 0 <= bottom <= self._ANCHOR_MAX_BOTTOM):
             logger.debug(
                 "Yuanbao detect: score %.3f but match off-anchor (right=%.3f bottom=%.3f); demoting.",
-                detection.confidence,
+                det.confidence,
                 right,
                 bottom,
             )
-            detection.detected = False
-        return detection
-
-
-def load_image_bgr(path: str | Path) -> NDArray[Any]:
-    """Read an image as a BGR ndarray."""
-    from remove_ai_watermarks import image_io
-
-    image = image_io.imread(path)
-    if image is None:
-        raise FileNotFoundError(f"Failed to read image: {path}")
-    return image
+            det.detected = False
+        return det

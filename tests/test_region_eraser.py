@@ -117,6 +117,46 @@ class TestNonBgrInputs:
         assert np.array_equal(out[..., 3], bgra[..., 3])
 
 
+class TestBackendTable:
+    """The fill-backend names are stated in several places; they must agree.
+
+    They are deliberately separate LITERALS rather than one derived list: deriving the
+    CLI choices or the registry's ``Backend`` from ``region_eraser`` would give
+    ``watermark_registry`` (and therefore every ``--help`` and every metadata-only
+    ``identify``) a module-level cv2 import. This test keeps the copies in sync instead.
+    """
+
+    def test_registry_literal_matches_the_eraser_table(self):
+        import typing
+
+        from remove_ai_watermarks import region_eraser, watermark_registry
+
+        assert set(typing.get_args(watermark_registry.Backend)) == set(region_eraser.FILL_BACKENDS)
+
+    def test_executable_backends_are_the_table_minus_auto(self):
+        import typing
+
+        from remove_ai_watermarks import region_eraser
+
+        assert set(typing.get_args(region_eraser.Backend)) == set(region_eraser.FILL_BACKENDS) - {"auto"}
+
+    def test_learned_backends_name_real_module_attributes(self):
+        from remove_ai_watermarks import region_eraser
+
+        for name, row in region_eraser._LEARNED_BACKENDS.items():
+            assert name in region_eraser.FILL_BACKENDS
+            assert callable(getattr(region_eraser, row.available))
+            assert callable(getattr(region_eraser, row.erase))
+
+    def test_unknown_backend_degrades_to_cv2_instead_of_raising(self):
+        """``erase`` is public: a library caller passing ``"auto"`` (or a typo) must get
+        the classical fill, not a KeyError."""
+        img = np.full((64, 64, 3), 100, np.uint8)
+        mask = np.zeros((64, 64), np.uint8)
+        mask[20:40, 20:40] = 255
+        assert erase(img, mask=mask, backend="auto").shape == img.shape  # type: ignore[arg-type]
+
+
 class TestLamaBackend:
     def test_lama_raises_when_unavailable(self):
         img = np.full((100, 100, 3), 50, np.uint8)

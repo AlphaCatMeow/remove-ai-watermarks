@@ -128,6 +128,12 @@ remove-ai-watermarks erase image.png \
 `erase` accepts `cv2`, `migan`, and `lama`. The corresponding optional extra
 must be installed for a learned backend.
 
+Two more knobs tune the fill. `--dilate N` (default 3) grows every box by `N`
+pixels before inpainting, which helps when a mark has a soft edge or a drop
+shadow just outside the box you measured; it applies to every backend because it
+shapes the mask. `--inpaint-method telea|ns` selects the classical algorithm and
+only affects the `cv2` backend.
+
 ## Strip AI metadata
 
 Inspect metadata:

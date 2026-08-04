@@ -91,10 +91,59 @@ class TestNoOpPreservesOriginal:
 
 class TestVisibleProvenance:
     @pytest.mark.skipif(not DOUBAO.exists(), reason="doubao sample not present")
-    def test_doubao_tc260_maps_to_bytedance(self):
+    def test_doubao_tc260_maps_to_the_producer_it_names(self):
+        """The TC260 producer identifies the vendor, so only Doubao is relaxed.
+
+        This used to relax Doubao AND Jimeng on every China-AIGC image, because the
+        label alone does not say which vendor made it. Its ``ContentProducer`` does.
+        """
         prov = raiw.visible_provenance(DOUBAO)
-        # TC260 label -> ByteDance family (both doubao and jimeng)
-        assert {"doubao", "jimeng"} <= prov
+        assert "doubao" in prov
+        assert "jimeng" not in prov
+
+    def test_unmapped_tc260_producer_falls_back_to_the_bytedance_pair(self, monkeypatch, tmp_path):
+        """An unrecognized producer must not lose the relaxation entirely: the label is
+        still evidence that some China-AIGC vendor made the image."""
+        from types import SimpleNamespace
+
+        from remove_ai_watermarks import identify, metadata
+
+        monkeypatch.setattr(
+            identify,
+            "identify",
+            lambda *a, **k: SimpleNamespace(platform=None, signals=[SimpleNamespace(name="aigc")]),
+        )
+        monkeypatch.setattr(metadata, "aigc_label", lambda _p: {"ContentProducer": "0011999999999999999999999"})
+        assert raiw.visible_provenance(tmp_path / "x.png") == frozenset({"doubao", "jimeng"})
+
+    def test_known_tc260_producer_names_a_single_vendor(self, monkeypatch, tmp_path):
+        from types import SimpleNamespace
+
+        from remove_ai_watermarks import identify, metadata
+
+        monkeypatch.setattr(
+            identify,
+            "identify",
+            lambda *a, **k: SimpleNamespace(platform=None, signals=[SimpleNamespace(name="aigc")]),
+        )
+        # 001 + 1 + USCC(18) + 5-digit product suffix, the Qwen entity.
+        monkeypatch.setattr(metadata, "aigc_label", lambda _p: {"ContentProducer": "001191440101MA9Y9T4H7A00001"})
+        assert raiw.visible_provenance(tmp_path / "x.png") == frozenset({"qwen"})
+
+    def test_every_mapped_producer_names_a_registered_mark(self):
+        """The table drives the arbiter's provenance set, so a typo'd key would relax
+        nothing and fail silently. Checked here, not at import: importing the registry
+        from _internal.constants would drag it into every metadata-only path."""
+        from remove_ai_watermarks._internal.constants import TC260_FALLBACK_VENDORS
+        from remove_ai_watermarks.watermark_registry import known_marks, mark_keys, tc260_producer_vendors
+
+        keys = set(mark_keys())
+        assert set(tc260_producer_vendors().values()) <= keys
+        assert keys >= TC260_FALLBACK_VENDORS
+        # Every TC260 mark should name its producer, or it silently falls back to the
+        # ByteDance pair on an image carrying that mark.
+        unmapped = {m.key for m in known_marks() if m.label_regime == "tc260" and not m.tc260_producer_codes}
+        assert unmapped == {"jimeng_pill"}, f"TC260 marks with no producer code: {unmapped}"
 
     @pytest.mark.skipif(not CHATGPT.exists(), reason="chatgpt sample not present")
     def test_openai_image_has_no_visible_vendor(self):
@@ -144,3 +193,264 @@ class TestRemoveVisibleOutputPath:
         out = tmp_path / "sub" / "out.png"
         raiw.remove_visible(str(src), str(out), backend="cv2")
         assert out.exists()
+
+
+class TestRemoveAllLibrary:
+    """The three-stage pipeline is a library function, not CLI-only.
+
+    It used to live only in ``cli.py``, written twice (once for ``all``, once for
+    ``batch``) with divergent behavior, so no library caller could reach it.
+    """
+
+    def _patched_engine(self, monkeypatch, calls: list):
+        from remove_ai_watermarks import invisible_engine
+
+        class FakeEngine:
+            def remove_watermark(self, *args, **kwargs):
+                calls.append(kwargs.get("image_path") or args[0])
+
+        monkeypatch.setattr(invisible_engine, "is_available", lambda: True)
+        return FakeEngine()
+
+    @pytest.mark.skipif(not DOUBAO.exists(), reason="doubao sample not present")
+    def test_runs_all_three_stages_and_reports_each(self, monkeypatch, tmp_path):
+        from remove_ai_watermarks import api
+
+        calls: list = []
+        engine = self._patched_engine(monkeypatch, calls)
+        monkeypatch.setattr(api._SourceEvidence, "has_invisible_target", lambda _self: True)
+        out = tmp_path / "clean.png"
+        events: list[tuple[str, str]] = []
+
+        result = api.remove_all(DOUBAO, out, backend="cv2", engine=engine, progress=lambda s, d: events.append((s, d)))
+
+        assert out.exists()
+        assert result.invisible == "removed"
+        assert result.visible_label is not None  # the Doubao mark fired
+        assert calls, "the invisible engine was never invoked"
+        # Progress is (stage, stable-token), never prose the caller has to parse back.
+        assert any(stage == "visible" for stage, _ in events)
+        assert ("invisible", "removed") in events
+        assert ("metadata", "stripped") in events
+
+    @pytest.mark.skipif(not DOUBAO.exists(), reason="doubao sample not present")
+    def test_no_signal_skips_the_scrub_but_still_writes(self, monkeypatch, tmp_path):
+        from remove_ai_watermarks import api
+
+        calls: list = []
+        engine = self._patched_engine(monkeypatch, calls)
+        monkeypatch.setattr(api._SourceEvidence, "has_invisible_target", lambda _self: False)
+        out = tmp_path / "clean.png"
+
+        result = api.remove_all(DOUBAO, out, backend="cv2", engine=engine)
+
+        assert result.invisible == "no-signal"
+        assert not calls
+        assert out.exists()  # a deliberate skip is still a successful run
+
+    @pytest.mark.skipif(not DOUBAO.exists(), reason="doubao sample not present")
+    def test_missing_gpu_extra_is_reported_not_raised(self, monkeypatch, tmp_path):
+        from remove_ai_watermarks import api, invisible_engine
+
+        monkeypatch.setattr(invisible_engine, "is_available", lambda: False)
+        out = tmp_path / "clean.png"
+
+        result = api.remove_all(DOUBAO, out, backend="cv2")
+
+        assert result.invisible == "unavailable"
+        assert out.exists()  # it LOOKS processed -- which is why the caller must warn
+
+    @pytest.mark.skipif(not DOUBAO.exists(), reason="doubao sample not present")
+    def test_incomplete_strip_leaves_no_output_file(self, monkeypatch, tmp_path):
+        """The contract the CLI depends on: an AI-readable output plus a non-zero exit
+        is worse than no output at all, so the raise happens BEFORE the final write."""
+        from remove_ai_watermarks import api, invisible_engine, metadata
+
+        monkeypatch.setattr(invisible_engine, "is_available", lambda: False)
+        monkeypatch.setattr(metadata, "strip_and_verify", lambda src, dst: (dst, {"c2pa"}))
+        out = tmp_path / "clean.png"
+
+        with pytest.raises(api.MetadataStripIncomplete, match="c2pa"):
+            api.remove_all(DOUBAO, out, backend="cv2")
+        assert not out.exists()
+
+    def test_unreadable_source_raises_valueerror(self, tmp_path):
+        from remove_ai_watermarks import api
+
+        with pytest.raises(ValueError, match="Could not read image"):
+            api.remove_all(tmp_path / "nope.png", tmp_path / "out.png")
+
+    @pytest.mark.skipif(not DOUBAO.exists(), reason="doubao sample not present")
+    def test_stages_through_the_system_temp_dir_not_the_output_dir(self, monkeypatch, tmp_path):
+        """Staging next to the output would defeat the point: the user must not see a
+        partial file there during a long model download."""
+        from remove_ai_watermarks import api, invisible_engine
+
+        monkeypatch.setattr(invisible_engine, "is_available", lambda: False)
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        seen: list[set[str]] = []
+
+        real = api.remove_all
+
+        def spy(*args, **kwargs):
+            result = real(*args, **kwargs)
+            seen.append({p.name for p in out_dir.iterdir()})
+            return result
+
+        spy(DOUBAO, out_dir / "clean.png", backend="cv2")
+        assert seen == [{"clean.png"}], "an intermediate was left in the output directory"
+
+
+class TestRemoveBatchLibrary:
+    @pytest.mark.skipif(not DOUBAO.exists(), reason="doubao sample not present")
+    def test_visible_mode_writes_every_image(self, tmp_path):
+        import shutil
+
+        from remove_ai_watermarks import api
+
+        src = tmp_path / "in"
+        src.mkdir()
+        for i in range(3):
+            shutil.copyfile(DOUBAO, src / f"img{i}.png")
+        out = tmp_path / "out"
+
+        summary = api.remove_batch(src, out, mode="visible", backend="cv2")
+
+        assert summary.processed == 3
+        assert summary.failed == 0
+        assert sorted(p.name for p in out.iterdir()) == ["img0.png", "img1.png", "img2.png"]
+
+    def test_one_bad_file_does_not_abandon_the_rest(self, tmp_path):
+        from remove_ai_watermarks import api
+
+        src = tmp_path / "in"
+        src.mkdir()
+        (src / "broken.png").write_bytes(b"not a png at all")
+        image = np.full((64, 64, 3), 120, np.uint8)
+        raiw.remove_visible(image)  # sanity: the registry is importable here
+        from remove_ai_watermarks import image_io
+
+        image_io.imwrite(src / "good.png", image)
+        out = tmp_path / "out"
+
+        summary = api.remove_batch(src, out, mode="visible", backend="cv2")
+
+        assert summary.processed == 1
+        assert summary.failed == 1
+        assert [p.name for p, _ in summary.errors] == ["broken.png"]
+        assert (out / "good.png").exists()
+
+    def test_a_failed_write_is_counted_not_swallowed(self, tmp_path, monkeypatch):
+        """Tier E: a read-only output directory once produced zero files and exit 0."""
+        from remove_ai_watermarks import api, image_io
+
+        src = tmp_path / "in"
+        src.mkdir()
+        image_io.imwrite(src / "a.png", np.full((64, 64, 3), 120, np.uint8))
+        monkeypatch.setattr(image_io, "write_bgr_with_alpha", lambda *a, **k: False)
+
+        summary = api.remove_batch(src, tmp_path / "out", mode="visible", backend="cv2")
+
+        assert summary.processed == 0
+        assert summary.failed == 1
+
+
+class TestSourceEvidenceHolder:
+    """One metadata extraction per source file, per call.
+
+    ``remove_all`` asks the same file two provenance questions (which vendor is
+    confirmed, and is there an invisible target); both start from the same extraction.
+    """
+
+    @pytest.mark.skipif(not DOUBAO.exists(), reason="doubao sample not present")
+    def test_remove_all_extracts_evidence_once(self, monkeypatch, tmp_path):
+        import shutil
+
+        from remove_ai_watermarks import api, identify, invisible_engine
+
+        class Fake:
+            def remove_watermark(self, *args, **kwargs):
+                pass
+
+        source = tmp_path / "in.png"
+        shutil.copyfile(DOUBAO, source)
+        calls: list[int] = []
+        real = identify.extract_provenance_evidence
+        monkeypatch.setattr(identify, "extract_provenance_evidence", lambda p: (calls.append(1), real(p))[1])
+        monkeypatch.setattr(invisible_engine, "is_available", lambda: True)
+
+        api.remove_all(source, tmp_path / "out.png", backend="cv2", engine=Fake())
+        assert len(calls) == 1
+
+    @pytest.mark.skipif(not DOUBAO.exists(), reason="doubao sample not present")
+    def test_holder_agrees_with_the_standalone_functions(self):
+        from remove_ai_watermarks import api, identify
+
+        holder = api._SourceEvidence(DOUBAO)
+        assert holder.visible_provenance() == api.visible_provenance(DOUBAO)
+        assert holder.has_invisible_target() == identify.has_invisible_target(DOUBAO)
+
+    def test_extraction_failure_fails_safe_in_both_directions(self, monkeypatch, tmp_path):
+        """No provenance means no relaxation; an unknown invisible target means SCRUB.
+        Leaving a watermark on a paid removal is worse than over-regenerating."""
+        from remove_ai_watermarks import api, identify
+
+        def boom(_path):
+            raise OSError("extract exploded")
+
+        monkeypatch.setattr(identify, "extract_provenance_evidence", boom)
+        holder = api._SourceEvidence(tmp_path / "x.png")
+        assert holder.visible_provenance() == frozenset()
+        assert holder.has_invisible_target() is True
+
+    @pytest.mark.skipif(not DOUBAO.exists(), reason="doubao sample not present")
+    def test_a_verdict_failure_also_fails_safe(self, monkeypatch):
+        """The suppress must span the VERDICT and the mapping, not just the extraction:
+        a raise here used to escape as a traceback where the old code returned empty."""
+        from remove_ai_watermarks import api, identify
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("verdict exploded")
+
+        monkeypatch.setattr(identify, "identify_from_evidence", boom)
+        holder = api._SourceEvidence(DOUBAO)
+        assert holder.visible_provenance() == frozenset()
+        assert holder.has_invisible_target() is True
+
+
+class TestBatchProgressIsStructured:
+    """`remove_batch` emits exactly one terminal event per image, in every mode.
+
+    Regression: the CLI advanced its progress bar by string-matching a stage line that
+    only ``mode="all"`` ever emitted, so a `visible` or `metadata` batch sat at 0% for
+    the whole run and jumped to 100% at the end.
+    """
+
+    def _run(self, tmp_path, mode: str) -> list[tuple[str, str, str]]:
+        from remove_ai_watermarks import api, image_io
+
+        src = tmp_path / "in"
+        src.mkdir()
+        for i in range(3):
+            image_io.imwrite(src / f"img{i}.png", np.full((64, 64, 3), 120, np.uint8))
+        events: list[tuple[str, str, str]] = []
+        api.remove_batch(
+            src,
+            tmp_path / "out",
+            mode=mode,  # type: ignore[arg-type]
+            backend="cv2",
+            progress=lambda p, stage, detail: events.append((p.name, stage, detail)),
+        )
+        return events
+
+    @pytest.mark.parametrize("mode", ["visible", "metadata"])
+    def test_one_terminal_event_per_image(self, tmp_path, mode):
+        events = self._run(tmp_path, mode)
+        terminal = [name for name, stage, _ in events if stage in ("done", "failed")]
+        assert sorted(terminal) == ["img0.png", "img1.png", "img2.png"]
+
+    def test_progress_is_a_token_not_prose(self, tmp_path):
+        """The CLI keys console text off these tokens; free text would break it."""
+        events = self._run(tmp_path, "visible")
+        assert {stage for _, stage, _ in events} <= {"visible", "invisible", "metadata", "done", "failed"}

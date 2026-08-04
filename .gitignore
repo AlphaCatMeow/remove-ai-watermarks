@@ -53,8 +53,5 @@ data/samsung_capture/captures/samsung_content_*
 # dir on first use). Runtime artifact, never committed.
 gfpgan/
 
-# Qwen ControlNet experiment outputs (throwaway eval; never the committed corpus)
-scripts/_qwen_exp_out/
-
 # Local-only working data for analysis (not a committed corpus; never tracked)
 .local-eval/

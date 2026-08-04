@@ -1,7 +1,7 @@
 """How much recall is the coarse scale ladder costing, and what would a denser one cost?
 
 THE FINDING THIS MEASURES
-  `_tophat_score` sweeps three rungs -- (0.8, 1.0, 1.25) -- and the `binary` front-end
+  `_ladder_best` sweeps three rungs -- (0.8, 1.0, 1.25) -- and the `binary` front-end
   sweeps none at all. Measured on stamped marks over controlled backgrounds
   (`scripts/detector_response.py`), the response is a COMB: doubao scores 0.99 exactly at
   each rung and collapses to 0.37-0.48 between them, against a 0.50 gate. So a mark whose
@@ -93,7 +93,10 @@ def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
 
 
 def score_at_scales(engine: Any, image: np.ndarray, scales: tuple[float, ...]) -> dict[float, float]:
-    """`_tophat_score`'s inner loop, opened up so the ladder is a parameter.
+    """`_ladder_best`'s inner loop, opened up so the ladder is a parameter.
+
+    A DELIBERATE second copy of the sweep: it exists to measure ladders the shipped
+    engine does not have, so it must not be folded back into `_ladder_best`.
 
     Deliberately reaches into the engine (`tophat_response`, `_glyph_silhouette`): a
     measurement script may, product code may not. Kept a faithful copy of the shipped

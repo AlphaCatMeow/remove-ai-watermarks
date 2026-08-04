@@ -51,4 +51,4 @@ Topic-specific rules live in `.claude/rules/*.md` and are auto-loaded when match
 
 | File | Covers |
 |---|---|
-| `development.md` | Command contracts, project gate, typing boundaries, and model-adjacent tests |
+| `development.md` | Command contracts, project gate, typing boundaries, model-adjacent tests, and the detection-path measurement rule |

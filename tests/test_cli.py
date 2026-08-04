@@ -552,7 +552,9 @@ class TestAllCommand:
         output = tmp_path / "clean.png"
         with (
             patch("remove_ai_watermarks.invisible_engine.is_available", return_value=True),
-            patch("remove_ai_watermarks.cli._should_skip_invisible_scrub", return_value=True),
+            # The no-signal gate lives in the library now; patch it there, not on the
+            # CLI module, or the diffusion stage runs for real.
+            patch("remove_ai_watermarks.api._SourceEvidence.has_invisible_target", return_value=False),
             patch(
                 "remove_ai_watermarks.metadata.strip_and_verify",
                 return_value=(tmp_path / "intermediate.png", {"c2pa": True}),
@@ -564,6 +566,9 @@ class TestAllCommand:
         assert "metadata" in result.output.lower()
         assert "survived" in result.output.lower()
         assert "AI metadata stripped" not in result.output
+        # An incomplete strip must leave NOTHING on disk: an AI-readable output plus a
+        # non-zero exit is the failure mode the pre-write raise exists to prevent.
+        assert not output.exists()
 
     def test_all_preserves_rgba_across_invisible_step(self, runner, tmp_path):
         """Regression: ``all`` must keep transparency even when the invisible

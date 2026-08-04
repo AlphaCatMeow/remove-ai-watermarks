@@ -113,7 +113,15 @@ class TestPillGate:
     flatness matters, so tests pass a flat or textured frame."""
 
     @staticmethod
-    def _fakes(monkeypatch: pytest.MonkeyPatch, keys: set[str]) -> None:
+    def _fakes(monkeypatch: pytest.MonkeyPatch, keys: set[str]) -> list[str]:
+        """Fake every mark's verdict. Returns the list the fake appends each call to.
+
+        BOTH entry points must be faked: the arbiter's perception pass goes through
+        ``detect_both`` (one scan, two verdicts) while the removal path still calls
+        ``detect``. Patching only one leaves the real detectors running on a synthetic
+        frame, where they find nothing -- so a "dropped" assertion would pass for
+        entirely the wrong reason. The returned call log is what pins that.
+        """
         from remove_ai_watermarks.watermark_registry import KnownMark, MarkDetection
 
         labels = {
@@ -122,13 +130,21 @@ class TestPillGate:
             "jimeng_pill": "Jimeng AI生成 pill",
         }
         monkeypatch.setattr(registry, "preferred_inpaint_backend", lambda: "cv2")
+        calls: list[str] = []
 
         def fake_detect(self: KnownMark, image: object, *, provenance: bool = False) -> MarkDetection:
+            calls.append(self.key)
             return MarkDetection(
                 self.key, labels.get(self.key, self.key), "loc", self.key in keys, 0.6, (10, 10, 40, 40)
             )
 
+        def fake_detect_both(self: KnownMark, image: object) -> tuple[MarkDetection, MarkDetection]:
+            d = fake_detect(self, image)
+            return d, d
+
         monkeypatch.setattr(registry.KnownMark, "detect", fake_detect)
+        monkeypatch.setattr(registry.KnownMark, "detect_both", fake_detect_both)
+        return calls
 
     def test_pill_kept_with_metadata_on_flat_footprint(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # jimeng provenance (TC260) + flat background -> safe fill, remove
@@ -138,8 +154,9 @@ class TestPillGate:
 
     def test_pill_dropped_with_metadata_on_textured_footprint(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # jimeng provenance + textured background (ceiling-like) -> fill would smear, skip
-        self._fakes(monkeypatch, {"jimeng_pill"})
+        calls = self._fakes(monkeypatch, {"jimeng_pill"})
         _, removed = registry.remove_auto_marks(_textured_frame(), provenance=frozenset({"jimeng"}))
+        assert "jimeng_pill" in calls, "the fake detector never ran -- this would pass vacuously"
         assert "Jimeng AI生成 pill" not in removed
 
     def test_pill_kept_via_wordmark_ignores_texture(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -151,8 +168,9 @@ class TestPillGate:
 
     def test_pill_dropped_on_textured_footprint(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # The metadata arm keeps the flatness guard: textured false fires visibly smear.
-        self._fakes(monkeypatch, {"jimeng_pill"})
+        calls = self._fakes(monkeypatch, {"jimeng_pill"})
         _, removed = registry.remove_auto_marks(_textured_frame(), provenance=frozenset({"jimeng"}))
+        assert "jimeng_pill" in calls, "the fake detector never ran -- this would pass vacuously"
         assert "Jimeng AI生成 pill" not in removed
 
     def test_pill_dropped_without_metadata_or_wordmark(self, monkeypatch: pytest.MonkeyPatch) -> None:

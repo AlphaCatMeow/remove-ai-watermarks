@@ -33,7 +33,7 @@ Entries:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
@@ -79,24 +79,8 @@ Sensitivity = Literal["auto", "strict"]
 # A third ``assumed`` level existed for ``assume_ai`` and went with it (2026-07-19).
 Trust = Literal["strict", "confirmed"]
 
-# Product family per mark, for the ``auto`` cross-mark corroboration: a confidently
-# detected mark relaxes only OTHER marks of the SAME product (different corners, one
-# product -- the Jimeng wordmark + the Jimeng pill). Doubao and Jimeng are BOTH ByteDance
-# but distinct products in the SAME bottom-right corner, so they must NOT cross-relax
-# (relaxing Doubao on a Jimeng wordmark would spuriously fire Doubao on it).
-_PRODUCT_OF: dict[str, str] = {
-    "gemini": "gemini",
-    "doubao": "doubao",
-    "jimeng": "jimeng",
-    "jimeng_pill": "jimeng",  # same product as the Jimeng wordmark
-    "qwen": "qwen",
-    "kling": "kling",
-    "yuanbao": "yuanbao",
-    "samsung": "samsung",
-    "runninghub": "runninghub",
-    "baidu": "baidu",
-    "liblib": "liblib",
-}
+# Product family per mark now lives on the registry row (``KnownMark.product``);
+# ``_PRODUCT_OF`` is derived from it right after ``_REGISTRY`` is built.
 
 
 # Marks whose own detection is too weak to serve as EVIDENCE for a sibling of the
@@ -134,6 +118,11 @@ class MarkDetection:
     detected: bool
     confidence: float
     region: Region
+    # The engine's OWN detection object, threaded back to this mark's mask builder so it
+    # does not re-run the detector (the text-mark footprint is bounded by the ladder
+    # sweep detection already ran). Opaque here: each mask adapter knows its engine's
+    # type. Excluded from eq/repr so the uniform result stays comparable across engines.
+    engine_detection: Any | None = field(default=None, compare=False, repr=False)
 
 
 @dataclass(frozen=True)
@@ -234,12 +223,42 @@ class KnownMark:
     label: str
     location: str  # usual place, human-readable ("bottom-right")
     in_auto: bool  # participate in `--mark auto` scanning
+    # Product family, for the `auto` cross-mark corroboration: a confidently detected
+    # mark relaxes only OTHER marks of the SAME product (different corners, one product
+    # -- the Jimeng wordmark + the Jimeng pill). Doubao and Jimeng are BOTH ByteDance but
+    # distinct products in the SAME bottom-right corner, so they must NOT cross-relax
+    # (relaxing Doubao on a Jimeng wordmark would spuriously fire Doubao on it).
+    # REQUIRED, deliberately: a defaulted empty product would let two rows that forgot
+    # the field corroborate each other and silently bypass the trust gate.
+    product: str
+    # Which provenance regime this mark's vendor labels under, or None. "tc260" means
+    # the vendor stamps the China AIGC label, so a confident detection of it names a
+    # DIFFERENT TC260 product than the Jimeng pill -- see _keep_pill.
+    label_regime: str | None
+    # The sentence `identify` reports when THIS mark is the strongest evidence. None for
+    # a mark that never names a platform on its own: `gemini` has its own higher-
+    # confidence sparkle path, and the capture-less pill is too weak to attribute.
+    platform: str | None
     _detect: Callable[..., MarkDetection]
     _mask: Callable[..., NDArray[Any] | None]
     # Optional physical-feature probe: the mark's OWN measurements its gate needs
     # (e.g. the pill's footprint flatness), so the perception pass stays uniform and
     # does not special-case any mark. None = the mark's gate needs no extra evidence.
     _features: Callable[..., dict[str, float]] | None = None
+    # Metadata signal names that confirm this mark's vendor, and platform substrings
+    # that do. Both drive `api.visible_provenance`; empty means nothing confirms it.
+    provenance_signals: tuple[str, ...] = ()
+    provenance_platform_tokens: tuple[str, ...] = ()
+    # TC260 ``ContentProducer`` identities that name THIS mark's vendor -- Unified
+    # Social Credit Codes as normalized by ``metadata.uscc_of``, plus the bare product
+    # names a few generators write instead. Here rather than in a separate table
+    # because a newly registered TC260 mark whose codes were forgotten fails SILENTLY:
+    # it falls back to relaxing ByteDance's pair on an image carrying the new mark,
+    # the exact false positive the producer code exists to prevent.
+    tc260_producer_codes: tuple[str, ...] = ()
+    # Optional single-pass dual verdict for the arbiter's perception stage (see
+    # `detect_both`). None = fall back to two `_detect` calls.
+    _detect_both: Callable[..., tuple[MarkDetection, MarkDetection]] | None = None
 
     def features(self, image: NDArray[Any]) -> dict[str, float]:
         """Physical features the mark reports for the arbiter's gate (empty if none)."""
@@ -252,11 +271,35 @@ class KnownMark:
         is trusted when provenance says the vendor is present)."""
         return self._detect(image, provenance=provenance)
 
-    def localize(self, image: NDArray[Any], *, provenance: bool = False, force: bool = False) -> Localization:
+    def detect_both(self, image: NDArray[Any]) -> tuple[MarkDetection, MarkDetection]:
+        """``(strict, relaxed)`` from ONE pass over the image.
+
+        The arbiter's perception stage needs a mark's verdict at BOTH trust levels so it
+        can pick per mark without re-detecting. ``provenance`` never changes what a
+        detector computes -- only the threshold it compares against, or (Gemini) whether
+        a false-positive gate demotes the result afterwards -- so the expensive scan is
+        shared. A mark without a ``_detect_both`` adapter falls back to two calls."""
+        if self._detect_both is not None:
+            return self._detect_both(image)
+        return self.detect(image, provenance=False), self.detect(image, provenance=True)
+
+    def localize(
+        self,
+        image: NDArray[Any],
+        *,
+        provenance: bool = False,
+        force: bool = False,
+        detection: MarkDetection | None = None,
+    ) -> Localization:
         """Detect and build the removal mask in one call. Returns a
         :class:`Localization`; ``mask`` is None unless the mark is detected (or
-        ``force`` bypasses detection for the mark's usual footprint)."""
-        det = self.detect(image, provenance=provenance)
+        ``force`` bypasses detection for the mark's usual footprint).
+
+        ``detection`` lets a caller that has ALREADY detected this mark at this trust
+        level hand the result in rather than pay for the scan twice -- the explicit
+        ``visible --mark <name>`` path detects once to report the confidence and would
+        otherwise re-detect here."""
+        det = detection if detection is not None else self.detect(image, provenance=provenance)
         if not (det.detected or force):
             return Localization(det.detected, det.confidence, det.region, None)
         # Pass the (provenance-aware) detection to the mask builder so it does NOT
@@ -272,6 +315,7 @@ class KnownMark:
         backend: Backend = "auto",
         provenance: bool = False,
         force: bool = False,
+        detection: MarkDetection | None = None,
     ) -> tuple[NDArray[Any], Region | None]:
         """Remove this mark by localize -> fill; returns ``(result, region)`` where
         ``region`` is the removed mark's bbox, or None if nothing was removed.
@@ -282,7 +326,7 @@ class KnownMark:
         usual footprint even without a positive detection (the ``--no-detect`` path).
         NB: the CLI does NOT use ``region`` to clear alpha on save -- that zeroing
         caused the issue-#30 white box."""
-        loc = self.localize(image, provenance=provenance, force=force)
+        loc = self.localize(image, provenance=provenance, force=force, detection=detection)
         if loc.mask is None or not loc.mask.any():
             return image.copy(), None
         return fill(image, loc.mask, backend=backend), (loc.region if loc.detected else None)
@@ -349,55 +393,31 @@ _GEMINI_PROVENANCE_MIN_CONF = 0.42
 
 _engines: dict[str, Any] = {}
 
+# key -> (module basename, class name). Only the NAMES live here: ``import_module``
+# runs inside :func:`_engine` on first use, so importing this module -- and with it the
+# metadata-only ``identify`` / ``visible_provenance`` path -- never pulls cv2 through
+# an engine. Same lazy-import shape as ``_text_mark_engine._rival_config`` and ``fill``.
+_ENGINE_CLASS: dict[str, tuple[str, str]] = {
+    "gemini": ("gemini_engine", "GeminiEngine"),
+    "doubao": ("doubao_engine", "DoubaoEngine"),
+    "jimeng": ("jimeng_engine", "JimengEngine"),
+    "qwen": ("qwen_engine", "QwenEngine"),
+    "kling": ("kling_engine", "KlingEngine"),
+    "yuanbao": ("yuanbao_engine", "YuanbaoEngine"),
+    "samsung": ("samsung_engine", "SamsungEngine"),
+    "jimeng_pill": ("pill_engine", "PillEngine"),
+    "runninghub": ("runninghub_engine", "RunningHubEngine"),
+    "baidu": ("baidu_engine", "BaiduEngine"),
+    "liblib": ("liblib_engine", "LibLibEngine"),
+}
+
 
 def _engine(key: str) -> Any:
     if key not in _engines:
-        if key == "gemini":
-            from remove_ai_watermarks.gemini_engine import GeminiEngine
+        from importlib import import_module
 
-            _engines[key] = GeminiEngine()
-        elif key == "doubao":
-            from remove_ai_watermarks.doubao_engine import DoubaoEngine
-
-            _engines[key] = DoubaoEngine()
-        elif key == "jimeng":
-            from remove_ai_watermarks.jimeng_engine import JimengEngine
-
-            _engines[key] = JimengEngine()
-        elif key == "qwen":
-            from remove_ai_watermarks.qwen_engine import QwenEngine
-
-            _engines[key] = QwenEngine()
-        elif key == "kling":
-            from remove_ai_watermarks.kling_engine import KlingEngine
-
-            _engines[key] = KlingEngine()
-        elif key == "yuanbao":
-            from remove_ai_watermarks.yuanbao_engine import YuanbaoEngine
-
-            _engines[key] = YuanbaoEngine()
-        elif key == "samsung":
-            from remove_ai_watermarks.samsung_engine import SamsungEngine
-
-            _engines[key] = SamsungEngine()
-        elif key == "jimeng_pill":
-            from remove_ai_watermarks.pill_engine import PillEngine
-
-            _engines[key] = PillEngine()
-        elif key == "runninghub":
-            from remove_ai_watermarks.runninghub_engine import RunningHubEngine
-
-            _engines[key] = RunningHubEngine()
-        elif key == "baidu":
-            from remove_ai_watermarks.baidu_engine import BaiduEngine
-
-            _engines[key] = BaiduEngine()
-        elif key == "liblib":
-            from remove_ai_watermarks.liblib_engine import LibLibEngine
-
-            _engines[key] = LibLibEngine()
-        else:  # pragma: no cover - guarded by the registry keys
-            raise KeyError(key)
+        module_name, class_name = _ENGINE_CLASS[key]  # KeyError(key) for an unknown key
+        _engines[key] = getattr(import_module(f"remove_ai_watermarks.{module_name}"), class_name)()
     return _engines[key]
 
 
@@ -462,11 +482,19 @@ def fill(image: NDArray[Any], mask: NDArray[Any], *, backend: Backend = "auto") 
 # detector on the memory-tight identify host), so detection never builds a mask.
 
 
-def _gemini_detect(image: NDArray[Any], *, provenance: bool = False) -> MarkDetection:
-    d = _engine("gemini").detect_watermark(image, trust_provenance=provenance)
+def _gemini_wrap(d: Any, *, provenance: bool) -> MarkDetection:
     gate = _GEMINI_PROVENANCE_MIN_CONF if provenance else _GEMINI_AUTO_MIN_CONF
     detected = bool(d.detected) and d.confidence >= gate
     return MarkDetection("gemini", "Google Gemini sparkle", "bottom-right", detected, d.confidence, d.region)
+
+
+def _gemini_detect(image: NDArray[Any], *, provenance: bool = False) -> MarkDetection:
+    return _gemini_wrap(_engine("gemini").detect_watermark(image, trust_provenance=provenance), provenance=provenance)
+
+
+def _gemini_detect_both(image: NDArray[Any]) -> tuple[MarkDetection, MarkDetection]:
+    strict, relaxed = _engine("gemini").detect_watermark_both(image)
+    return _gemini_wrap(strict, provenance=False), _gemini_wrap(relaxed, provenance=True)
 
 
 def _gemini_mask(
@@ -487,26 +515,73 @@ def _gemini_mask(
 def _text_mark_detect(key: str, label: str, location: str) -> Callable[..., MarkDetection]:
     def detect(image: NDArray[Any], *, provenance: bool = False) -> MarkDetection:
         d = _engine(key).detect(image, provenance=provenance)
-        return MarkDetection(key, label, location, d.detected, d.confidence, d.region)
+        return MarkDetection(key, label, location, d.detected, d.confidence, d.region, engine_detection=d)
 
     return detect
+
+
+def _text_mark_detect_both(key: str, label: str, location: str) -> Callable[..., tuple[MarkDetection, MarkDetection]]:
+    def detect_both(image: NDArray[Any]) -> tuple[MarkDetection, MarkDetection]:
+        strict, relaxed = _engine(key).detect_both(image)
+        return (
+            MarkDetection(
+                key, label, location, strict.detected, strict.confidence, strict.region, engine_detection=strict
+            ),
+            MarkDetection(
+                key, label, location, relaxed.detected, relaxed.confidence, relaxed.region, engine_detection=relaxed
+            ),
+        )
+
+    return detect_both
 
 
 def _text_mark_mask(key: str) -> Callable[..., NDArray[Any] | None]:
     def mask(
         image: NDArray[Any], *, force: bool = False, detection: MarkDetection | None = None
     ) -> NDArray[Any] | None:
-        # Text masks rebuild the glyph blob template-free (no trust gate to re-apply), so
-        # the detection is not needed here; accepted for the uniform _mask signature.
-        del detection
-        return _engine(key).footprint_mask(image, force=force)
+        # Thread the engine's OWN detection into the mask builder: the footprint is
+        # bounded by the ladder sweep the detector already ran, so re-detecting here
+        # repeated locate + extract_mask + an identical sweep. footprint_mask still
+        # re-detects when nothing is threaded (a direct or --no-detect caller) and when
+        # the threaded detection was taken at a relaxed trust level.
+        return _engine(key).footprint_mask(
+            image, force=force, detection=detection.engine_detection if detection is not None else None
+        )
 
     return mask
 
 
-def _text_mark(key: str, label: str, location: str) -> KnownMark:
-    """Build a text-mark registry row from its shared detector and mask adapters."""
-    return KnownMark(key, label, location, True, _text_mark_detect(key, label, location), _text_mark_mask(key))
+def _text_mark(
+    key: str,
+    label: str,
+    location: str,
+    *,
+    platform: str,
+    product: str | None = None,
+    label_regime: str | None = "tc260",
+    provenance_signals: tuple[str, ...] = ("aigc",),
+    tc260_producer_codes: tuple[str, ...] = (),
+) -> KnownMark:
+    """Build a text-mark registry row from its shared detector and mask adapters.
+
+    ``product`` defaults to the key (one mark, one product); pass it only when two
+    marks share a product. ``label_regime`` and ``provenance_signals`` default to the
+    China-AIGC label because every text mark registered so far except Samsung uses it.
+    """
+    return KnownMark(
+        key,
+        label,
+        location,
+        True,
+        product or key,
+        label_regime,
+        platform,
+        _text_mark_detect(key, label, location),
+        _text_mark_mask(key),
+        provenance_signals=provenance_signals,
+        tc260_producer_codes=tc260_producer_codes,
+        _detect_both=_text_mark_detect_both(key, label, location),
+    )
 
 
 # ── Capture-less mark: the Jimeng-basic "AI生成" pill (top-left) ──
@@ -516,6 +591,13 @@ def _pill_detect(image: NDArray[Any], *, provenance: bool = False) -> MarkDetect
     del provenance  # the pill detector is provenance-independent; its relaxation lives entirely in _keep_pill
     d = _engine("jimeng_pill").detect(image)
     return MarkDetection("jimeng_pill", "Jimeng AI生成 pill", "top-left", d.detected, d.confidence, d.region)
+
+
+def _pill_detect_both(image: NDArray[Any]) -> tuple[MarkDetection, MarkDetection]:
+    # The pill detector is provenance-independent (`_pill_detect` discards the flag), so
+    # one call answers both levels. MarkDetection is frozen, so sharing it is safe.
+    d = _pill_detect(image)
+    return d, d
 
 
 def _pill_mask(
@@ -534,18 +616,109 @@ def _pill_features(image: NDArray[Any]) -> dict[str, float]:
 
 
 _REGISTRY: tuple[KnownMark, ...] = (
-    KnownMark("gemini", "Google Gemini sparkle", "bottom-right", True, _gemini_detect, _gemini_mask),
-    _text_mark("doubao", "Doubao 豆包AI生成 text", "bottom-right"),
-    _text_mark("jimeng", "Jimeng 即梦AI wordmark", "bottom-right"),
-    _text_mark("qwen", "Qwen 千问AI生成 text", "bottom-right"),
-    _text_mark("kling", "Kling 可灵AI 3.0 text", "bottom-right"),
-    _text_mark("yuanbao", "Tencent Yuanbao 元宝 / AI生成 mark", "bottom-right"),
-    _text_mark("samsung", "Samsung Galaxy AI text", "bottom-left"),
-    _text_mark("runninghub", "RunningHub AI生成 text", "top-left"),
-    _text_mark("baidu", "Baidu 百度 AI生成 text", "bottom-right"),
-    _text_mark("liblib", "LibLibAI wordmark", "bottom-center"),
-    KnownMark("jimeng_pill", "Jimeng AI生成 pill", "top-left", True, _pill_detect, _pill_mask, _pill_features),
+    # Gemini is a Google C2PA/SynthID product, not a China-AIGC labeller: label_regime
+    # is None so it can never act as a TC260 sibling in _keep_pill.
+    KnownMark(
+        "gemini",
+        "Google Gemini sparkle",
+        "bottom-right",
+        True,
+        "gemini",
+        None,
+        # No platform sentence: the sparkle has its own higher-confidence
+        # `_visible_sparkle` path in identify, which names the platform itself.
+        None,
+        _gemini_detect,
+        _gemini_mask,
+        provenance_platform_tokens=("google", "gemini"),
+        _detect_both=_gemini_detect_both,
+    ),
+    _text_mark(
+        "doubao",
+        "Doubao 豆包AI生成 text",
+        "bottom-right",
+        platform="ByteDance Doubao (visible 豆包AI生成 mark detected)",
+        tc260_producer_codes=("91110102MACQD9K640", "doubao"),
+    ),
+    _text_mark(
+        "jimeng",
+        "Jimeng 即梦AI wordmark",
+        "bottom-right",
+        platform="ByteDance Jimeng / Dreamina (visible 即梦AI mark detected)",
+        tc260_producer_codes=("9144030008867405X2",),
+    ),
+    _text_mark(
+        "qwen",
+        "Qwen 千问AI生成 text",
+        "bottom-right",
+        platform="Alibaba Tongyi Qianwen (visible 千问AI生成 mark detected)",
+        tc260_producer_codes=("91440101MA9Y9T4H7A",),
+    ),
+    _text_mark(
+        "kling",
+        "Kling 可灵AI 3.0 text",
+        "bottom-right",
+        platform="Kuaishou Kling (visible 可灵AI 3.0 mark detected)",
+        tc260_producer_codes=("91110108335469089C",),
+    ),
+    _text_mark(
+        "yuanbao",
+        "Tencent Yuanbao 元宝 / AI生成 mark",
+        "bottom-right",
+        platform="Tencent Yuanbao (visible 元宝 / AI生成 mark detected)",
+        tc260_producer_codes=("91440300708461136T",),
+    ),
+    # Samsung Galaxy AI is a device editing marker (samsung_genai), not a TC260 label.
+    _text_mark(
+        "samsung",
+        "Samsung Galaxy AI text",
+        "bottom-left",
+        label_regime=None,
+        provenance_signals=("samsung_genai",),
+        platform="Samsung Galaxy AI (visible 'Contenuti generati dall'AI' mark detected)",
+    ),
+    _text_mark(
+        "runninghub",
+        "RunningHub AI生成 text",
+        "top-left",
+        platform="RunningHub (visible RunningHub AI生成 mark detected)",
+        tc260_producer_codes=("91340100MAEB4N8H76", "RunningHub"),
+    ),
+    _text_mark(
+        "baidu",
+        "Baidu 百度 AI生成 text",
+        "bottom-right",
+        platform="Baidu (visible 百度 AI生成 mark detected)",
+        tc260_producer_codes=("91110000802100433B",),
+    ),
+    _text_mark(
+        "liblib",
+        "LibLibAI wordmark",
+        "bottom-center",
+        platform="LibLibAI (visible LibLibAI mark detected)",
+        tc260_producer_codes=("91110105MACJ6K1C8A",),
+    ),
+    # Same product as the Jimeng wordmark -- the one pair that cross-relaxes.
+    KnownMark(
+        "jimeng_pill",
+        "Jimeng AI生成 pill",
+        "top-left",
+        True,
+        "jimeng",
+        "tc260",
+        # The capture-less pill is too weak a detector to attribute a platform on its
+        # own; the Jimeng wordmark is what names ByteDance.
+        None,
+        _pill_detect,
+        _pill_mask,
+        _pill_features,
+        _detect_both=_pill_detect_both,
+    ),
 )
+
+# Product family per mark, derived from the registry rows so registering a mark is one
+# edit. See KnownMark.product for why Doubao and Jimeng must not cross-relax.
+_PRODUCT_OF: dict[str, str] = {m.key: m.product for m in _REGISTRY}
 
 
 def known_marks() -> tuple[KnownMark, ...]:
@@ -606,6 +779,30 @@ def resolve_trust(
     return "confirmed" if confirmed else "strict"
 
 
+def tc260_producer_vendors() -> dict[str, str]:
+    """TC260 ``ContentProducer`` identity -> the mark key whose vendor signs with it.
+
+    Derived from the registry rows, so registering a TC260 mark and its producer codes
+    is one edit. A mark registered without codes falls through to
+    :data:`TC260_FALLBACK_VENDORS`, which relaxes ByteDance's pair -- a silent wrong
+    answer on an image carrying the new mark, which is why the codes belong on the row
+    next to ``label_regime`` rather than in a table someone must remember to update.
+    """
+    return {code: mark.key for mark in _REGISTRY for code in mark.tc260_producer_codes}
+
+
+def _pill_suppressors() -> set[str]:
+    """Marks whose detection vetoes the capture-less pill: same label regime as the
+    pill, different product. Derived so a newly registered TC260 mark cannot be
+    forgotten here -- which is exactly how LibLibAI ended up missing."""
+    pill = get_mark("jimeng_pill")
+    return {
+        m.key
+        for m in _REGISTRY
+        if m.label_regime is not None and m.label_regime == pill.label_regime and m.product != pill.product
+    }
+
+
 def _keep_pill(keys: set[str], *, provenance: frozenset[str], footprint_flat: bool) -> bool:
     """Whether to auto-remove the capture-less 'AI生成' pill given the fired marks.
 
@@ -620,17 +817,18 @@ def _keep_pill(keys: set[str], *, provenance: frozenset[str], footprint_flat: bo
         so real flat-scene pills (and harmless flat false fires) are cleaned while the
         damaging textured false fires are left untouched.
     A Doubao image is TC260 too but is not Jimeng-basic, so the pill never rides on a
-    Doubao detection; Qwen, Kling, Yuanbao, RunningHub, and Baidu detections likewise
-    name other products and suppress the pill.
-    No confirmation at all -> never remove (blocks false fires on non-Jimeng content)."""
-    if (
-        "doubao" in keys
-        or "qwen" in keys
-        or "kling" in keys
-        or "yuanbao" in keys
-        or "runninghub" in keys
-        or "baidu" in keys
-    ):
+    Doubao detection; every other TC260 product's mark likewise names a different
+    product and suppresses the pill.
+    No confirmation at all -> never remove (blocks false fires on non-Jimeng content).
+
+    The suppressor set is DERIVED from the registry (same label regime, different
+    product), not hand-listed. The hand-written list had drifted: LibLibAI was
+    registered alongside RunningHub and Baidu but never added to it, so a confident
+    LibLibAI detection did not veto the pill the way its two siblings did. Marks
+    outside the TC260 regime (Gemini, Samsung) are deliberately NOT suppressors --
+    neither can put ``"jimeng"`` into ``provenance``, so neither can enable the arm
+    they would be vetoing."""
+    if _pill_suppressors() & keys:
         return False
     if "jimeng" in keys:
         return True
@@ -647,15 +845,17 @@ def _build_candidates(image: NDArray[Any]) -> list[Candidate]:
     Each mark is detected at the strict AND the relaxed (``provenance=True``) level so
     :func:`decide` can pick per mark without re-running detection; a relaxed gate is
     monotonically more permissive, so this reproduces the old strict-then-relax pass
-    exactly. The loop is uniform -- it knows nothing about any specific mark: each mark
-    reports its own gate features via :meth:`KnownMark.features` (computed only when the
-    mark is detected, so a clean image pays nothing extra)."""
+    exactly. Both levels come from ONE scan per mark (:meth:`KnownMark.detect_both`):
+    the trust level moves a threshold, never the measurement, so running the detector
+    twice was doing the expensive half of the work for a second time. The loop is
+    uniform -- it knows nothing about any specific mark: each mark reports its own gate
+    features via :meth:`KnownMark.features` (computed only when the mark is detected, so
+    a clean image pays nothing extra)."""
     cands: list[Candidate] = []
     for m in _REGISTRY:
         if not m.in_auto:
             continue
-        strict = m.detect(image, provenance=False)
-        relaxed = m.detect(image, provenance=True)
+        strict, relaxed = m.detect_both(image)
         feats = m.features(image) if (strict.detected or relaxed.detected) else {}
         cands.append(Candidate(m.key, m.label, strict.detected, relaxed.detected, feats))
     return cands

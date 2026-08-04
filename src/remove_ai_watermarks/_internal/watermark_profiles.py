@@ -10,7 +10,6 @@ registry and every identify path still run anywhere.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
@@ -71,19 +70,12 @@ SDXL_ZIMAGE_GEMINI_STRENGTH = 0.25
 SDXL_ZIMAGE_UNKNOWN_STRENGTH = SDXL_ZIMAGE_GEMINI_STRENGTH
 
 
-@dataclass(frozen=True)
-class _StrengthPolicy:
-    unknown: float
-    by_vendor: dict[str, float]
-
-    def choose(self, vendor: str | None) -> float:
-        return self.by_vendor.get((vendor or "").casefold(), self.unknown)
-
-
-_SDXL_ZIMAGE_POLICY = _StrengthPolicy(
-    unknown=SDXL_ZIMAGE_UNKNOWN_STRENGTH,
-    by_vendor={"openai": SDXL_ZIMAGE_OPENAI_STRENGTH, "google": SDXL_ZIMAGE_GEMINI_STRENGTH},
-)
+# sdxl-zimage picks its strength from the VENDOR (unlike qwen-zimage, which derives it
+# from image area). An unlisted or unknown vendor falls back to the Gemini value.
+_SDXL_ZIMAGE_STRENGTH_BY_VENDOR: dict[str, float] = {
+    "openai": SDXL_ZIMAGE_OPENAI_STRENGTH,
+    "google": SDXL_ZIMAGE_GEMINI_STRENGTH,
+}
 _ALIASES = {
     "qwen_zimage": QWEN_ZIMAGE_PROFILE,
     "sdxl_zimage": SDXL_ZIMAGE_PROFILE,
@@ -134,7 +126,7 @@ def resolve_strength(
     if strength is not None:
         return strength
     if normalize_profile(pipeline or "") == SDXL_ZIMAGE_PROFILE:
-        return _SDXL_ZIMAGE_POLICY.choose(vendor)
+        return _SDXL_ZIMAGE_STRENGTH_BY_VENDOR.get((vendor or "").casefold(), SDXL_ZIMAGE_UNKNOWN_STRENGTH)
     if size is None:
         raise ValueError("qwen-zimage resolves strength from image area, so size is required")
     from remove_ai_watermarks._internal.qwen_zimage_pipeline import resolution_adaptive_denoise

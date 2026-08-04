@@ -35,9 +35,15 @@ _warnings.filterwarnings("ignore", message=r".*ImageProcessorFast.*")
 __version__ = "0.25.0"
 
 __all__ = [
+    "BatchSummary",
+    "InvisibleOptions",
+    "MetadataStripIncomplete",
+    "RemoveAllResult",
     "__version__",
     "identify_video",
     "inspect_video_metadata",
+    "remove_all",
+    "remove_batch",
     "remove_video_all",
     "remove_video_batch",
     "remove_video_invisible",
@@ -48,7 +54,16 @@ __all__ = [
 ]
 
 if TYPE_CHECKING:
-    from remove_ai_watermarks.api import remove_visible, visible_provenance
+    from remove_ai_watermarks.api import (
+        BatchSummary,
+        InvisibleOptions,
+        MetadataStripIncomplete,
+        RemoveAllResult,
+        remove_all,
+        remove_batch,
+        remove_visible,
+        visible_provenance,
+    )
     from remove_ai_watermarks.video import (
         identify_video,
         inspect_video_metadata,
@@ -63,7 +78,16 @@ if TYPE_CHECKING:
 def __getattr__(name: str) -> object:
     """Lazily resolve the high-level API (PEP 562), so the heavy imports (cv2, the
     metadata/identify stack) load only when a caller actually reaches for them."""
-    if name in ("remove_visible", "visible_provenance"):
+    if name in (
+        "BatchSummary",
+        "InvisibleOptions",
+        "MetadataStripIncomplete",
+        "RemoveAllResult",
+        "remove_all",
+        "remove_batch",
+        "remove_visible",
+        "visible_provenance",
+    ):
         from remove_ai_watermarks import api
 
         return getattr(api, name)

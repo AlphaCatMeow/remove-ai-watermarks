@@ -30,11 +30,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from remove_ai_watermarks import _text_mark_engine
-from remove_ai_watermarks._text_mark_engine import TextMarkConfig, TextMarkDetection, TextMarkEngine
+from remove_ai_watermarks._text_mark_engine import (
+    TextMarkConfig,
+    TextMarkDetection,
+    TextMarkEngine,
+    TextMarkLocation,
+)
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from numpy.typing import NDArray
 
 # Locate geometry as a fraction of the image SHORT side (measured basis). The
@@ -100,22 +103,10 @@ _CONFIG = TextMarkConfig(
     provenance_ncc_factor=1.0,
 )
 
-BaiduDetection = TextMarkDetection
-
 
 def _alpha_template() -> NDArray[Any] | None:
     """The bundled Baidu alpha template (float [0,1]), or None."""
     return _text_mark_engine.load_alpha_template(_CONFIG.asset_name)
-
-
-def _glyph_silhouette() -> NDArray[Any] | None:
-    """Binary "百度" silhouette (255 = glyph) from the alpha map, or None."""
-    return _text_mark_engine.glyph_silhouette(_CONFIG.asset_name)
-
-
-def _template_match_score(box_mask: NDArray[Any], scale_base: int) -> float:
-    """TM_CCOEFF_NORMED of the Baidu glyph silhouette against ``box_mask``."""
-    return _text_mark_engine.template_match_score(box_mask, scale_base, _CONFIG)
 
 
 class BaiduEngine(TextMarkEngine):
@@ -124,55 +115,39 @@ class BaiduEngine(TextMarkEngine):
     def __init__(self) -> None:
         super().__init__(_CONFIG)
 
-    def footprint_mask(
-        self, image: NDArray[Any] | None, *, force: bool = False, dilate: int | None = None
-    ) -> NDArray[Any] | None:
-        """Full-frame mask of the WHOLE mark (text run + the pill tag to its right).
+    def _footprint_rect(
+        self,
+        image: NDArray[Any],
+        loc: TextMarkLocation,
+        *,
+        force: bool,
+        detection: TextMarkDetection | None,
+    ) -> tuple[int, int, int, int] | None:
+        """Bound the fill by the detector's match box, never by the binary glyph blob.
 
         The base class's blob-bbox footprint UNDERCOVERS this mark: the white tag's
         flat interior gives no top-hat response (a top-hat answers edges, not flats),
         so the blob ends at the text run and the fill leaves the tag's right half as
         a ghost (measured 2026-07-22 on the 768x1024 cohort frame: blob bbox x
-        632..746 vs the tag ending ~758). The layout is measured and fixed -- the
-        text run is at the left of the locate box, the tag runs to the corner -- so
-        the footprint is the detector's match box extended RIGHT to the corner.
+        632..746 vs the tag ending ~758).
         """
-        if image is None or image.size == 0:
-            return None
+        return self._match_box_rect(image, loc, force=force, detection=detection)
 
-        from remove_ai_watermarks import image_io, region_eraser
+    def _extend_match_box(
+        self, box: tuple[int, int, int, int], loc: TextMarkLocation, frame: tuple[int, int]
+    ) -> tuple[int, int, int, int]:
+        """Extend the match box RIGHT to the corner end of the locate box.
 
-        image = image_io.to_bgr(image)
-        h, w = image.shape[:2]
-        if h < 32 or w < 64:
-            return None
-        loc = self.locate(image)
+        The layout is measured and fixed: the text run is at the left of the locate
+        box and the tag runs to the corner, so the mark's right edge is the box's.
+        """
+        gx0, gy0, _gx1, gy1 = box
         bx, by, bw, bh = loc.bbox
-        if force:
-            rx1, ry1, rx2, ry2 = bx, by, min(w, bx + bw), min(h, by + bh)
-        else:
-            if not self.detect(image).detected:
-                return None
-            _, box = self._tophat_best(image, loc)
-            if box is None:
-                return None
-            gx0, gy0, _gx1, gy1 = box
-            pad = max(4, int(0.15 * bh))
-            rx1 = max(0, bx + gx0 - pad)
-            ry1 = max(0, by + gy0 - pad)
-            rx2 = min(w, bx + bw)  # the tag runs to the corner end of the box
-            ry2 = min(h, by + gy1 + 1 + pad)
-        if rx1 >= rx2 or ry1 >= ry2:
-            return None
-        d = dilate if dilate is not None else max(3, int(0.02 * bw))
-        return region_eraser.boxes_to_mask((h, w), [(rx1, ry1, rx2 - rx1, ry2 - ry1)], dilate=d)
-
-
-def load_image_bgr(path: str | Path) -> NDArray[Any]:
-    """Read an image as BGR ndarray (helper for scripts/tests)."""
-    from remove_ai_watermarks import image_io
-
-    img = image_io.imread(path)
-    if img is None:
-        raise FileNotFoundError(f"Failed to read image: {path}")
-    return img
+        h, w = frame
+        pad = max(4, int(0.15 * bh))
+        return (
+            max(0, bx + gx0 - pad),
+            max(0, by + gy0 - pad),
+            min(w, bx + bw),  # the tag runs to the corner end of the box
+            min(h, by + gy1 + 1 + pad),
+        )

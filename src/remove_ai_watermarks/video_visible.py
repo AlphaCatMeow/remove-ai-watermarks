@@ -402,7 +402,7 @@ def detect_sora_frame(
     """Locate the strongest synthetic Sora-wordmark match in one frame.
 
     The returned candidate is intentionally untrusted. Call
-    :func:`stabilize_sora_localizations` across the full sequence before building
+    :func:`stabilize_localizations` across the full sequence before building
     any removal mask.
     """
     if image_bgr.size == 0:
@@ -883,113 +883,133 @@ def _region_iou(left: Region, right: Region) -> float:
     return intersection / union if union > 0 else 0.0
 
 
-def stabilize_sora_localizations(
-    detections: tuple[FrameLocalization, ...] | list[FrameLocalization],
-    *,
-    provenance: bool,
-) -> list[Region | None]:
-    """Accept only spatially recurring Sora candidates and bridge short dropouts.
+@dataclass(frozen=True)
+class VisibleMarkPolicy:
+    """One provider's temporal-arbiter tuning, plus the fill geometry it needs.
 
-    Metadata never creates a detection. It only allows a stable visual run whose
-    scores remain below the strict confidence floor, which covers low-contrast
-    Sora marks while clean metadata-bearing exports stay untouched.
+    Every value here is MEASURED per provider; the arbiter itself
+    (:func:`_stabilize_localizations`) is shared and knows nothing about providers.
+
+    ``accepts_provenance`` is load-bearing rather than cosmetic. Hailuo and Kling have
+    no metadata that could confirm them, so their rows force ``provenance=False``; that
+    used to be guaranteed structurally by wrappers that took no ``provenance``
+    parameter at all, and this flag is what preserves the guarantee now that one entry
+    point serves every mark.
+
+    ``padding_fraction`` and ``mask_style`` belong to the removal plan rather than the
+    arbiter, but they are per-provider constants like the rest, so they live on the same
+    row instead of in a parallel branch in ``video.py``.
     """
-    weak_floor = _SORA_PROVENANCE_WEAK_CONFIDENCE if provenance else _SORA_STRICT_WEAK_CONFIDENCE
-    return _stabilize_localizations(
-        detections,
-        provenance=provenance,
-        weak_floor=weak_floor,
+
+    weak_floor: float
+    strong_floor: float
+    transition_floor: float
+    min_stable_frames: int
+    cover_after_confirmation: bool
+    padding_fraction: float
+    mask_style: Literal["box", "veo"]
+    anchor_iou: float | None = None
+    accepts_provenance: bool = True
+    # Weak floor to use when provenance confirms the vendor. None = the mark has no
+    # relaxed band; metadata never creates a detection, it only lets a stable visual
+    # run below the strict floor through.
+    provenance_weak_floor: float | None = None
+
+
+VISIBLE_MARK_POLICIES: dict[str, VisibleMarkPolicy] = {
+    "sora": VisibleMarkPolicy(
+        weak_floor=_SORA_STRICT_WEAK_CONFIDENCE,
+        provenance_weak_floor=_SORA_PROVENANCE_WEAK_CONFIDENCE,
         strong_floor=_SORA_STRONG_CONFIDENCE,
         transition_floor=0.45,
         min_stable_frames=_MIN_STABLE_FRAMES,
         cover_after_confirmation=False,
-    )
-
-
-def stabilize_veo_localizations(
-    detections: tuple[FrameLocalization, ...] | list[FrameLocalization],
-    *,
-    provenance: bool,
-) -> list[Region | None]:
-    """Accept temporally recurring current or legacy Veo candidates."""
-    weak_floor = _VEO_PROVENANCE_WEAK_CONFIDENCE if provenance else _VEO_STRICT_WEAK_CONFIDENCE
-    return _stabilize_localizations(
-        detections,
-        provenance=provenance,
-        weak_floor=weak_floor,
+        padding_fraction=0.28,
+        mask_style="box",
+    ),
+    "veo": VisibleMarkPolicy(
+        weak_floor=_VEO_STRICT_WEAK_CONFIDENCE,
+        provenance_weak_floor=_VEO_PROVENANCE_WEAK_CONFIDENCE,
         strong_floor=_VEO_STRONG_CONFIDENCE,
         transition_floor=0.35,
         min_stable_frames=_MIN_VEO_STABLE_FRAMES,
         cover_after_confirmation=True,
-    )
-
-
-def stabilize_seedance_localizations(
-    detections: tuple[FrameLocalization, ...] | list[FrameLocalization],
-    *,
-    provenance: bool,
-) -> list[Region | None]:
-    """Accept a recurring Seedance boxed-AI mark at a fixed position."""
-    return _stabilize_localizations(
-        detections,
-        provenance=provenance,
+        padding_fraction=0.18,
+        mask_style="veo",
+    ),
+    "seedance": VisibleMarkPolicy(
+        # One floor at either trust level: provenance still gates the run acceptance
+        # inside the arbiter, but the confidence bar does not move.
         weak_floor=_SEEDANCE_WEAK_CONFIDENCE,
         strong_floor=_SEEDANCE_STRONG_CONFIDENCE,
         transition_floor=0.30,
         min_stable_frames=_MIN_FIXED_MARK_STABLE_FRAMES,
         cover_after_confirmation=True,
         anchor_iou=0.80,
-    )
-
-
-def stabilize_dola_localizations(
-    detections: tuple[FrameLocalization, ...] | list[FrameLocalization],
-    *,
-    provenance: bool,
-) -> list[Region | None]:
-    """Accept a recurring Dola AI text mark at a fixed position."""
-    weak_floor = _DOLA_PROVENANCE_WEAK_CONFIDENCE if provenance else _DOLA_STRICT_WEAK_CONFIDENCE
-    return _stabilize_localizations(
-        detections,
-        provenance=provenance,
-        weak_floor=weak_floor,
+        padding_fraction=0.0,
+        mask_style="box",
+    ),
+    "dola": VisibleMarkPolicy(
+        weak_floor=_DOLA_STRICT_WEAK_CONFIDENCE,
+        provenance_weak_floor=_DOLA_PROVENANCE_WEAK_CONFIDENCE,
         strong_floor=_DOLA_STRONG_CONFIDENCE,
         transition_floor=0.40,
         min_stable_frames=_MIN_FIXED_MARK_STABLE_FRAMES,
         cover_after_confirmation=True,
         anchor_iou=0.80,
-    )
-
-
-def stabilize_hailuo_localizations(
-    detections: tuple[FrameLocalization, ...] | list[FrameLocalization],
-) -> list[Region | None]:
-    """Accept a recurring MINIMAX/Hailuo label at a fixed position."""
-    return _stabilize_localizations(
-        detections,
-        provenance=False,
+        padding_fraction=0.20,
+        mask_style="box",
+    ),
+    "hailuo": VisibleMarkPolicy(
         weak_floor=_HAILUO_WEAK_CONFIDENCE,
         strong_floor=_HAILUO_STRONG_CONFIDENCE,
         transition_floor=0.28,
         min_stable_frames=_MIN_FIXED_MARK_STABLE_FRAMES,
         cover_after_confirmation=True,
         anchor_iou=0.80,
-    )
-
-
-def stabilize_kling_localizations(
-    detections: tuple[FrameLocalization, ...] | list[FrameLocalization],
-) -> list[Region | None]:
-    """Accept a recurring versioned Kling label at a fixed position."""
-    return _stabilize_localizations(
-        detections,
-        provenance=False,
+        padding_fraction=0.12,
+        mask_style="box",
+        accepts_provenance=False,
+    ),
+    "kling": VisibleMarkPolicy(
         weak_floor=_KLING_WEAK_CONFIDENCE,
         strong_floor=_KLING_STRONG_CONFIDENCE,
         transition_floor=0.30,
         min_stable_frames=_MIN_FIXED_MARK_STABLE_FRAMES,
         cover_after_confirmation=True,
         anchor_iou=0.80,
+        padding_fraction=0.12,
+        mask_style="box",
+        accepts_provenance=False,
+    ),
+}
+
+
+def stabilize_localizations(
+    mark: str,
+    detections: tuple[FrameLocalization, ...] | list[FrameLocalization],
+    *,
+    provenance: bool = False,
+) -> list[Region | None]:
+    """Accept only spatially/temporally recurring candidates for ``mark``.
+
+    Metadata never creates a detection. It only allows a stable visual run whose scores
+    remain below the strict confidence floor, which covers a low-contrast mark while
+    clean metadata-bearing exports stay untouched. A mark whose policy sets
+    ``accepts_provenance=False`` ignores the argument entirely.
+    """
+    policy = VISIBLE_MARK_POLICIES[mark]
+    trusted = provenance and policy.accepts_provenance
+    weak_floor = policy.provenance_weak_floor if (trusted and policy.provenance_weak_floor is not None) else None
+    return _stabilize_localizations(
+        detections,
+        provenance=trusted,
+        weak_floor=weak_floor if weak_floor is not None else policy.weak_floor,
+        strong_floor=policy.strong_floor,
+        transition_floor=policy.transition_floor,
+        min_stable_frames=policy.min_stable_frames,
+        cover_after_confirmation=policy.cover_after_confirmation,
+        **({"anchor_iou": policy.anchor_iou} if policy.anchor_iou is not None else {}),
     )
 
 
@@ -1182,8 +1202,8 @@ def _mask_for_region(
 ) -> NDArray[Any]:
     height, width = frame_bgr.shape[:2]
     x, y, region_width, region_height = region
-    mask = np.zeros((height, width), dtype=np.uint8)
     if mask_style == "veo" and 0.80 <= region_width / region_height <= 1.25:
+        mask = np.zeros((height, width), dtype=np.uint8)
         diamond_base, _ = _veo_templates()
         diamond = cv2.resize(
             diamond_base,
@@ -1207,13 +1227,16 @@ def _mask_for_region(
     # into the hole, recreating the mascot as a bright blob. The measured clean
     # floor on real Sora frames is a full box with roughly 0.28 mark-heights of
     # context on every side.
+    # Padded rectangle + no dilation is exactly region_eraser.boxes_to_mask (the same
+    # primitive the image fill uses); the padding IS the growth, so `dilate=0`.
+    from remove_ai_watermarks.region_eraser import boxes_to_mask
+
     padding = max(4, round(region_height * padding_fraction))
-    x0 = max(0, x - padding)
-    y0 = max(0, y - padding)
-    x1 = min(width, x + region_width + padding)
-    y1 = min(height, y + region_height + padding)
-    mask[y0:y1, x0:x1] = 255
-    return mask
+    return boxes_to_mask(
+        (height, width),
+        [(x - padding, y - padding, region_width + 2 * padding, region_height + 2 * padding)],
+        dilate=0,
+    )
 
 
 def _timestamp_time_base(profile_time_base: str | None) -> Fraction:

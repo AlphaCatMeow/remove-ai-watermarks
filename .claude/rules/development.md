@@ -40,4 +40,23 @@ Do not classify an entire module as untestable because its main path downloads a
 
 Use availability checks only for paths that actually load large models.
 
+## One measurement, one gate seam
+
+A detector is split into a trust-level-blind scan and a verdict that applies the
+threshold, so `detect` and `detect_both` reach the same numbers by construction. Two
+rules follow, and both were broken in practice before they were written down:
+
+- A per-mark demotion goes in the `_post_gate` hook (or, for a whole-scan precondition
+  like LibLibAI's size floor, in `_scan`) -- never in a `detect` override. An override
+  is invisible to `detect_both`, so the RunningHub and Yuanbao anchor gates silently
+  stopped applying on the arbiter's perception path. `TestSinglePassPerception` is the
+  guard: it asserts `detect_both` equals two `detect` calls field for field.
+- Detection and the removal mask must read ONE sweep. The winning box travels on
+  `TextMarkDetection.match_box` and the registry threads the detection into the mask
+  builder; a mask path that re-runs its own sweep is how the two drift apart.
+
+Before changing anything in the detection path, record the detectors' exact verdicts
+over a local sample first and diff them after. A refactor here is only correct if that
+record is byte-identical, and a green test suite does not establish that on its own.
+
 Environment setup, dependency recovery, CI behavior, and fixture policy: [`../../docs/development.md`](../../docs/development.md).

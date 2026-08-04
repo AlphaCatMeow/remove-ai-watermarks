@@ -89,6 +89,19 @@ def _pil_read(path: str | Path, flags: int) -> NDArray[Any] | None:
         return None
 
 
+def load_image_bgr(path: str | Path) -> NDArray[Any]:
+    """Read ``path`` as a BGR ndarray, raising instead of returning ``None``.
+
+    :func:`imread` keeps cv2's ``None``-on-failure contract because the removal paths
+    branch on it. Scripts and tests want the opposite -- fail loudly at the read -- so
+    they call this. Each vendor engine used to carry its own verbatim copy.
+    """
+    image = imread(path)
+    if image is None:
+        raise FileNotFoundError(f"Failed to read image: {path}")
+    return image
+
+
 def to_bgr(image: NDArray[Any]) -> NDArray[Any]:
     """Return a 3-channel BGR view of ``image``, promoting grayscale and BGRA.
 

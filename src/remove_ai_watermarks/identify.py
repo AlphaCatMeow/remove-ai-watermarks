@@ -59,6 +59,7 @@ from remove_ai_watermarks.metadata import (
     xai_signature_pair,
 )
 from remove_ai_watermarks.watermark_registry import GEMINI_SPARKLE_TRUST_CONF
+from remove_ai_watermarks.watermark_registry import known_marks as _known_marks
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -446,12 +447,20 @@ _DEVICE_C2PA_PLATFORM: tuple[tuple[bytes, str], ...] = (
 )
 
 
-def _device_platform(head: bytes) -> str | None:
-    """Map a distinctive C2PA device/camera token in the manifest bytes to a platform."""
-    for token, platform in _DEVICE_C2PA_PLATFORM:
+def _first_token_match(head: bytes, table: tuple[tuple[bytes, str], ...]) -> str | None:
+    """First platform in ``table`` whose token appears in ``head``, else None.
+
+    Table order is priority: the more specific token must be listed first.
+    """
+    for token, platform in table:
         if token in head:
             return platform
     return None
+
+
+def _device_platform(head: bytes) -> str | None:
+    """Map a distinctive C2PA device/camera token in the manifest bytes to a platform."""
+    return _first_token_match(head, _DEVICE_C2PA_PLATFORM)
 
 
 # C2PA signers that are an editing app or AI-capable device rather than a
@@ -474,10 +483,7 @@ _SIGNER_C2PA_PLATFORM: tuple[tuple[bytes, str], ...] = (
 
 def _signer_platform(head: bytes) -> str | None:
     """Map a C2PA editing-app / AI-capable-device signer token to a platform."""
-    for token, platform in _SIGNER_C2PA_PLATFORM:
-        if token in head:
-            return platform
-    return None
+    return _first_token_match(head, _SIGNER_C2PA_PLATFORM)
 
 
 def _attribute_platform(issuers: list[str], *, is_ai: bool = True) -> str | None:
@@ -678,16 +684,18 @@ def _visible_sparkle(image_path: Path, *, image: NDArray[Any] | None = None) -> 
 # Gemini-sparkle phrasing. These are the stripped-metadata visual fallback for
 # the China-served ByteDance generators (normally also caught by the TC260 AIGC
 # metadata label); the per-engine detection thresholds live in the registry.
-_VISIBLE_MARK_PLATFORM = {
-    "doubao": "ByteDance Doubao (visible 豆包AI生成 mark detected)",
-    "jimeng": "ByteDance Jimeng / Dreamina (visible 即梦AI mark detected)",
-    "qwen": "Alibaba Tongyi Qianwen (visible 千问AI生成 mark detected)",
-    "kling": "Kuaishou Kling (visible 可灵AI 3.0 mark detected)",
-    "yuanbao": "Tencent Yuanbao (visible 元宝 / AI生成 mark detected)",
-    "samsung": "Samsung Galaxy AI (visible 'Contenuti generati dall'AI' mark detected)",
-    "runninghub": "RunningHub (visible RunningHub AI生成 mark detected)",
-    "baidu": "Baidu (visible 百度 AI生成 mark detected)",
-    "liblib": "LibLibAI (visible LibLibAI mark detected)",
+# Text mark -> the platform sentence this report prints when that mark is the strongest
+# evidence, DERIVED from the registry rows so registering a mark is one edit. It was a
+# hand-maintained copy, and that class of copy is how LibLibAI ended up registered but
+# missing from the pill veto. Insertion order is the registry's, which is what fixes the
+# scan order below. The Gemini sparkle and the capture-less pill carry no platform of
+# their own (`KnownMark.platform is None`) and are excluded here: the sparkle has its
+# own higher-confidence `_visible_sparkle` path.
+#
+# Safe at module scope: `watermark_registry` is already imported above for
+# GEMINI_SPARKLE_TRUST_CONF, and it is deliberately cv2-free at import time.
+_VISIBLE_MARK_PLATFORM: dict[str, str] = {
+    mark.key: mark.platform for mark in _known_marks() if mark.platform is not None
 }
 
 
@@ -724,15 +732,20 @@ def _visible_text_marks(image_path: Path, *, image: NDArray[Any] | None = None) 
     return detections
 
 
-def _invisible_watermark(image_path: Path) -> str | None:
+def _invisible_watermark(image_path: Path, decode: _SharedDecode) -> str | None:
     """Open invisible-watermark scheme name (SD/SDXL/FLUX) or None.
 
     Optional: needs the torch-free DWT-DCT decoder (extra ``detect``). Returns
     None if it is not installed or no known watermark decodes.
     """
-    from remove_ai_watermarks.invisible_watermark import detect_invisible_watermark
+    from remove_ai_watermarks.invisible_watermark import detect_invisible_watermark, is_available
 
-    return detect_invisible_watermark(image_path)
+    if not is_available():
+        return None
+    # `decode.get()` re-raises a decode failure exactly as the old unguarded
+    # `imread` inside the detector did -- `has_invisible_target` needs that to reach
+    # its fail-safe rather than silently reporting "no signal".
+    return detect_invisible_watermark(image_path, image=decode.get())
 
 
 def _trustmark(image_path: Path) -> str | None:
@@ -746,27 +759,79 @@ def _trustmark(image_path: Path) -> str | None:
     return detect_trustmark(image_path)
 
 
+class _SharedDecode:
+    """One decode of the source pixels, shared by every detector in a single report.
+
+    ``identify`` used to decode the file three times. This holder unifies TWO of
+    them -- the DWT-DCT detector and the visible-mark stage, whose own docstring
+    already promised a single shared array. TrustMark keeps its own Pillow decode
+    on purpose and is NOT served from here: cv2 and Pillow disagree on EXIF
+    orientation and on 16-bit PNG, so feeding it this array would change what it
+    decodes. An install carrying the optional ``trustmark`` extra therefore still
+    pays two decodes, not one.
+
+    Two accessors, because the two arms need OPPOSITE failure handling:
+
+    * :meth:`get_or_none` swallows a decode failure and logs it. That is the visible
+      arm's historical behavior -- no cv2, no visible marks, verdict unchanged.
+    * :meth:`get` RE-RAISES it. The invisible arm never caught a decode error, and
+      ``has_invisible_target`` converts that exception into its documented fail-safe
+      ``True``. Swallowing it here would silently skip a diffusion scrub on a file
+      that used to get one -- leaving a watermark on a paid removal.
+
+    Per-CALL only: constructed inside ``_identify_from_evidence`` and discarded with
+    it, so an in-place rewrite between calls can never be answered from a stale array.
+    """
+
+    __slots__ = ("_done", "_error", "_image", "_path")
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._done = False
+        self._image: NDArray[Any] | None = None
+        self._error: Exception | None = None
+
+    def _decode(self) -> None:
+        if self._done:
+            return
+        self._done = True
+        try:
+            from remove_ai_watermarks.image_io import imread
+
+            self._image = imread(self._path)
+        except Exception as exc:  # cv2 missing / unreadable container
+            self._error = exc
+
+    def get(self) -> NDArray[Any] | None:
+        """The decoded array; re-raises a decode failure, None only on a clean miss."""
+        self._decode()
+        if self._error is not None:
+            raise self._error
+        return self._image
+
+    def get_or_none(self) -> NDArray[Any] | None:
+        """The decoded array, or None when it could not be decoded at all."""
+        self._decode()
+        if self._error is not None:
+            logger.debug("visible-mark decode unavailable: %s", self._error)
+            return None
+        return self._image
+
+
 def _collect_visible_signals(
     image_path: Path,
     signals: list[Signal],
     watermarks: list[str],
     platform: str | None,
+    decode: _SharedDecode,
 ) -> str | None:
-    """Decode once, append every trusted visible-mark signal, and return platform.
+    """Append every trusted visible-mark signal and return platform.
 
-    Keeping this stage separate from metadata aggregation makes the optional cv2
-    boundary explicit and guarantees that all visible detectors share one decoded
-    BGR array. A decode failure preserves the detectors' historical fallback/no-op
-    behavior.
+    All visible detectors share the one decoded BGR array held by ``decode`` (which
+    the invisible detectors have usually already paid for). A decode failure
+    preserves the detectors' historical fallback/no-op behavior.
     """
-    image: NDArray[Any] | None = None
-    try:
-        from remove_ai_watermarks.image_io import imread
-
-        image = imread(image_path)
-    except Exception as exc:  # cv2 missing - detectors fall back / no-op
-        logger.debug("visible-mark decode unavailable: %s", exc)
-        return platform
+    image = decode.get_or_none()
     if image is None:
         return platform
 
@@ -800,6 +865,10 @@ def _identify_from_evidence(
     if (check_visible or check_invisible) and image_path is None:
         raise ValueError("Pixel-backed checks require image_path")
     pixel_path = image_path
+    # One decode for every pixel detector in this report. Built here, per call, so it
+    # dies with the report -- an in-place rewrite between two calls cannot be answered
+    # from a stale array. Lazy inside, so a metadata-only report never decodes at all.
+    decode = _SharedDecode(pixel_path) if pixel_path is not None else _SharedDecode(evidence.path)
 
     info = evidence.c2pa_info
     meta = evidence.ai_metadata
@@ -1006,7 +1075,7 @@ def _identify_from_evidence(
 
     # ── Open invisible watermark (SD / SDXL / FLUX, dwtDct) ──────────
     # Public decoder, no key -- a definitive embedded signal on pristine files.
-    if check_invisible and pixel_path is not None and (scheme := _invisible_watermark(pixel_path)) is not None:
+    if check_invisible and pixel_path is not None and (scheme := _invisible_watermark(pixel_path, decode)) is not None:
         signals.append(Signal("invisible_watermark", scheme, "high"))
         watermarks.append(f"Open invisible watermark: {scheme}")
         caveats.append(_INVISIBLE_WM_CAVEAT)
@@ -1039,7 +1108,7 @@ def _identify_from_evidence(
     )
 
     if check_visible and pixel_path is not None:
-        platform = _collect_visible_signals(pixel_path, signals, watermarks, platform)
+        platform = _collect_visible_signals(pixel_path, signals, watermarks, platform, decode)
 
     visible_only = any(s.name.startswith("visible_") for s in signals) and not ai_from_metadata
     hf_only = bool(hf_job) and not ai_from_metadata
@@ -1078,9 +1147,27 @@ def _identify_from_evidence(
     )
 
 
-def identify_from_evidence(evidence: ProvenanceEvidence) -> ProvenanceReport:
-    """Build a metadata-only provenance verdict without reopening the source."""
-    return _identify_from_evidence(evidence)
+def identify_from_evidence(
+    evidence: ProvenanceEvidence,
+    *,
+    image_path: Path | None = None,
+    check_visible: bool = False,
+    check_invisible: bool = False,
+) -> ProvenanceReport:
+    """Build a provenance verdict from already-extracted evidence.
+
+    Metadata-only by default -- the source is never reopened. Pass ``image_path`` with
+    ``check_visible`` / ``check_invisible`` to add the pixel-backed detectors on top of
+    the SAME evidence, which is how a caller that asks the file two provenance questions
+    (which vendor is confirmed, and is there an invisible target) pays for the metadata
+    extraction once.
+    """
+    return _identify_from_evidence(
+        evidence,
+        image_path=image_path,
+        check_visible=check_visible,
+        check_invisible=check_invisible,
+    )
 
 
 def identify(
