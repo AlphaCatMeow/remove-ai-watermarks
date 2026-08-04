@@ -1274,3 +1274,76 @@ class TestRealSamplesHaveNoClash:
             pytest.skip(f"{fixture} not present")
         r = identify(path, check_visible=False, check_invisible=False)
         assert r.integrity_clashes == []
+
+
+class TestSharedPixelDecode:
+    """Every pixel detector in one report reads ONE decode of the source.
+
+    ``identify`` used to decode the file three times -- the DWT-DCT detector, the
+    TrustMark detector and the visible-mark stage each opened it. TrustMark still
+    keeps its own PIL decode on purpose (cv2 and PIL disagree on EXIF orientation and
+    on 16-bit PNG, so substituting one for the other is not behavior-preserving).
+    """
+
+    SAMPLE = SAMPLES_DIR / "chatgpt-1.png"
+
+    def _count_source_decodes(self, **kwargs) -> int:
+        from unittest.mock import patch
+
+        from remove_ai_watermarks import image_io
+
+        real = image_io.imread
+        # Warm the bundled-asset caches first: alpha templates and sparkle captures
+        # also go through imread, and they are one-time loads, not source decodes.
+        identify(self.SAMPLE, check_visible=True, check_invisible=True)
+        seen: list[str] = []
+
+        def counted(path, *args, **kw):
+            seen.append(str(path))
+            return real(path, *args, **kw)
+
+        with patch.object(image_io, "imread", counted):
+            identify(self.SAMPLE, **kwargs)
+        return sum(1 for s in seen if s == str(self.SAMPLE))
+
+    @pytest.mark.skipif(not (SAMPLES_DIR / "chatgpt-1.png").exists(), reason="sample not present")
+    def test_visible_and_invisible_share_one_decode(self):
+        assert self._count_source_decodes(check_visible=True, check_invisible=True) == 1
+
+    @pytest.mark.skipif(not (SAMPLES_DIR / "chatgpt-1.png").exists(), reason="sample not present")
+    def test_metadata_only_report_never_decodes(self):
+        assert self._count_source_decodes(check_visible=False, check_invisible=False) == 0
+
+    @pytest.mark.skipif(not (SAMPLES_DIR / "chatgpt-1.png").exists(), reason="sample not present")
+    def test_a_decode_failure_still_propagates_on_the_invisible_arm(self):
+        """Load-bearing: ``has_invisible_target`` turns this exception into its
+        documented fail-safe ``True``. Swallowing it would skip a diffusion scrub on a
+        file that used to get one -- a watermark left on a paid removal."""
+        from unittest.mock import patch
+
+        from remove_ai_watermarks import identify as identify_mod
+        from remove_ai_watermarks import image_io
+
+        def boom(*args, **kwargs):
+            raise OSError("decode exploded")
+
+        with patch.object(image_io, "imread", boom):
+            with pytest.raises(OSError, match="decode exploded"):
+                identify(self.SAMPLE, check_visible=False, check_invisible=True)
+            assert identify_mod.has_invisible_target(self.SAMPLE) is True
+
+    @pytest.mark.skipif(not (SAMPLES_DIR / "chatgpt-1.png").exists(), reason="sample not present")
+    def test_a_decode_failure_is_swallowed_on_the_visible_arm(self):
+        """The visible arm's historical behavior: no cv2, no visible marks, and the
+        metadata verdict is untouched."""
+        from unittest.mock import patch
+
+        from remove_ai_watermarks import image_io
+
+        def boom(*args, **kwargs):
+            raise OSError("decode exploded")
+
+        with patch.object(image_io, "imread", boom):
+            report = identify(self.SAMPLE, check_visible=True, check_invisible=False)
+        assert not any(s.name.startswith("visible_") for s in report.signals)
+        assert report.is_ai_generated is True  # the C2PA verdict survives the decode failure

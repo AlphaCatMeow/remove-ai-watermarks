@@ -229,58 +229,34 @@ def _visible_removal_plan(
     selected_scan: VideoScan,
     markers: dict[str, str],
 ) -> tuple[list[tuple[int, int, int, int] | None], float, Literal["box", "veo"]]:
-    """Resolve one provider's stable frame regions and fill geometry."""
+    """Resolve one provider's stable frame regions and fill geometry.
+
+    Everything provider-specific -- the confidence floors, the run length, the fill
+    padding and the mask style -- is data on ``VISIBLE_MARK_POLICIES``. The only thing
+    left here is WHICH metadata predicate confirms which vendor, which genuinely is a
+    mapping and not a tuning constant.
+    """
     from remove_ai_watermarks.video_visible import (
+        VISIBLE_MARK_POLICIES,
         has_bytedance_video_provenance,
         has_sora_provenance,
         has_veo_provenance,
-        stabilize_dola_localizations,
-        stabilize_hailuo_localizations,
-        stabilize_kling_localizations,
-        stabilize_seedance_localizations,
-        stabilize_sora_localizations,
-        stabilize_veo_localizations,
+        stabilize_localizations,
     )
 
-    if selected_mark == "sora":
-        return (
-            stabilize_sora_localizations(
-                selected_scan.detections,
-                provenance=has_sora_provenance(markers),
-            ),
-            0.28,
-            "box",
-        )
-    if selected_mark == "veo":
-        return (
-            stabilize_veo_localizations(
-                selected_scan.detections,
-                provenance=has_veo_provenance(markers),
-            ),
-            0.18,
-            "veo",
-        )
-    if selected_mark == "seedance":
-        return (
-            stabilize_seedance_localizations(
-                selected_scan.detections,
-                provenance=has_bytedance_video_provenance(markers),
-            ),
-            0.0,
-            "box",
-        )
-    if selected_mark == "dola":
-        return (
-            stabilize_dola_localizations(
-                selected_scan.detections,
-                provenance=has_bytedance_video_provenance(markers),
-            ),
-            0.20,
-            "box",
-        )
-    if selected_mark == "hailuo":
-        return stabilize_hailuo_localizations(selected_scan.detections), 0.12, "box"
-    return stabilize_kling_localizations(selected_scan.detections), 0.12, "box"
+    confirms = {
+        "sora": has_sora_provenance,
+        "veo": has_veo_provenance,
+        "seedance": has_bytedance_video_provenance,
+        "dola": has_bytedance_video_provenance,
+    }.get(selected_mark)
+    policy = VISIBLE_MARK_POLICIES[selected_mark]
+    regions = stabilize_localizations(
+        selected_mark,
+        selected_scan.detections,
+        provenance=bool(confirms and confirms(markers)),
+    )
+    return regions, policy.padding_fraction, policy.mask_style
 
 
 def _select_stable_visible_mark(

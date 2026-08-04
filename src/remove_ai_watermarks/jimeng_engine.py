@@ -24,7 +24,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from remove_ai_watermarks import _text_mark_engine
-from remove_ai_watermarks._text_mark_engine import TextMarkConfig, TextMarkDetection, TextMarkEngine
+from remove_ai_watermarks._text_mark_engine import TextMarkConfig, TextMarkEngine
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -84,8 +84,6 @@ _CONFIG = TextMarkConfig(
     alpha_height_frac=_ALPHA_HEIGHT_FRAC,
     min_gw=8,
 )
-
-JimengDetection = TextMarkDetection
 
 
 def _alpha_template() -> NDArray[Any] | None:

@@ -590,6 +590,188 @@ class TestC2paBufferScans:
         assert synthid_verdict("Google LLC") == "likely present (Google LLC embeds SynthID with C2PA)"
 
 
+def _amf0_str(value: bytes, *, long: bool = False) -> bytes:
+    marker = b"\x0c" if long else b"\x02"
+    return marker + len(value).to_bytes(4 if long else 2, "big") + value
+
+
+def _amf0_property(name: bytes, value: bytes) -> bytes:
+    return len(name).to_bytes(2, "big") + name + value
+
+
+_AMF0_OBJECT_END = b"\x00\x00\x09"
+
+# A minimal TC260-PG-20257A label: the reader validates the JSON before accepting it,
+# so the walker tests need a value that actually parses.
+_TC260_AIGC_VALUE = (
+    b'{"Label":"1","ContentProducer":"00119144030008867405X210002",'
+    b'"ProduceID":"sample-001","ReservedCode1":"","ContentPropagator":"",'
+    b'"PropagateID":"","ReservedCode2":""}'
+)
+
+
+class TestFlvAmf0Walker:
+    """``_skip_amf0`` is what lets the FLV reader step over every property that is not
+    ``AIGC``. Each AMF0 type it does not walk correctly aborts the scan, so a label that
+    sits after an unhandled type is silently missed. Pure byte parsing -- no media file
+    and no decoder is involved, so every branch is reachable from synthetic bytes."""
+
+    @pytest.mark.parametrize(
+        ("name", "encoded"),
+        [
+            ("number", b"\x00" + b"\x00" * 8),
+            ("boolean", b"\x01\x01"),
+            ("string", _amf0_str(b"a string")),
+            ("null", b"\x05"),
+            ("undefined", b"\x06"),
+            ("reference", b"\x07\x00\x01"),
+            ("date", b"\x0b" + b"\x00" * 10),
+            ("long-string", _amf0_str(b"a long string", long=True)),
+            ("strict-array", b"\x0a\x00\x00\x00\x02" + b"\x00" + b"\x00" * 8 + b"\x01\x00"),
+            ("object", b"\x03" + _amf0_property(b"inner", b"\x01\x00") + _AMF0_OBJECT_END),
+            ("ecma-array", b"\x08\x00\x00\x00\x01" + _amf0_property(b"inner", b"\x05") + _AMF0_OBJECT_END),
+        ],
+    )
+    def test_every_walkable_type_is_stepped_over(self, name: str, encoded: bytes):
+        """A property of this type, sitting before the AIGC one, must not stop the walk."""
+        from remove_ai_watermarks._internal.flv import _script_payloads
+
+        payload = (
+            _amf0_str(b"onMetaData")
+            + b"\x03"
+            + _amf0_property(name.encode(), encoded)
+            + _amf0_property(b"AIGC", _amf0_str(_TC260_AIGC_VALUE))
+            + _AMF0_OBJECT_END
+        )
+        assert _script_payloads(payload) == (_TC260_AIGC_VALUE,)
+
+    def test_unknown_type_marker_stops_the_walk(self):
+        """An unrecognized marker has an unknown width, so the reader cannot guess where
+        the next property starts. It must give up rather than resynchronize on garbage."""
+        from remove_ai_watermarks._internal.flv import _script_payloads
+
+        payload = (
+            _amf0_str(b"onMetaData")
+            + b"\x03"
+            + _amf0_property(b"mystery", b"\x7f")
+            + _amf0_property(b"AIGC", _amf0_str(_TC260_AIGC_VALUE))
+            + _AMF0_OBJECT_END
+        )
+        assert _script_payloads(payload) == ()
+
+    def test_truncated_value_stops_the_walk(self):
+        """A declared length running past the buffer must return empty, not raise."""
+        from remove_ai_watermarks._internal.flv import _script_payloads
+
+        payload = _amf0_str(b"onMetaData") + b"\x03" + _amf0_property(b"trunc", b"\x02\x00\xff")
+        assert _script_payloads(payload) == ()
+
+    def test_nesting_deeper_than_the_depth_cap_is_refused(self):
+        """The depth cap bounds work on hostile input; past it the walker returns None."""
+        from remove_ai_watermarks._internal.flv import _skip_amf0
+
+        nested = b"\x05"
+        for _ in range(12):
+            nested = b"\x03" + _amf0_property(b"n", nested) + _AMF0_OBJECT_END
+        assert _skip_amf0(nested, 0) is None
+
+    def test_long_string_aigc_value_is_read(self):
+        """TC260 values large enough to need the 4-byte long-string form still parse."""
+        from remove_ai_watermarks._internal.flv import _script_payloads
+
+        payload = (
+            _amf0_str(b"onMetaData")
+            + b"\x03"
+            + _amf0_property(b"AIGC", _amf0_str(_TC260_AIGC_VALUE, long=True))
+            + _AMF0_OBJECT_END
+        )
+        assert _script_payloads(payload) == (_TC260_AIGC_VALUE,)
+
+    def test_non_onmetadata_script_tag_is_ignored(self):
+        """Only ``onMetaData`` carries the normative label; other script tags are skipped."""
+        from remove_ai_watermarks._internal.flv import _script_payloads
+
+        payload = (
+            _amf0_str(b"onCuePoint")
+            + b"\x03"
+            + _amf0_property(b"AIGC", _amf0_str(_TC260_AIGC_VALUE))
+            + _AMF0_OBJECT_END
+        )
+        assert _script_payloads(payload) == ()
+
+    def test_missing_file_reads_as_no_payloads(self, tmp_path: Path):
+        from remove_ai_watermarks._internal.flv import tc260_aigc_payloads
+
+        assert tc260_aigc_payloads(tmp_path / "absent.flv") == ()
+
+    def test_non_flv_signature_reads_as_no_payloads(self, tmp_path: Path):
+        from remove_ai_watermarks._internal.flv import tc260_aigc_payloads
+
+        path = tmp_path / "fake.flv"
+        path.write_bytes(b"NOTFLV\x00\x00\x09" + b"\x00" * 32)
+        assert tc260_aigc_payloads(path) == ()
+
+
+class TestProbeMemoization:
+    """The per-file probes are cached on (path, mtime_ns, size).
+
+    Their only real failure mode is staleness after an IN-PLACE rewrite, which this
+    package does (``remove_ai_metadata(p, p)``, and the batch case where the output
+    directory is the input directory). mtime alone can land inside one tick on a
+    coarse filesystem, hence size in the key too.
+    """
+
+    def test_in_place_strip_invalidates_the_label_cache(self, tmp_path: Path):
+        import shutil
+
+        from remove_ai_watermarks.metadata import aigc_label, remove_ai_metadata
+
+        source = Path(__file__).resolve().parents[1] / "data" / "fixtures" / "provenance" / "doubao-1.png"
+        if not source.exists():
+            pytest.skip("doubao sample not present")
+        target = tmp_path / "in_place.png"
+        shutil.copyfile(source, target)
+
+        assert aigc_label(target) is not None  # populates the cache
+        remove_ai_metadata(target, target)
+        assert aigc_label(target) is None, "the cache answered from the pre-strip content"
+
+    def test_caller_cannot_mutate_the_cached_label(self, tmp_path: Path):
+        """``aigc_label`` returns a dict; a caller editing it must not poison the cache."""
+        import shutil
+
+        from remove_ai_watermarks.metadata import aigc_label
+
+        source = Path(__file__).resolve().parents[1] / "data" / "fixtures" / "provenance" / "doubao-1.png"
+        if not source.exists():
+            pytest.skip("doubao sample not present")
+        target = tmp_path / "mutate.png"
+        shutil.copyfile(source, target)
+
+        first = aigc_label(target)
+        assert first is not None
+        first["ContentProducer"] = "TAMPERED"
+        second = aigc_label(target)
+        assert second is not None
+        assert second["ContentProducer"] != "TAMPERED"
+
+    def test_unstattable_path_bypasses_the_cache_and_behaves_as_before(self, tmp_path: Path):
+        """A path that cannot be stat'ed has no cache key, so it must fall through to the
+        uncached implementation -- same outcome as before memoization, whatever that is."""
+        from remove_ai_watermarks import metadata
+
+        missing = tmp_path / "absent.png"
+        assert metadata._stat_key(missing) is None
+
+        def outcome(fn):
+            try:
+                return ("value", fn(missing))
+            except Exception as exc:
+                return ("raised", type(exc).__name__)
+
+        assert outcome(metadata.aigc_label) == outcome(metadata._aigc_label_impl)
+
+
 class TestC2PAInvalidSignature:
     """A .png file that is not actually PNG-signed must read as clean, not crash."""
 
@@ -602,3 +784,54 @@ class TestC2PAInvalidSignature:
         fake = tmp_path / "fake.png"
         fake.write_bytes(b"\xff\xd8\xff\xe0 not a png at all, just garbage bytes")
         assert extract_c2pa_chunk(fake) is None
+
+
+class TestTc260ContainerRouting:
+    """The native-container readers route on CONTENT, not on the file extension.
+
+    Every reader self-gates on its own magic bytes after a 4-12 byte read, so gating
+    the AVI and FLV ones on the suffix as well was redundant -- and it made a
+    correctly-formatted container served under the wrong name invisible, contradicting
+    this module's own rule that format detection reads the bytes.
+    """
+
+    @staticmethod
+    def _riff_chunk(chunk_id: bytes, payload: bytes) -> bytes:
+        return chunk_id + len(payload).to_bytes(4, "little") + payload + (b"\x00" if len(payload) & 1 else b"")
+
+    def _labelled_avi(self) -> bytes:
+        info = self._riff_chunk(b"AIGC", _TC260_AIGC_VALUE)
+        body = b"AVI " + self._riff_chunk(b"LIST", b"INFO" + info)
+        return b"RIFF" + len(body).to_bytes(4, "little") + body
+
+    def test_a_mislabeled_avi_is_still_read(self, tmp_path: Path):
+        from remove_ai_watermarks.metadata import aigc_label
+
+        target = tmp_path / "clip.bin"  # correct AVI bytes, wrong suffix
+        target.write_bytes(self._labelled_avi())
+        label = aigc_label(target)
+        assert label is not None
+        assert label["Label"] == "1"
+
+    def test_a_correctly_named_avi_still_works(self, tmp_path: Path):
+        from remove_ai_watermarks.metadata import aigc_label
+
+        target = tmp_path / "clip.avi"
+        target.write_bytes(self._labelled_avi())
+        assert aigc_label(target) is not None
+
+    def test_webp_yields_nothing_from_the_riff_reader(self, tmp_path: Path):
+        """WebP is the one input class the now-unconditional RIFF reader newly touches,
+        and it shares the ``RIFF`` prefix -- the ``AVI `` form check is what rejects it."""
+        from remove_ai_watermarks._internal.riff import tc260_aigc_payloads
+
+        body = b"WEBP" + self._riff_chunk(b"VP8L", b"\x00" * 16)
+        target = tmp_path / "pic.webp"
+        target.write_bytes(b"RIFF" + len(body).to_bytes(4, "little") + body)
+        assert tc260_aigc_payloads(target) == ()
+
+    def test_every_reader_is_reached_in_a_stable_order(self):
+        from remove_ai_watermarks.metadata import _tc260_container_readers
+
+        readers = _tc260_container_readers()
+        assert [r.__module__.rsplit(".", 1)[-1] for r in readers] == ["isobmff", "ebml", "riff", "flv"]

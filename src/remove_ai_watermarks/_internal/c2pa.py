@@ -329,12 +329,42 @@ def _extract_c2pa_info_png(image_path: Path) -> dict[str, Any]:
     return info
 
 
-def extract_c2pa_info(image_path: Path) -> dict[str, Any]:
-    """Return normalized C2PA evidence from the official reader or PNG fallback."""
+def _extract_c2pa_info_impl(image_path: Path) -> dict[str, Any]:
     store = read_manifest_store_json(Path(image_path))
     if store is not None:
         return c2pa_info_from_manifest_store(store)
     return _extract_c2pa_info_png(Path(image_path))
+
+
+@functools.lru_cache(maxsize=4)
+def _extract_c2pa_info_cached(path_str: str, _mtime_ns: int, _size: int, _reader: bool) -> dict[str, Any]:
+    """Cache shim: every argument after the path is key-only.
+
+    ``_reader`` is in the key because the answer genuinely depends on it -- with the
+    official reader the manifest comes back as a store, without it from the hand-rolled
+    PNG chunk parser, and the two produce different ``c2pa_manifest`` labels. Keying on
+    the file alone handed a reader-path result to a caller that had disabled the reader.
+    """
+    return _extract_c2pa_info_impl(Path(path_str))
+
+
+def extract_c2pa_info(image_path: Path) -> dict[str, Any]:
+    """Return normalized C2PA evidence from the official reader or PNG fallback.
+
+    Memoized on ``(path, mtime_ns, size)``: one ``identify`` reaches this twice (once
+    directly, once inside ``get_ai_metadata``) and each call re-runs the Rust manifest
+    reader and re-parses its JSON. Size joins mtime in the key because this package
+    rewrites files in place, and an in-place rewrite can land inside one mtime tick.
+    """
+    try:
+        stat = image_path.stat()
+    except OSError:
+        # No stat (a pipe, or a race): read uncached rather than fail.
+        return _extract_c2pa_info_impl(image_path)
+    cached = _extract_c2pa_info_cached(str(image_path), stat.st_mtime_ns, stat.st_size, _C2PA_READER_AVAILABLE)
+    # Deep-ish copy: values are scalars plus a few lists, and a caller mutating one of
+    # those lists would otherwise poison every later reader of the same file.
+    return {key: list(cast("list[Any]", value)) if isinstance(value, list) else value for key, value in cached.items()}
 
 
 def inject_c2pa_chunk(target_path: Path, output_path: Path, c2pa_chunk: bytes) -> None:

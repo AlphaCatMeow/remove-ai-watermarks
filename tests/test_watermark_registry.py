@@ -51,6 +51,52 @@ class TestCatalog:
         with pytest.raises(KeyError):
             reg.get_mark("nope")
 
+    def test_every_registered_key_has_an_engine_row(self):
+        assert set(reg._ENGINE_CLASS) == set(reg.mark_keys())
+
+    def test_unknown_engine_key_raises(self):
+        with pytest.raises(KeyError):
+            reg._engine("nope")
+
+
+class TestEngineImportsStayLazy:
+    """The engine table holds NAMES, not imports.
+
+    ``identify`` imports ``watermark_registry`` at module scope for a metadata-only
+    scan, and the engines pull cv2. If the table were ever built from real imports,
+    every ``--help`` and every metadata-only ``identify`` would pay for cv2 -- the
+    exact regression a name table can silently introduce. Run in a subprocess because
+    the in-process ``sys.modules`` is already polluted by the rest of the suite.
+    """
+
+    def _modules_after(self, statements: str) -> set[str]:
+        import json
+        import subprocess
+        import sys
+
+        script = f"import sys, json\n{statements}\nprint(json.dumps(sorted(sys.modules)))"
+        out = subprocess.run(  # noqa: S603 - argv is this interpreter plus a literal script
+            [sys.executable, "-c", script], capture_output=True, text=True, check=True
+        )
+        return set(json.loads(out.stdout))
+
+    def test_importing_the_registry_pulls_no_engine_and_no_cv2(self):
+        loaded = self._modules_after("import remove_ai_watermarks.watermark_registry")
+        assert "remove_ai_watermarks.gemini_engine" not in loaded
+        assert "remove_ai_watermarks.doubao_engine" not in loaded
+        assert "cv2" not in loaded
+
+    def test_importing_identify_pulls_no_engine_and_no_cv2(self):
+        # identify.py imports watermark_registry at module scope, so this -- not the
+        # registry alone -- is the real dependency-light surface.
+        loaded = self._modules_after("import remove_ai_watermarks.identify")
+        assert "remove_ai_watermarks.gemini_engine" not in loaded
+        assert "cv2" not in loaded
+
+    def test_resolving_an_engine_imports_it(self):
+        loaded = self._modules_after("from remove_ai_watermarks import watermark_registry as r\nr._engine('gemini')")
+        assert "remove_ai_watermarks.gemini_engine" in loaded
+
 
 class TestScan:
     def test_detect_marks_scans_all(self):
@@ -408,6 +454,149 @@ class TestArbiter:
         ]
         fired = {d.candidate.key for d in reg.decide(cands, reg.Context("auto", frozenset()))}
         assert fired == {"jimeng", "jimeng_pill"}
+
+
+class TestSinglePassPerception:
+    """``detect_both`` must equal two ``detect`` calls, for strictly less work.
+
+    The arbiter's perception pass runs every detector at both trust levels. The trust
+    level only moves a threshold (Gemini: whether a false-positive gate demotes the
+    result afterwards), never the measurement -- so the expensive scan is shared. If
+    that ever stops being true, this test is what says so.
+    """
+
+    @pytest.mark.parametrize(
+        "image",
+        [
+            pytest.param(np.full((256, 256, 3), 100, np.uint8), id="clean"),
+            pytest.param(np.zeros((40, 40, 3), np.uint8), id="below-the-size-floor"),
+        ],
+    )
+    def test_dual_verdict_matches_two_separate_detects(self, image):
+        for m in reg.known_marks():
+            strict, relaxed = m.detect_both(image)
+            for one, two, level in (
+                (strict, m.detect(image, provenance=False), "strict"),
+                (relaxed, m.detect(image, provenance=True), "relaxed"),
+            ):
+                assert one.detected == two.detected, f"{m.key} {level}"
+                assert one.confidence == two.confidence, f"{m.key} {level}"
+                assert one.region == two.region, f"{m.key} {level}"
+
+    @pytest.mark.skipif(not DOUBAO_SAMPLE.exists(), reason="doubao sample not present")
+    def test_dual_verdict_matches_on_a_real_positive(self):
+        from remove_ai_watermarks import image_io
+
+        image = image_io.imread(DOUBAO_SAMPLE)
+        for m in reg.known_marks():
+            strict, relaxed = m.detect_both(image)
+            assert (strict.detected, strict.confidence) == (
+                m.detect(image, provenance=False).detected,
+                m.detect(image, provenance=False).confidence,
+            ), m.key
+            assert (relaxed.detected, relaxed.confidence) == (
+                m.detect(image, provenance=True).detected,
+                m.detect(image, provenance=True).confidence,
+            ), m.key
+
+    @pytest.mark.skipif(not DOUBAO_SAMPLE.exists(), reason="doubao sample not present")
+    def test_perception_scans_each_mark_once(self, monkeypatch: pytest.MonkeyPatch):
+        """The whole point: one template sweep per mark, not two."""
+        import cv2
+
+        from remove_ai_watermarks import image_io
+
+        image = image_io.imread(DOUBAO_SAMPLE)
+        calls = [0]
+        real = cv2.matchTemplate
+
+        def counted(*args, **kwargs):
+            calls[0] += 1
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(cv2, "matchTemplate", counted)
+        reg._build_candidates(image)
+        single = calls[0]
+        calls[0] = 0
+        for m in reg.known_marks():
+            m.detect(image, provenance=False)
+            m.detect(image, provenance=True)
+        assert single * 2 <= calls[0] + 2, f"perception did {single} sweeps vs {calls[0]} for two passes"
+
+
+class TestMarkKnowledgeIsOnTheRow:
+    """Registering a mark is ONE edit: the row carries everything about it.
+
+    Product family, label regime, the platform sentence and the metadata signals that
+    confirm the vendor all used to live in separate hand-maintained tables across
+    ``watermark_registry``, ``identify`` and ``api``. That is how LibLibAI ended up
+    registered but absent from the pill veto.
+    """
+
+    def test_identify_platform_table_is_derived_from_the_rows(self):
+        from remove_ai_watermarks.identify import _VISIBLE_MARK_PLATFORM
+
+        assert {m.key: m.platform for m in reg.known_marks() if m.platform is not None} == _VISIBLE_MARK_PLATFORM
+
+    def test_the_platformless_marks_are_the_two_with_their_own_paths(self):
+        """Gemini has the higher-confidence sparkle path; the pill is too weak to
+        attribute. Everything else must name a platform or `identify` reports none."""
+        assert {m.key for m in reg.known_marks() if m.platform is None} == {"gemini", "jimeng_pill"}
+
+    def test_platform_scan_order_follows_the_registry(self):
+        """`identify` takes the FIRST platform match, so the order is load-bearing and
+        must stay the registry's specificity order rather than a dict literal's."""
+        from remove_ai_watermarks.identify import _VISIBLE_MARK_PLATFORM
+
+        assert list(_VISIBLE_MARK_PLATFORM) == [m.key for m in reg.known_marks() if m.platform is not None]
+
+    def test_every_tc260_mark_declares_the_aigc_signal(self):
+        for mark in reg.known_marks():
+            if mark.label_regime == "tc260" and mark.key != "jimeng_pill":
+                assert "aigc" in mark.provenance_signals, mark.key
+
+    def test_only_gemini_claims_platform_tokens(self):
+        by_token = {m.key for m in reg.known_marks() if m.provenance_platform_tokens}
+        assert by_token == {"gemini"}
+
+
+class TestPillSuppressors:
+    """The pill veto is derived from the registry, not hand-listed.
+
+    The hand-written list drifted: LibLibAI was registered in the same commit as
+    RunningHub and Baidu, both of which were added to the veto, and it was not. A
+    derived set cannot be forgotten by the next registration.
+    """
+
+    def test_every_other_tc260_product_suppresses_the_pill(self):
+        expected = {
+            m.key
+            for m in reg.known_marks()
+            if m.label_regime == "tc260" and m.product != reg.get_mark("jimeng_pill").product
+        }
+        assert reg._pill_suppressors() == expected
+        assert "liblib" in expected
+
+    def test_pill_dropped_on_liblib(self):
+        assert not reg._keep_pill({"liblib"}, provenance=frozenset({"jimeng"}), footprint_flat=1.0)
+
+    def test_pill_dropped_on_liblib_even_with_the_jimeng_wordmark(self):
+        """The veto precedes the wordmark arm, so a co-firing LibLibAI wins.
+
+        This is the broader half of the change: it needs neither TC260 provenance nor
+        a flat footprint, so it is reachable on more inputs than the metadata arm.
+        """
+        assert not reg._keep_pill({"liblib", "jimeng"}, provenance=frozenset(), footprint_flat=1.0)
+
+    def test_pill_survives_gemini_and_samsung(self):
+        """Neither is a TC260 labeller, and neither can put "jimeng" into provenance,
+        so neither may veto the arm it could not have enabled."""
+        assert reg._keep_pill({"gemini", "jimeng"}, provenance=frozenset(), footprint_flat=1.0)
+        assert reg._keep_pill({"samsung", "jimeng"}, provenance=frozenset(), footprint_flat=1.0)
+
+    def test_product_map_is_derived_from_the_rows(self):
+        assert {m.key: m.product for m in reg.known_marks()} == reg._PRODUCT_OF
+        assert reg._PRODUCT_OF["jimeng_pill"] == "jimeng"  # the one shared product
 
 
 class TestProvenanceMaskThreading:

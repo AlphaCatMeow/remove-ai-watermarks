@@ -15,7 +15,7 @@ import struct
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Callable, Iterable
     from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -165,6 +165,21 @@ TC260_AIGC_FIELDS: frozenset[str] = frozenset(
 MAX_TC260_VALUE_BYTES = 1024 * 1024
 
 
+# A TC260 producer code is ``001`` + ``1`` + USCC(18) + a 5-digit app/product suffix,
+# so two codes sharing the USCC are the same legal entity registering different
+# products. Slicing is defensive: anything not matching the layout is returned as-is,
+# which also passes through the bare-name forms some generators write ("doubao",
+# "picwish").
+_USCC_START, _USCC_END = 4, 22
+
+
+def uscc_of(code: str) -> str:
+    """The 18-char Unified Social Credit Code embedded in a TC260 producer code."""
+    if len(code) >= _USCC_END and code[:3] == "001":
+        return code[_USCC_START:_USCC_END]
+    return code
+
+
 def parse_tc260_aigc_json(value: bytes) -> dict[str, str] | None:
     """Parse a bounded JSON object carrying at least one normative TC260 field."""
     if len(value) > MAX_TC260_VALUE_BYTES:
@@ -268,6 +283,21 @@ def _png_late_metadata(image_path: Path, window: int) -> bytes:
         logger.debug("PNG late-metadata scan failed on %s: %s", image_path, exc)
         return b""
     return bytes(out)
+
+
+def _stat_key(image_path: Path) -> tuple[str, int, int] | None:
+    """Cache key identifying this file's exact CONTENT, or None when it cannot stat.
+
+    ``(path, mtime_ns, size)`` -- size as well as mtime because an in-place rewrite
+    can land inside the same mtime tick on a coarse filesystem, and this package does
+    rewrite in place (``remove_ai_metadata(p, p)``, the batch output-equals-input
+    case). A file it cannot stat is read uncached rather than failing.
+    """
+    try:
+        st = image_path.stat()
+    except OSError:
+        return None
+    return (str(image_path), st.st_mtime_ns, st.st_size)
 
 
 def scan_head(image_path: Path, size: int = 1024 * 1024) -> bytes:
@@ -420,7 +450,7 @@ def aigc_label_from_metadata(data: bytes, candidates: tuple[str, ...] = ()) -> d
     return None
 
 
-def aigc_label(image_path: Path) -> dict[str, str] | None:
+def _aigc_label_impl(image_path: Path) -> dict[str, str] | None:
     """Parse a China TC260 AI-labeling block, if present.
 
     Supported serializations are:
@@ -459,43 +489,42 @@ def aigc_label(image_path: Path) -> dict[str, str] | None:
     if isinstance(value, str) and (result := aigc_label_from_metadata(b"", (value,))):
         return result
 
-    # Native MP4/MOV TC260 metadata (TC260-PG-20257A): the ``AIGC`` key lives
-    # in ``moov.udta.meta.keys`` and points to a raw JSON value in ``ilst``.
-    # Read it through the bounded box walker so a tail ``moov`` after a large
-    # ``mdat`` is found without loading or scanning the media payload.
-    from remove_ai_watermarks._internal.isobmff import tc260_aigc_payloads
-
-    isobmff_candidates = tuple(payload.decode("utf-8", "replace") for payload in tc260_aigc_payloads(image_path))
-    if result := aigc_label_from_metadata(b"", isobmff_candidates):
-        return result
-
-    # Native MKV/WebM TC260 metadata: ``Segment.Tags.Tag.SimpleTag`` carries
-    # ``TagName=AIGC`` and the raw JSON in ``TagString``. The EBML walker seeks
-    # over clusters and reads only bounded metadata values.
-    from remove_ai_watermarks._internal.ebml import tc260_aigc_payloads as ebml_tc260_aigc_payloads
-
-    ebml_candidates = tuple(payload.decode("utf-8", "replace") for payload in ebml_tc260_aigc_payloads(image_path))
-    if result := aigc_label_from_metadata(b"", ebml_candidates):
-        return result
-
-    # Native AVI and FLV TC260 metadata. Both readers walk their container
-    # structures and skip media payloads instead of relying on a raw substring
-    # that could collide inside compressed video.
-    legacy_payloads: tuple[bytes, ...] = ()
-    if image_path.suffix.lower() == ".avi":
-        from remove_ai_watermarks._internal.riff import tc260_aigc_payloads as riff_tc260_aigc_payloads
-
-        legacy_payloads = riff_tc260_aigc_payloads(image_path)
-    elif image_path.suffix.lower() == ".flv":
-        from remove_ai_watermarks._internal.flv import tc260_aigc_payloads as flv_tc260_aigc_payloads
-
-        legacy_payloads = flv_tc260_aigc_payloads(image_path)
-    legacy_candidates = tuple(payload.decode("utf-8", "replace") for payload in legacy_payloads)
-    if result := aigc_label_from_metadata(b"", legacy_candidates):
-        return result
+    # Native container TC260 metadata. Every reader walks its own container structure
+    # and skips media payloads instead of relying on a raw substring that could collide
+    # inside compressed video, and every one of them SELF-GATES on its magic bytes --
+    # returning () after a 4-12 byte read on anything else. So the route is content, not
+    # extension: a correctly formatted AVI or FLV served under the wrong suffix used to
+    # be missed, which contradicts this module's own rule elsewhere ("route on the
+    # actual content format, not the extension").
+    for reader in _tc260_container_readers():
+        candidates = tuple(payload.decode("utf-8", "replace") for payload in reader(image_path))
+        if result := aigc_label_from_metadata(b"", candidates):
+            return result
 
     data = scan_head(image_path)
     return aigc_label_from_metadata(data)
+
+
+def _tc260_container_readers() -> tuple[Callable[[Path], tuple[bytes, ...]], ...]:
+    """The native-container TC260 readers, most common first.
+
+    Static imports rather than ``importlib``: this module carries no pyright pragma, so
+    a dynamically resolved callable would be ``Any`` and fail the strict gate. They stay
+    function-local because ``isobmff`` imports this module's constants at import time.
+
+    * MP4/MOV -- the ``AIGC`` key in ``moov.udta.meta.keys`` points at raw JSON in
+      ``ilst``; the bounded box walker finds a tail ``moov`` after a large ``mdat``
+      without loading the media payload.
+    * MKV/WebM -- ``Segment.Tags.Tag.SimpleTag`` carries ``TagName=AIGC``.
+    * AVI -- a ``LIST/INFO/AIGC`` chunk.
+    * FLV -- ``script.onMetaData.AIGC``.
+    """
+    from remove_ai_watermarks._internal.ebml import tc260_aigc_payloads as ebml_payloads
+    from remove_ai_watermarks._internal.flv import tc260_aigc_payloads as flv_payloads
+    from remove_ai_watermarks._internal.isobmff import tc260_aigc_payloads as isobmff_payloads
+    from remove_ai_watermarks._internal.riff import tc260_aigc_payloads as riff_payloads
+
+    return (isobmff_payloads, ebml_payloads, riff_payloads, flv_payloads)
 
 
 # C2PA "Durable Content Credentials" manifest repositories (C2PA 2.4). When the
@@ -538,7 +567,7 @@ def c2pa_cloud_manifest(image_path: Path) -> str | None:
     return c2pa_cloud_manifest_in(scan_head(image_path, _QUICK_SCAN_BYTES))
 
 
-def huggingface_job(image_path: Path) -> str | None:
+def _huggingface_job_impl(image_path: Path) -> str | None:
     """Return the HuggingFace job id if the image carries an ``hf-job-id`` PNG
     text chunk, else None.
 
@@ -599,7 +628,7 @@ def samsung_genai_in(data: bytes) -> int | None:
     return int(match.group(1)) or None
 
 
-def samsung_genai(image_path: Path) -> int | None:
+def _samsung_genai_impl(image_path: Path) -> int | None:
     """Return Samsung's non-zero ``genAIType`` value if the image carries the
     Galaxy AI editing marker, else None.
 
@@ -636,7 +665,7 @@ def iptc_ai_system_in(data: bytes) -> str | None:
     return "fields present"
 
 
-def iptc_ai_system(image_path: Path) -> str | None:
+def _iptc_ai_system_impl(image_path: Path) -> str | None:
     """Return an IPTC 2025.1 AI-disclosure note if the file carries those XMP
     properties, else None.
 
@@ -775,7 +804,7 @@ def _exif_text(ifd: dict[int, Any], tag: int) -> str:
     return value.decode("latin1", "replace").strip() if isinstance(value, bytes) else ""
 
 
-def xai_signature(image_path: Path) -> bool:
+def _xai_signature_impl(image_path: Path) -> bool:
     """Detect xAI / Grok's EXIF provenance signature scheme.
 
     Grok image downloads (Aurora model) carry no C2PA, XMP, SynthID, or IPTC --
@@ -1372,3 +1401,87 @@ def remove_ai_metadata(
 
     logger.info("Stripped AI metadata → %s", output_path)
     return output_path
+
+
+# ── Per-file probe memoization ──────────────────────────────────────────────
+# One ``identify`` reaches each of these twice (``get_ai_metadata`` internally, then
+# ``extract_provenance_evidence``), and each call re-walks the container -- the
+# ISOBMFF/EBML walks in ``aigc_label`` and the file-tail read in ``samsung_genai``
+# are the expensive ones. Keyed on (path, mtime_ns, size) so an in-place rewrite
+# invalidates; ``maxsize`` bounds memory to a handful of entries.
+
+
+@functools.lru_cache(maxsize=4)
+def _aigc_label_cached(path_str: str, _mtime_ns: int, _size: int) -> dict[str, str] | None:
+    from pathlib import Path as _Path
+
+    return _aigc_label_impl(_Path(path_str))
+
+
+def aigc_label(image_path: Path) -> dict[str, str] | None:
+    """See :func:`_aigc_label_impl`; memoized per file content."""
+    key = _stat_key(image_path)
+    if key is None:
+        return _aigc_label_impl(image_path)
+    result = _aigc_label_cached(*key)
+    return dict(result) if result is not None else None
+
+
+@functools.lru_cache(maxsize=4)
+def _huggingface_job_cached(path_str: str, _mtime_ns: int, _size: int) -> str | None:
+    from pathlib import Path as _Path
+
+    return _huggingface_job_impl(_Path(path_str))
+
+
+def huggingface_job(image_path: Path) -> str | None:
+    """See :func:`_huggingface_job_impl`; memoized per file content."""
+    key = _stat_key(image_path)
+    if key is None:
+        return _huggingface_job_impl(image_path)
+    return _huggingface_job_cached(*key)
+
+
+@functools.lru_cache(maxsize=4)
+def _samsung_genai_cached(path_str: str, _mtime_ns: int, _size: int) -> int | None:
+    from pathlib import Path as _Path
+
+    return _samsung_genai_impl(_Path(path_str))
+
+
+def samsung_genai(image_path: Path) -> int | None:
+    """See :func:`_samsung_genai_impl`; memoized per file content."""
+    key = _stat_key(image_path)
+    if key is None:
+        return _samsung_genai_impl(image_path)
+    return _samsung_genai_cached(*key)
+
+
+@functools.lru_cache(maxsize=4)
+def _iptc_ai_system_cached(path_str: str, _mtime_ns: int, _size: int) -> str | None:
+    from pathlib import Path as _Path
+
+    return _iptc_ai_system_impl(_Path(path_str))
+
+
+def iptc_ai_system(image_path: Path) -> str | None:
+    """See :func:`_iptc_ai_system_impl`; memoized per file content."""
+    key = _stat_key(image_path)
+    if key is None:
+        return _iptc_ai_system_impl(image_path)
+    return _iptc_ai_system_cached(*key)
+
+
+@functools.lru_cache(maxsize=4)
+def _xai_signature_cached(path_str: str, _mtime_ns: int, _size: int) -> bool:
+    from pathlib import Path as _Path
+
+    return _xai_signature_impl(_Path(path_str))
+
+
+def xai_signature(image_path: Path) -> bool:
+    """See :func:`_xai_signature_impl`; memoized per file content."""
+    key = _stat_key(image_path)
+    if key is None:
+        return _xai_signature_impl(image_path)
+    return _xai_signature_cached(*key)

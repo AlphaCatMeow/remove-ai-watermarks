@@ -23,11 +23,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from remove_ai_watermarks import _text_mark_engine
-from remove_ai_watermarks._text_mark_engine import TextMarkConfig, TextMarkDetection, TextMarkEngine
+from remove_ai_watermarks._text_mark_engine import TextMarkConfig, TextMarkEngine
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from numpy.typing import NDArray
 
 # Locate geometry as a fraction of image WIDTH (the mark scales with width, anchored
@@ -96,9 +94,6 @@ _CONFIG = TextMarkConfig(
     min_gw=8,
 )
 
-# Doubao-specific aliases for the shared detection result/engine.
-DoubaoDetection = TextMarkDetection
-
 
 def _alpha_template() -> NDArray[Any] | None:
     """The bundled Doubao alpha template (float [0,1]), or None."""
@@ -120,13 +115,3 @@ class DoubaoEngine(TextMarkEngine):
 
     def __init__(self) -> None:
         super().__init__(_CONFIG)
-
-
-def load_image_bgr(path: str | Path) -> NDArray[Any]:
-    """Read an image as BGR ndarray (helper for scripts/tests)."""
-    from remove_ai_watermarks import image_io
-
-    img = image_io.imread(path)
-    if img is None:
-        raise FileNotFoundError(f"Failed to read image: {path}")
-    return img

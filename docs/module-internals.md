@@ -253,9 +253,13 @@ takes the first stable result in specificity order (`sora`, `veo`, `seedance`,
 candidate. Removal also collects authoritative per-frame timestamps for the
 encoder, while identification omits that unused ffprobe pass.
 
-Every per-frame result is untrusted. The provider-specific stabilization
-wrappers share one recurrence implementation, while retaining separate visual
-floors and minimum-run policy. Provenance can relax a low-contrast run only
+Every per-frame result is untrusted. Each provider's floors, minimum-run policy,
+fill padding and mask style are one row in `VISIBLE_MARK_POLICIES`, and every mark
+enters the same `stabilize_localizations` entry point; the recurrence
+implementation underneath knows nothing about providers. That policy row also
+carries `accepts_provenance`, which forces `provenance=False` for Hailuo and Kling
+— they have no metadata that could confirm them, and the guarantee used to be
+structural (their wrappers took no `provenance` parameter at all). Provenance can relax a low-contrast run only
 after recurring visual evidence exists. Sora transition frames follow the
 nearest confirmed moving position only with Sora provenance. Veo, Seedance,
 Dola, Hailuo, and Kling additionally require candidates to remain anchored to
@@ -355,6 +359,43 @@ metadata extraction from verdict logic:
 - `identify` preserves the path-based API and adds the optional registered
   visible-mark and open invisible-watermark decoders after extraction.
 
+The DWT-DCT detector and the visible-mark stage share a single decode of the
+source, held by
+a per-call `_SharedDecode`. It exposes two accessors because the two arms need
+opposite failure handling: the visible arm swallows a decode failure (no cv2, no
+visible marks, metadata verdict untouched), while the invisible arm re-raises it
+so `has_invisible_target` reaches its documented fail-safe `True`. Swallowing it
+there would skip a diffusion scrub on a file that used to get one. TrustMark
+deliberately keeps its own Pillow decode: cv2 and Pillow disagree on EXIF
+orientation and on 16-bit PNG, so substituting one for the other is not
+behavior-preserving.
+
+The metadata probes (`aigc_label`, `xai_signature`, `iptc_ai_system`,
+`huggingface_job`, `samsung_genai`) and `extract_c2pa_info` are memoized on
+`(path, mtime_ns, size)`. One `identify` reaches each of them twice, and each
+re-walks the container or re-runs the manifest reader. Size is in the key as well
+as mtime because this package rewrites files in place, and an in-place rewrite
+can land inside one mtime tick. The C2PA key additionally carries the
+reader-availability flag: with the official reader the manifest comes back as a
+store and without it from the PNG chunk parser, so the answer depends on process
+state and not on the file alone.
+
+Native-container TC260 readers (`isobmff`, `ebml`, `riff`, `flv`) all run, in that
+order, on every file. Each self-gates on its own magic bytes after a 4-12 byte
+read, so gating the AVI and FLV ones on the file extension as well was redundant
+and made a correctly formatted container served under the wrong name invisible.
+WebP is the one input class the now-unconditional RIFF reader newly touches; its
+`AVI ` form check is what rejects it.
+
+`api._SourceEvidence` extracts that metadata once per `remove_all` call and serves
+both the visible pass (which vendor is confirmed) and the scrub gate (is there an
+invisible target). It is per-call, never module-level: `batch` may write its
+output over its input, and a holder that outlived one call would answer the scrub
+gate from pre-write evidence. In `batch` each stage builds its own holder after
+any write that precedes it, for the same reason. Every accessor fails safe the way
+the function it replaces does — no provenance means no relaxation, and an unknown
+invisible target means scrub rather than skip.
+
 The `detect` extra composes the shared `pixels` runtime with PyWavelets. Its
 in-tree [`dwt_dct.py`](../src/remove_ai_watermarks/dwt_dct.py) decoder preserves
 the upstream matrix algorithm without installing Torch or non-headless OpenCV.
@@ -396,6 +437,30 @@ that product. The removed blanket `assume_ai` mode is rejected explicitly.
 The Jimeng pill has an additional decision gate because its visual detector is
 weaker than the other registered marks. Keep that policy in the registry, not
 inside unrelated detector engines.
+
+Everything about a mark is one registry row: its product family, its label regime,
+the platform sentence `identify` reports for it, and the metadata signals that
+confirm its vendor. `identify._VISIBLE_MARK_PLATFORM` and the signal mapping in
+`api.visible_provenance` are derived from those rows rather than hand-maintained
+beside them, so registering a mark is one edit. Two marks carry no platform of
+their own: the Gemini sparkle has its own higher-confidence path, and the
+capture-less pill is too weak to attribute.
+
+The set of marks that veto the pill is DERIVED from the registry rows: every mark
+under the same label regime (`tc260`) belonging to a different product. It used to
+be a hand-written list of keys, and that list drifted -- LibLibAI was registered
+alongside RunningHub and Baidu, both of which were added to it, and LibLibAI was
+not, so a confident LibLibAI detection did not suppress the pill the way its two
+siblings did. Marks outside the TC260 regime (Gemini, Samsung) are deliberately
+not vetoers: neither can put `jimeng` into `provenance`, so neither can enable the
+arm it would be vetoing.
+
+A TC260 label relaxes the vendor its `ContentProducer` names, resolved through
+`KnownMark.tc260_producer_codes`. The label itself is vendor-agnostic, so this used to
+relax ByteDance's two products on every China-AIGC image -- which both risked a
+false fill on an image carrying some other vendor's mark and denied that vendor's
+own mark the relaxed gate its `provenance_ncc_factor` was calibrated for. An
+absent or unmapped producer still falls back to the ByteDance pair.
 
 `remove_auto_marks` removes every selected mark, not only the strongest one.
 This matters for images that carry marks in more than one corner.
@@ -440,7 +505,23 @@ be represented by the shared base:
 
 The detector and removal mask must use compatible geometry. A detector that
 fires while producing an empty or misplaced mask is a removal failure even if
-the detection test passes.
+the detection test passes. That parity is now structural rather than a
+convention: the three continuous front ends share one ladder sweep
+(`_ladder_best`), and the winning box travels to the mask on
+`TextMarkDetection.match_box` instead of being swept a second time.
+
+Detection is split into a trust-level-blind `_scan` and a `_verdict` that applies
+the threshold. `detect_both` returns the strict and relaxed verdicts from one
+scan, which is what the arbiter's perception stage calls. A per-mark demotion
+belongs in the `_post_gate` hook, never in a `detect` override: an override is
+invisible to the single-pass path, and the RunningHub and Yuanbao anchor gates
+were briefly skipped there for exactly that reason.
+
+A mark whose removable footprint differs from what the detector localizes
+overrides `_footprint_rect` (which policy) and `_extend_match_box` (how far the
+box grows), not the whole `footprint_mask`. Baidu extends right to the corner tag
+and LibLibAI extends left to the triangle logo; both inherit every guard around
+that arithmetic.
 
 Yuanbao uses the polarity-independent `contrast` front end because its standard
 two-line mark can be light on dark scenes or dark on light scenes. Its detector

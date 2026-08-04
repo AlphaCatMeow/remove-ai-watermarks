@@ -18,8 +18,8 @@ from remove_ai_watermarks.doubao_engine import (
     _alpha_template,
     _glyph_silhouette,
     _template_match_score,
-    load_image_bgr,
 )
+from remove_ai_watermarks.image_io import load_image_bgr
 
 SAMPLE = Path(__file__).resolve().parents[1] / "data" / "fixtures" / "provenance" / "doubao-1.png"
 

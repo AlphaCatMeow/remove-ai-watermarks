@@ -62,17 +62,10 @@ OUT = REPO / ".local-eval" / "vendor-cohorts.jsonl"
 FIRED = REPO / ".local-eval" / "visible-positives.jsonl"
 SHEET_DIR = REPO / ".local-eval" / "vendor-cohort-sheets"
 
-# A producer code is `001` + `1` + USCC(18) + a 5-digit app/product suffix, so two
-# codes sharing the USCC are the same legal entity registering different products.
-# Slicing is defensive: anything not matching the layout is grouped by its raw value.
-_USCC_START, _USCC_END = 4, 22
-
-
-def uscc_of(code: str) -> str:
-    """The 18-char Unified Social Credit Code embedded in a TC260 producer code."""
-    if len(code) >= _USCC_END and code[:3] == "001":
-        return code[_USCC_START:_USCC_END]
-    return code
+# `uscc_of` moved into the library (`metadata.uscc_of`) when the USCC -> vendor table
+# started driving `api.visible_provenance`; this script must group by the same rule the
+# product uses, so it imports rather than reimplements it.
+from remove_ai_watermarks.metadata import uscc_of  # noqa: E402
 
 
 def _one(path_str: str) -> dict[str, Any] | None:

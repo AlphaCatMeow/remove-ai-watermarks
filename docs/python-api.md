@@ -77,6 +77,55 @@ image = cv2.imread("input.png")
 result, removed = raiw.remove_visible(image, backend="cv2")
 ```
 
+## Run the full pipeline
+
+`remove_all` is the library form of the `all` command: visible marks, then the
+invisible watermark, then AI metadata. Stages are chained through a file in the
+system temp directory, so a partial result never appears at the output path.
+
+```python
+import remove_ai_watermarks as raiw
+
+result = raiw.remove_all("input.png", "clean.png")   # -> RemoveAllResult
+print(result.output)          # the path written
+print(result.visible_label)   # the marks removed, or None
+print(result.invisible)       # "removed" | "no-signal" | "unavailable"
+```
+
+`invisible` is the field to check. `"unavailable"` means the GPU extra is not
+installed, so the output *looks* processed but still carries the watermark;
+`"no-signal"` means the scrub was deliberately skipped because nothing was
+locally detectable, which is a successful run.
+
+Pass `InvisibleOptions` to tune the diffusion stage, and `engine` to reuse one
+loaded model across many calls:
+
+```python
+from remove_ai_watermarks import InvisibleOptions
+
+raiw.remove_all(
+    "input.png",
+    "clean.png",
+    invisible=InvisibleOptions(strength=0.35, force=True),
+    progress=print,
+)
+```
+
+If AI metadata survives the strip, `remove_all` raises `MetadataStripIncomplete`
+**before** writing anything: an AI-readable output is worse than no output.
+
+`remove_batch` runs one mode over a directory and never lets a single bad file
+end the run:
+
+```python
+summary = raiw.remove_batch("in_dir", "out_dir", mode="visible")   # -> BatchSummary
+print(summary.processed, summary.failed, summary.errors)
+print(summary.invisible_unavailable)   # outputs that still carry the watermark
+```
+
+`mode` is `all`, `visible`, `invisible`, or `metadata`. Pass a constructed
+`InvisibleEngine` as `engine` to load the model once for the whole directory.
+
 ## Inspect provenance
 
 The default installation evaluates file metadata. Add `visible`, `detect`, or
@@ -151,9 +200,22 @@ describe the collector rather than the source file. Pass a C2PA manifest-store
 dictionary in `record["c2pa_store"]`, or through the explicit
 `c2pa_manifest_store` argument.
 
-`identify_from_evidence` does not reopen the source file. It evaluates metadata
-only; registered visible marks and pixel-backed invisible watermarks remain in
-the path-based `identify` call.
+`identify_from_evidence` does not reopen the source file by default: it evaluates
+metadata only, and registered visible marks and pixel-backed invisible watermarks
+remain in the path-based `identify` call.
+
+Pass `image_path` together with `check_visible` or `check_invisible` to add those
+pixel detectors on top of the SAME evidence. That is how a caller asking one file
+two provenance questions — which vendor is confirmed, and is there an invisible
+target — pays for the metadata extraction once:
+
+```python
+from remove_ai_watermarks.identify import extract_provenance_evidence, identify_from_evidence
+
+evidence = extract_provenance_evidence(source)
+metadata_only = identify_from_evidence(evidence)
+with_pixels = identify_from_evidence(evidence, image_path=source, check_invisible=True)
+```
 
 ## Strip metadata
 

@@ -132,7 +132,7 @@ class TextMarkConfig:
     # Which image dimension the mark's size and margins scale with. VENDOR-SPECIFIC,
     # measured, not assumed -- see TextMarkEngine.scale_base. "short" = min(h, w), "width" = w.
     scale_basis: Literal["short", "width"] = "width"
-    # Scale rungs ``_tophat_best`` sweeps (the detection comb). PER-MARK: a vendor
+    # Scale rungs ``_ladder_best`` sweeps (the detection comb). PER-MARK: a vendor
     # whose stamp sizes do not land on the shared 3-rung comb carries its own ladder
     # (measured for 千问, whose marks sit in two size modes ~1.6x apart -- one fraction
     # on 3 rungs covers only ~75% of them). Densifying the SHARED ladder for everyone
@@ -170,6 +170,33 @@ class TextMarkDetection:
     confidence: float = 0.0
     region: tuple[int, int, int, int] = (0, 0, 0, 0)
     coverage: float = 0.0  # fraction of the box occupied by glyph pixels
+    # ROI-local (x0, y0, x1, y1) of the ladder sweep's best match, in the LOCATED BOX's
+    # coordinates. None for the ``binary`` front-end (it runs no sweep) and whenever no
+    # rung matched. ``footprint_mask`` bounds the fill with it, so carrying it here is
+    # what stops the mask path re-running a sweep the detector already ran.
+    match_box: tuple[int, int, int, int] | None = None
+    # The trust level this detection was taken at, mirroring detect()'s ``provenance``.
+    # ``footprint_mask`` reuses a threaded detection only when it matches the STRICT
+    # level its own re-detect would have used -- see TextMarkEngine._strict_detection.
+    provenance: bool = False
+
+
+@dataclass(frozen=True)
+class TextMarkScan:
+    """The trust-level-BLIND half of text-mark detection, reusable across both levels.
+
+    ``loc is None`` means detection stopped before any scan (empty or too-small image).
+    ``score is None`` means the binary front-end fell below its coverage gate, which is
+    a verdict of "not detected, confidence 0.0" without consulting the rival margin.
+    """
+
+    loc: TextMarkLocation | None
+    box: NDArray[Any] | None  # box-sized binary glyph mask
+    base: int  # scale_base(image)
+    frame: tuple[int, int] = (0, 0)  # (h, w) of the scanned image
+    coverage: float = 0.0
+    score: float | None = None
+    match_box: tuple[int, int, int, int] | None = None
 
 
 # Alpha / silhouette templates, cached per asset name. This shared cache lets every
@@ -306,6 +333,28 @@ class TextMarkEngine:
 
     # ── Locate ──────────────────────────────────────────────────────────
 
+    def _roi_fields(
+        self, image: NDArray[Any], loc: TextMarkLocation
+    ) -> tuple[NDArray[Any], NDArray[Any], NDArray[Any]]:
+        """``(luma, saturation, local_background)`` for the located box, all float32.
+
+        The ROI is normalized to 3-channel BGR first (grayscale / BGRA would break
+        ``axis=2``).
+
+        Local background model: a strong Gaussian blur (sigma ~ box height); the white
+        top-hat (``luma - local_bg``) lights up bright thin strokes regardless of the
+        absolute background level.
+
+        The callers each keep their own ``bh < 16 or bw < 16`` guard: they return three
+        different sentinels for a degenerate ROI, so the check cannot move in here.
+        """
+        x, y, bw, bh = loc.bbox
+        roi = image_io.to_bgr(image[y : y + bh, x : x + bw]).astype(np.float32)
+        luma = roi.mean(axis=2)
+        sat = roi.max(axis=2) - roi.min(axis=2)
+        sigma = max(4.0, bh * 0.4)  # 0.4 factor and 4.0 floor are calibrated; do not retune
+        return luma, sat, cv2.GaussianBlur(luma, (0, 0), sigmaX=sigma, sigmaY=sigma)
+
     def tophat_response(self, image: NDArray[Any], loc: TextMarkLocation) -> NDArray[Any] | None:
         """The CONTINUOUS white top-hat in the located box -- the glyph signal, unbinarized.
 
@@ -328,26 +377,48 @@ class TextMarkEngine:
         Kept per-mark (``detect_frontend``) rather than switched globally, because a
         front-end change must be measured per mark before it ships.
         """
+        return self._residual_response(image, loc, absolute=False)
+
+    def _residual_response(self, image: NDArray[Any], loc: TextMarkLocation, *, absolute: bool) -> NDArray[Any] | None:
+        """Max-normalized uint8 local-luma residual in the located box, saturation-weighted.
+
+        ``absolute=False`` keeps only the POSITIVE side -- the white top-hat, for a mark
+        always rendered brighter than its background. ``absolute=True`` takes the
+        magnitude, for a renderer that switches between light-on-dark and dark-on-light
+        while preserving one silhouette; a one-polarity top-hat misses the latter.
+        """
         c = self.config
-        x, y, bw, bh = loc.bbox
+        _x, _y, bw, bh = loc.bbox
         if bh < 16 or bw < 16:
             return None
-        roi = image_io.to_bgr(image[y : y + bh, x : x + bw]).astype(np.float32)
-        luma = roi.mean(axis=2)
-        sat = roi.max(axis=2) - roi.min(axis=2)
-        sigma = max(4.0, bh * 0.4)
-        tophat = luma - cv2.GaussianBlur(luma, (0, 0), sigmaX=sigma, sigmaY=sigma)
-        resp = np.clip(tophat, 0, None) * (sat < c.max_saturation)
+        luma, sat, local_bg = self._roi_fields(image, loc)
+        residual = luma - local_bg
+        resp = (np.abs(residual) if absolute else np.clip(residual, 0, None)) * (sat < c.max_saturation)
         peak = float(resp.max())
         if peak <= 1e-6:
             return None
         return (resp / peak * 255).astype(np.uint8)
 
-    def _tophat_best(
+    def _detect_response(self, image: NDArray[Any], loc: TextMarkLocation) -> NDArray[Any] | None:
+        """The uint8 image the ladder sweep correlates the silhouette against, chosen by
+        ``TextMarkConfig.detect_frontend``. ``binary`` runs no sweep and never reaches here."""
+        frontend = self.config.detect_frontend
+        if frontend == "gray":
+            x, y, bw, bh = loc.bbox
+            if bh < 16 or bw < 16:
+                return None
+            return cv2.cvtColor(image_io.to_bgr(image[y : y + bh, x : x + bw]), cv2.COLOR_BGR2GRAY)
+        if frontend == "contrast":
+            return self._residual_response(image, loc, absolute=True)
+        if frontend == "tophat":
+            return self._residual_response(image, loc, absolute=False)
+        raise ValueError(f"{frontend!r} has no ladder response (binary runs no sweep)")
+
+    def _ladder_best(
         self, image: NDArray[Any], loc: TextMarkLocation
     ) -> tuple[float, tuple[int, int, int, int] | None]:
-        """Best TM_CCOEFF_NORMED of a soft template against the continuous response, and
-        the ROI-local box (x0, y0, x1, y1) where that best match sits.
+        """Best TM_CCOEFF_NORMED of the mark's silhouette against its front-end response,
+        and the ROI-local box (x0, y0, x1, y1) where that best match sits.
 
         Sweeps the mark's scale ladder: the nominal glyph size is derived from the mark's
         geometry, but a vendor re-rasterization shifts it by a few percent and the
@@ -358,10 +429,15 @@ class TextMarkEngine:
         detection, the box bounds the fill. Sharing it is deliberate: the standing rule is
         that detection and the mask use the same front-end, and the way that rule was last
         broken was a drift between two separate implementations. One method makes the drift
-        impossible instead of merely discouraged.
+        impossible instead of merely discouraged -- which is why the three continuous
+        front-ends (tophat / contrast / gray) sweep here rather than in a copy each.
+
+        Tie-breaking is load-bearing: the ``0.0`` seed plus the STRICT ``>`` means the
+        EARLIEST ladder rung wins a tie, and a sweep whose maximum is not above 0.0
+        returns no box at all.
         """
         c = self.config
-        resp = self.tophat_response(image, loc)
+        resp = self._detect_response(image, loc)
         sil = self._glyph_silhouette()
         if resp is None or sil is None:
             return (0.0, None)
@@ -373,90 +449,12 @@ class TextMarkEngine:
             gh = max(4, int(c.alpha_height_frac * base * scale))
             if gw >= resp.shape[1] or gh >= resp.shape[0]:
                 continue
-            tmpl = cv2.resize(sil, (gw, gh), interpolation=cv2.INTER_AREA).astype(np.float32)
-            if c.template_blur > 0:
-                tmpl = cv2.GaussianBlur(tmpl, (0, 0), sigmaX=c.template_blur, sigmaY=c.template_blur)
-            result = cv2.matchTemplate(resp, tmpl.astype(np.uint8), cv2.TM_CCOEFF_NORMED)
-            _, score, _, top_left = cv2.minMaxLoc(result)
-            if score > best_score:
-                tx, ty = int(top_left[0]), int(top_left[1])
-                best_score, best_box = float(score), (tx, ty, tx + gw - 1, ty + gh - 1)
-        return (best_score, best_box)
-
-    def _tophat_score(self, image: NDArray[Any], loc: TextMarkLocation) -> float:
-        """The detection score alone -- the box the removal mask needs is discarded here."""
-        return self._tophat_best(image, loc)[0]
-
-    def _contrast_best(
-        self, image: NDArray[Any], loc: TextMarkLocation
-    ) -> tuple[float, tuple[int, int, int, int] | None]:
-        """Best silhouette match against the absolute local-luma residual.
-
-        Unlike the white top-hat, this response is polarity-independent: the same
-        watermark can be lighter or darker than its local background. Detection and
-        removal share the returned box, preserving the front-end parity contract.
-        """
-        c = self.config
-        x, y, bw, bh = loc.bbox
-        if bh < 16 or bw < 16:
-            return (0.0, None)
-        roi = image_io.to_bgr(image[y : y + bh, x : x + bw]).astype(np.float32)
-        luma = roi.mean(axis=2)
-        sat = roi.max(axis=2) - roi.min(axis=2)
-        sigma = max(4.0, bh * 0.4)
-        response = np.abs(luma - cv2.GaussianBlur(luma, (0, 0), sigmaX=sigma, sigmaY=sigma))
-        response *= sat < c.max_saturation
-        peak = float(response.max())
-        sil = self._glyph_silhouette()
-        if peak <= 1e-6 or sil is None:
-            return (0.0, None)
-        response = (response / peak * 255).astype(np.uint8)
-        base = self.scale_base(image)
-        best_score = 0.0
-        best_box: tuple[int, int, int, int] | None = None
-        for scale in c.ladder:
-            gw = max(c.min_gw, int(c.alpha_width_frac * base * scale))
-            gh = max(4, int(c.alpha_height_frac * base * scale))
-            if gw >= response.shape[1] or gh >= response.shape[0]:
-                continue
-            template = cv2.resize(sil, (gw, gh), interpolation=cv2.INTER_AREA)
-            result = cv2.matchTemplate(response, template, cv2.TM_CCOEFF_NORMED)
-            _, score, _, top_left = cv2.minMaxLoc(result)
-            if score > best_score:
-                tx, ty = int(top_left[0]), int(top_left[1])
-                best_score, best_box = float(score), (tx, ty, tx + gw - 1, ty + gh - 1)
-        return (best_score, best_box)
-
-    def _gray_best(self, image: NDArray[Any], loc: TextMarkLocation) -> tuple[float, tuple[int, int, int, int] | None]:
-        """Best TM_CCOEFF_NORMED of the silhouette against the raw GRAYSCALE ROI, and
-        the ROI-local box (x0, y0, x1, y1) of that best match.
-
-        Mirrors :meth:`_tophat_best` (same ladder sweep, same one-method contract so
-        detection and the removal mask can never drift), but skips the top-hat
-        entirely: the RunningHub mark is a faint mid-gray text the top-hat's
-        background subtraction suppresses to clean-arm levels, while raw gray NCC
-        separates (see ``TextMarkConfig.detect_frontend``). Contrast-DEPENDENT by
-        construction, so the gate must be picked against the clean arm, which is
-        what ``scripts/vendor_mark_calibrate.py`` does.
-        """
-        c = self.config
-        x, y, bw, bh = loc.bbox
-        if bh < 16 or bw < 16:
-            return (0.0, None)
-        roi = cv2.cvtColor(image_io.to_bgr(image[y : y + bh, x : x + bw]), cv2.COLOR_BGR2GRAY)
-        sil = self._glyph_silhouette()
-        if sil is None:
-            return (0.0, None)
-        base = self.scale_base(image)
-        best_score = 0.0
-        best_box: tuple[int, int, int, int] | None = None
-        for scale in c.ladder:
-            gw = max(c.min_gw, int(c.alpha_width_frac * base * scale))
-            gh = max(4, int(c.alpha_height_frac * base * scale))
-            if gw >= roi.shape[1] or gh >= roi.shape[0]:
-                continue
             tmpl = cv2.resize(sil, (gw, gh), interpolation=cv2.INTER_AREA)
-            result = cv2.matchTemplate(roi, tmpl, cv2.TM_CCOEFF_NORMED)
+            if c.detect_frontend == "tophat" and c.template_blur > 0:
+                tmpl = cv2.GaussianBlur(
+                    tmpl.astype(np.float32), (0, 0), sigmaX=c.template_blur, sigmaY=c.template_blur
+                ).astype(np.uint8)
+            result = cv2.matchTemplate(resp, tmpl, cv2.TM_CCOEFF_NORMED)
             _, score, _, top_left = cv2.minMaxLoc(result)
             if score > best_score:
                 tx, ty = int(top_left[0]), int(top_left[1])
@@ -570,10 +568,33 @@ class TextMarkEngine:
         the mark's own ``provenance_ncc_factor`` to recover a faint or slightly
         re-rendered mark (per-mark, not shared -- see _DEFAULT_PROVENANCE_NCC_FACTOR).
         """
+        scan = self._scan(image)
+        return self._verdict(scan, provenance=provenance)
+
+    def detect_both(self, image: NDArray[Any] | None) -> tuple[TextMarkDetection, TextMarkDetection]:
+        """``(strict, relaxed)`` from ONE scan of the image.
+
+        ``provenance`` scales the acceptance THRESHOLD and nothing else -- the locate
+        box, the glyph mask, the coverage and the front-end ladder score are computed
+        identically at either trust level. Two ``detect`` calls therefore ran the same
+        expensive sweep twice to reach two verdicts, which is what the arbiter's
+        perception pass did for every mark on every image.
+
+        Returns two DISTINCT objects: subclasses demote a verdict by mutating it.
+        """
+        scan = self._scan(image)
+        return self._verdict(scan, provenance=False), self._verdict(scan, provenance=True)
+
+    def _scan(self, image: NDArray[Any] | None) -> TextMarkScan:
+        """Everything in detection that does not depend on the trust level.
+
+        Per-CALL only, never memoized on ``self``: ``remove_auto_marks`` re-invokes each
+        engine on a progressively cleaned frame inside one process, so a cached scan
+        would answer for the wrong pixels.
+        """
         c = self.config
-        det = TextMarkDetection()
         if image is None or image.size == 0:
-            return det
+            return TextMarkScan(None, None, 0)
         # Guard against the small-image NCC-noise false positive (see
         # _MIN_DETECT_SHORT_SIDE): an icon/thumbnail is too small to carry a real
         # text label, and the degraded few-pixel template spuriously correlates.
@@ -584,57 +605,57 @@ class TextMarkEngine:
                 min(image.shape[:2]),
                 _MIN_DETECT_SHORT_SIDE,
             )
-            return det
+            return TextMarkScan(None, None, 0)
         loc = self.locate(image)
         box = self.extract_mask(image, loc)  # box-sized mask (== old full-frame cropped to bbox)
         _x, _y, bw, bh = loc.bbox
         coverage = float((box > 0).sum()) / float(max(1, bw * bh))
-        det.region = loc.bbox
-        det.coverage = coverage
-        if c.detect_frontend == "tophat":
-            # The continuous front-end does not depend on the binarized blob, so the
-            # coverage gate (a blob-area heuristic) does not apply to it.
-            score = self._tophat_score(image, loc)
-            threshold = c.detect_ncc_threshold * (c.provenance_ncc_factor if provenance else 1.0)
-            det.confidence = score
-            det.detected = score >= threshold and self._rival_margin_ok(score, box, self.scale_base(image))
-            logger.debug("%s detect (tophat): ncc=%.2f thr=%.2f detected=%s", c.name, score, threshold, det.detected)
+        base = self.scale_base(image)
+        match_box: tuple[int, int, int, int] | None = None
+        if c.detect_frontend == "binary":
+            # The coverage gate is a blob-AREA heuristic, so it applies only to the
+            # front-end that binarizes; the continuous ones never build a blob. Below
+            # the gate the detection stays at confidence 0.0 and the rival margin is
+            # never consulted, so the score stays None here.
+            score = self._template_match_score(box, base) if coverage >= c.detect_min_coverage else None
+        else:
+            score, match_box = self._ladder_best(image, loc)
+        return TextMarkScan(loc, box, base, frame=image.shape[:2], coverage=coverage, score=score, match_box=match_box)
+
+    def _verdict(self, scan: TextMarkScan, *, provenance: bool) -> TextMarkDetection:
+        """Apply the trust-level-dependent tail to a scan, as a fresh result object."""
+        c = self.config
+        det = TextMarkDetection(provenance=provenance)
+        if scan.loc is None or scan.box is None:
             return det
-        if c.detect_frontend == "gray":
-            # Same no-coverage-gate reasoning as tophat: the gray front-end never
-            # binarizes, so a blob-area heuristic does not apply to it either.
-            score = self._gray_best(image, loc)[0]
-            threshold = c.detect_ncc_threshold * (c.provenance_ncc_factor if provenance else 1.0)
-            det.confidence = score
-            det.detected = score >= threshold and self._rival_margin_ok(score, box, self.scale_base(image))
-            logger.debug("%s detect (gray): ncc=%.2f thr=%.2f detected=%s", c.name, score, threshold, det.detected)
+        det.region = scan.loc.bbox
+        det.coverage = scan.coverage
+        det.match_box = scan.match_box
+        if scan.score is None:  # binary front-end below the coverage gate
             return det
-        if c.detect_frontend == "contrast":
-            score = self._contrast_best(image, loc)[0]
-            threshold = c.detect_ncc_threshold * (c.provenance_ncc_factor if provenance else 1.0)
-            det.confidence = score
-            det.detected = score >= threshold and self._rival_margin_ok(score, box, self.scale_base(image))
-            logger.debug(
-                "%s detect (contrast): ncc=%.2f thr=%.2f detected=%s",
-                c.name,
-                score,
-                threshold,
-                det.detected,
-            )
-            return det
-        if coverage >= c.detect_min_coverage:
-            score = self._template_match_score(box, self.scale_base(image))
-            threshold = c.detect_ncc_threshold * (c.provenance_ncc_factor if provenance else 1.0)
-            det.confidence = score
-            det.detected = score >= threshold and self._rival_margin_ok(score, box, self.scale_base(image))
-            logger.debug(
-                "%s detect: coverage=%.3f ncc=%.2f thr=%.2f detected=%s",
-                c.name,
-                coverage,
-                score,
-                threshold,
-                det.detected,
-            )
+        threshold = c.detect_ncc_threshold * (c.provenance_ncc_factor if provenance else 1.0)
+        det.confidence = scan.score
+        # Short-circuit is load-bearing: _rival_margin_ok scores every rival template
+        # and logs its own rejection line, so it must stay unevaluated below threshold.
+        det.detected = scan.score >= threshold and self._rival_margin_ok(scan.score, scan.box, scan.base)
+        logger.debug(
+            "%s detect (%s): coverage=%.3f ncc=%.2f thr=%.2f detected=%s",
+            c.name,
+            c.detect_frontend,
+            scan.coverage,
+            scan.score,
+            threshold,
+            det.detected,
+        )
+        return self._post_gate(det, scan)
+
+    def _post_gate(self, det: TextMarkDetection, scan: TextMarkScan) -> TextMarkDetection:
+        """Per-mark demotion applied after the shared threshold, for both trust levels.
+
+        OVERRIDABLE. It lives here rather than in a ``detect`` override so a mark's gate
+        cannot be silently skipped by the single-pass ``detect_both`` path -- which is
+        exactly what happened while the anchor demotions were ``detect`` overrides.
+        """
         return det
 
     # ── Inpaint footprint (for the inpaint-fallback removal path) ────────
@@ -644,8 +665,132 @@ class TextMarkEngine:
     # to mask. A real strip covers hundreds of pixels.
     _MIN_GLYPH_PIXELS = 20
 
+    def _strict_detection(self, image: NDArray[Any], detection: TextMarkDetection | None) -> TextMarkDetection:
+        """The STRICT detection the footprint is bounded by.
+
+        A threaded detection is reused only when it was taken at the same strict level
+        this method would have used itself. A provenance-RELAXED detection is NOT
+        reused: a strict re-detect can demote a mark the relaxed gate accepted, which
+        for a continuous front-end means no mask at all. That is a MEASURED difference,
+        not a refactor, so the strict semantics stay.
+
+        Reuse is safe against ``remove_auto_marks`` chaining marks on a progressively
+        cleaned frame: the registry re-detects on that same cleaned array before
+        threading (``KnownMark.localize``), so a threaded detection is never stale.
+        """
+        if detection is not None and not detection.provenance:
+            return detection
+        return self.detect(image)  # polymorphic: a subclass gate must still apply
+
+    def _geometry_rect(self, loc: TextMarkLocation, frame: tuple[int, int]) -> tuple[int, int, int, int]:
+        """The whole locate box, clamped to the frame -- the ``force`` footprint."""
+        bx, by, bw, bh = loc.bbox
+        h, w = frame
+        return (bx, by, min(w, bx + bw), min(h, by + bh))
+
+    def _extend_match_box(
+        self, box: tuple[int, int, int, int], loc: TextMarkLocation, frame: tuple[int, int]
+    ) -> tuple[int, int, int, int]:
+        """Grow an ROI-local box into the absolute fill rectangle by a symmetric pad.
+
+        OVERRIDABLE, and the override contract is specifically the DETECTOR'S MATCH BOX:
+        a mark whose removable footprint reaches beyond what the NCC localizes -- Baidu's
+        flat white tag right of the text run, LibLibAI's triangle logo left of the
+        wordmark -- supplies its own extension here and inherits the rest of the
+        footprint path. The blob-bbox branch never routes through an override.
+        """
+        gx0, gy0, gx1, gy1 = box
+        bx, by, _bw, bh = loc.bbox
+        h, w = frame
+        pad = max(4, int(0.10 * bh))
+        return (
+            max(0, bx + gx0 - pad),
+            max(0, by + gy0 - pad),
+            min(w, bx + gx1 + 1 + pad),
+            min(h, by + gy1 + 1 + pad),
+        )
+
+    def _footprint_rect(
+        self,
+        image: NDArray[Any],
+        loc: TextMarkLocation,
+        *,
+        force: bool,
+        detection: TextMarkDetection | None,
+    ) -> tuple[int, int, int, int] | None:
+        """Default footprint policy: the binary glyph blob's bbox, else the detector's
+        own match box for the front-ends that under-segment, else the geometry box
+        under ``force``.
+
+        The gray front-end exists for marks the top-hat under-segments, so the binary
+        blob is NOT authoritative there: trusting it first bounded the fill by a PARTIAL
+        blob (the faint head glyphs dropped out) and left the leftmost "Runni" of
+        "RunningHub AI生成" unremoved (2026-07-22).
+
+        A dark-on-light Yuanbao mark has no WHITE top-hat blob at all, so the contrast
+        front-end is bounded by the polarity-independent detector's match box too.
+
+        A tophat mark found only by the CONTINUOUS front-end has no binary glyph blob to
+        bound, so the mask came back empty and removal was a silent no-op while
+        ``identify`` still reported the mark. Use the DETECTOR'S OWN best-match box: the
+        correlation already located the mark at a position and scale, and thresholding
+        the response was a strictly worse proxy for that. An earlier fix thresholded the
+        max-normalized uint8 response at 0.5 -- which selects every non-zero pixel, not
+        "half the peak" as its comment claimed -- and filled ~120% of the corner box on
+        textured frames (measured: whole corner vs 58.7% for the match box, both
+        detector-clean). Gated on an actual detection: on a clean corner the box would
+        be spurious.
+        """
+        ys, xs = np.where(self.extract_mask(image, loc) > 0)
+        blob = (
+            (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())) if xs.size >= self._MIN_GLYPH_PIXELS else None
+        )
+        frontend = self.config.detect_frontend
+        if frontend in ("gray", "contrast"):
+            det = self._strict_detection(image, detection)
+            box = det.match_box if det.detected else blob
+        elif blob is not None:
+            box = blob
+        elif frontend == "tophat":
+            det = self._strict_detection(image, detection)
+            box = det.match_box if det.detected else None
+        else:
+            box = None
+        if box is not None:
+            return self._extend_match_box(box, loc, image.shape[:2])
+        return self._geometry_rect(loc, image.shape[:2]) if force else None
+
+    def _match_box_rect(
+        self,
+        image: NDArray[Any],
+        loc: TextMarkLocation,
+        *,
+        force: bool,
+        detection: TextMarkDetection | None,
+    ) -> tuple[int, int, int, int] | None:
+        """Footprint policy for a mark whose fill must be bounded by the DETECTOR's match
+        box and never by the binary glyph blob.
+
+        Baidu's white tag has a flat interior a top-hat cannot answer, and LibLibAI's
+        blob bleeds up into background structure; in both cases the blob bbox is
+        measurably wrong and the NCC match box is right. ``force`` takes priority here,
+        unlike the default policy: a ``--no-detect`` caller named the mark, so the whole
+        geometry box is the honest footprint.
+        """
+        if force:
+            return self._geometry_rect(loc, image.shape[:2])
+        det = self._strict_detection(image, detection)
+        if not det.detected or det.match_box is None:
+            return None
+        return self._extend_match_box(det.match_box, loc, image.shape[:2])
+
     def footprint_mask(
-        self, image: NDArray[Any], *, force: bool = False, dilate: int | None = None
+        self,
+        image: NDArray[Any] | None,
+        *,
+        force: bool = False,
+        dilate: int | None = None,
+        detection: TextMarkDetection | None = None,
     ) -> NDArray[Any] | None:
         """Full-frame uint8 mask (255 = mark) of the mark footprint, for the shared
         fill removal path (cv2 / MI-GAN / LaMa), or None if no glyph is found.
@@ -662,6 +807,10 @@ class TextMarkEngine:
 
         With ``force`` and no glyph found, falls back to the whole geometry box (the
         ``--no-detect`` path). The caller gates on detection.
+
+        ``detection`` is the caller's already-computed detection, threaded in so the
+        footprint does not re-run a sweep the detector already ran. See
+        :meth:`_strict_detection` for when it is reused.
         """
         if image is None or image.size == 0:
             return None  # guard before to_bgr (cvtColor raises on an empty Mat); mirror detect()
@@ -670,46 +819,10 @@ class TextMarkEngine:
         if h < 32 or w < 64:
             return None
         loc = self.locate(image)
-        bx, by, bw, bh = loc.bbox
-        glyph = self.extract_mask(image, loc)  # box-sized, 255 = glyph
-        ys, xs = np.where(glyph > 0)
-        box: tuple[int, int, int, int] | None = None
-        if self.config.detect_frontend == "gray" and self.detect(image).detected:
-            # The gray front-end exists for marks the top-hat under-segments, so the
-            # binary blob is NOT authoritative here: trusting it first bounded the
-            # fill by a PARTIAL blob (the faint head glyphs dropped out) and left the
-            # leftmost "Runni" of "RunningHub AI生成" unremoved (2026-07-22). Use the
-            # detector's own best-match box, same as the tophat faint path below.
-            _, box = self._gray_best(image, loc)
-        elif self.config.detect_frontend == "contrast" and self.detect(image).detected:
-            # A dark-on-light Yuanbao mark has no WHITE top-hat blob at all. Bound
-            # the fill by the polarity-independent detector's own match box.
-            _, box = self._contrast_best(image, loc)
-        elif xs.size >= self._MIN_GLYPH_PIXELS:
-            box = (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max()))
-        elif self.config.detect_frontend == "tophat" and self.detect(image).detected:
-            # A mark found only by the CONTINUOUS front-end has no binary glyph blob to
-            # bound, so the mask came back empty and removal was a silent no-op while
-            # `identify` still reported the mark while removal left it untouched.
-            # Use the DETECTOR'S OWN best-match box: the correlation already located the
-            # mark at a position and scale, and thresholding the response was a strictly
-            # worse proxy for that. An earlier fix thresholded the max-normalized uint8
-            # response at 0.5 -- which selects every non-zero pixel, not "half the peak" as
-            # its comment claimed -- and filled ~120% of the corner box on textured frames
-            # (measured: whole corner vs 58.7% for the match box, both detector-clean).
-            # Gated on an actual detection: on a clean corner the box would be spurious.
-            _, box = self._tophat_best(image, loc)
-        if box is not None:
-            gx0, gy0, gx1, gy1 = box
-            pad = max(4, int(0.10 * bh))
-            rx1 = max(0, bx + gx0 - pad)
-            rx2 = min(w, bx + gx1 + 1 + pad)
-            ry1 = max(0, by + gy0 - pad)
-            ry2 = min(h, by + gy1 + 1 + pad)
-        elif force:
-            rx1, ry1, rx2, ry2 = bx, by, min(w, bx + bw), min(h, by + bh)
-        else:
+        rect = self._footprint_rect(image, loc, force=force, detection=detection)
+        if rect is None:
             return None
+        rx1, ry1, rx2, ry2 = rect
         if rx1 >= rx2 or ry1 >= ry2:
             return None
         # Rectangular footprint + dilation is exactly region_eraser.boxes_to_mask (the
@@ -717,5 +830,5 @@ class TextMarkEngine:
         # zeros/fill/MORPH_ELLIPSE-dilate here.
         from remove_ai_watermarks import region_eraser
 
-        d = dilate if dilate is not None else max(3, int(0.02 * bw))
+        d = dilate if dilate is not None else max(3, int(0.02 * loc.w))
         return region_eraser.boxes_to_mask((h, w), [(rx1, ry1, rx2 - rx1, ry2 - ry1)], dilate=d)

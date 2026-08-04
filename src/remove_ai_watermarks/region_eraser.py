@@ -21,6 +21,10 @@ Backends:
     texture but ~200 MB model and ~4.7 GB peak RAM (too heavy for a small host).
     The model is downloaded on first use and cached by huggingface_hub; it is
     never bundled in this repo.
+
+The per-backend RAM and wall-time figures above are reproduced by
+``scripts/resource_ceilings.py`` (fresh subprocess per measurement, synthetic inputs).
+Re-run it before changing any of them.
 """
 
 # cv2/numpy boundary: cv2 ships no usable type info, so strict pyright cannot know
@@ -30,6 +34,7 @@ Backends:
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 import cv2
@@ -48,9 +53,38 @@ _LAMA_FILE = "lama_fp32.onnx"
 _MIGAN_REPO = "andraniksargsyan/migan"
 _MIGAN_FILE = "migan.onnx"
 
-# Cached onnxruntime sessions (loading is expensive; reuse across calls).
-_lama_session: object | None = None
-_migan_session: object | None = None
+# Cached onnxruntime sessions, keyed by backend name (loading is expensive; reuse
+# across calls).
+_sessions: dict[str, object] = {}
+
+
+@dataclass(frozen=True)
+class _LearnedBackend:
+    """One optional model-backed fill: its human label and the module-level names of
+    its availability probe and erase function.
+
+    NAMES, not function objects: the fallback tests monkeypatch these by attribute on
+    the module, and a table holding bound references would not see the patch.
+    """
+
+    label: str
+    available: str
+    erase: str
+
+
+# The learned tier, best-quality first. `resolve_backend`'s preference order and the
+# CLI's choices are separate literals by design (see FILL_BACKENDS below), but the
+# availability probe, install hint and dispatch all read this one table.
+_LEARNED_BACKENDS: dict[str, _LearnedBackend] = {
+    "lama": _LearnedBackend("LaMa", "lama_available", "erase_lama"),
+    "migan": _LearnedBackend("MI-GAN", "migan_available", "erase_migan"),
+}
+
+# Every fill backend this module can execute, plus the caller-facing `auto`. Kept as a
+# literal tuple (not derived through an import) so `watermark_registry` and the CLI can
+# state their choices without importing this cv2-loading module at their import time --
+# a test pins the two in sync.
+FILL_BACKENDS: tuple[str, ...] = ("auto", "cv2", "migan", "lama")
 
 
 def boxes_to_mask(
@@ -119,19 +153,25 @@ def lama_available() -> bool:
     return module_available("onnxruntime")
 
 
-def _get_lama_session() -> object:
-    """Load (once) the big-LaMa ONNX session, downloading the model on first use."""
-    global _lama_session
-    if _lama_session is not None:
-        return _lama_session
+def _get_session(name: str, repo_id: str, filename: str, label: str) -> object:
+    """Load (once) an ONNX session, downloading the model on first use."""
+    cached = _sessions.get(name)
+    if cached is not None:
+        return cached
 
     import onnxruntime as ort
     from huggingface_hub import hf_hub_download
 
-    model_path = hf_hub_download(repo_id=_LAMA_REPO, filename=_LAMA_FILE)
-    logger.info("Loading LaMa-ONNX model: %s", model_path)
-    _lama_session = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
-    return _lama_session
+    model_path = hf_hub_download(repo_id=repo_id, filename=filename)
+    logger.info("Loading %s model: %s", label, model_path)
+    session = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
+    _sessions[name] = session
+    return session
+
+
+def _get_lama_session() -> object:
+    """The big-LaMa ONNX session (kept as a named seam the tests monkeypatch)."""
+    return _get_session("lama", _LAMA_REPO, _LAMA_FILE, "LaMa-ONNX")
 
 
 def erase_lama(image_bgr: NDArray[Any], mask: NDArray[Any]) -> NDArray[Any]:
@@ -196,25 +236,21 @@ def erase_lama(image_bgr: NDArray[Any], mask: NDArray[Any]) -> NDArray[Any]:
 
 
 def migan_available() -> bool:
-    """True when the optional MI-GAN backend can run (onnxruntime installed)."""
+    """True when the optional MI-GAN backend can run (onnxruntime installed).
+
+    Deliberately a separate function from :func:`lama_available` even though both
+    currently reduce to the same onnxruntime probe: they are independent capability
+    questions and `auto` resolves them separately (see
+    ``watermark_registry.preferred_inpaint_backend``).
+    """
     from .optional_deps import module_available
 
     return module_available("onnxruntime")
 
 
 def _get_migan_session() -> object:
-    """Load (once) the MI-GAN ONNX session, downloading the model on first use."""
-    global _migan_session
-    if _migan_session is not None:
-        return _migan_session
-
-    import onnxruntime as ort
-    from huggingface_hub import hf_hub_download
-
-    model_path = hf_hub_download(repo_id=_MIGAN_REPO, filename=_MIGAN_FILE)
-    logger.info("Loading MI-GAN ONNX model: %s", model_path)
-    _migan_session = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
-    return _migan_session
+    """The MI-GAN ONNX session (kept as a named seam the tests monkeypatch)."""
+    return _get_session("migan", _MIGAN_REPO, _MIGAN_FILE, "MI-GAN ONNX")
 
 
 def erase_migan(image_bgr: NDArray[Any], mask: NDArray[Any]) -> NDArray[Any]:
@@ -308,16 +344,17 @@ def erase(
     if not mask.any():
         return image_bgr.copy()
 
-    if backend == "migan":
-        if not migan_available():
+    learned = _LEARNED_BACKENDS.get(backend)
+    if learned is not None:
+        # Probe and erase by MODULE NAME, not by the captured function object: the
+        # availability probes and the erase functions are monkeypatched by name in the
+        # fallback tests, and a table of bound references would not see those patches.
+        if not globals()[learned.available]():
             raise RuntimeError(
-                "MI-GAN backend requires onnxruntime. Install the extra: pip install 'remove-ai-watermarks[migan]'"
+                f"{learned.label} backend requires onnxruntime. "
+                f"Install the extra: pip install 'remove-ai-watermarks[{backend}]'"
             )
-        return erase_migan(image_bgr, mask)
-    if backend == "lama":
-        if not lama_available():
-            raise RuntimeError(
-                "LaMa backend requires onnxruntime. Install the extra: pip install 'remove-ai-watermarks[lama]'"
-            )
-        return erase_lama(image_bgr, mask)
+        return globals()[learned.erase](image_bgr, mask)
+    # cv2 and anything unrecognized (including "auto", which a library caller may pass
+    # straight through) degrade to the classical fill rather than raising.
     return erase_cv2(image_bgr, mask, method=cv2_method, radius=cv2_radius)

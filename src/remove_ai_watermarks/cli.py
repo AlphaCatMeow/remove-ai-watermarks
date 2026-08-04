@@ -14,7 +14,6 @@ import contextlib
 import json
 import logging
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
@@ -43,6 +42,8 @@ if TYPE_CHECKING:
     from collections.abc import Generator
 
     from numpy.typing import NDArray
+
+    from remove_ai_watermarks.api import InvisibleOptions
 
 
 # ── plain-text output layer (replaces rich: no colors, no markup, no boxes) ──
@@ -81,7 +82,10 @@ class _Progress:
     def __enter__(self) -> _Progress:
         return self
 
-    def __exit__(self, *exc: object) -> bool:
+    def __exit__(self, *exc: object) -> Literal[False]:
+        # Literal[False], not bool: a plain `bool` tells a type checker this context
+        # manager MAY suppress an exception, which makes every name bound inside a
+        # `with` block conditionally bound afterwards. It never suppresses.
         return False
 
     def add_task(self, *args: Any, **kwargs: Any) -> int:
@@ -165,6 +169,23 @@ def _resolved_strength_for_display(
 
     with Image.open(source) as image:
         return resolve_strength(strength, vendor, pipeline, size=image.size)
+
+
+# -o/--output is the most-repeated option in this module. The image commands and the
+# video commands differ only in the default they describe, so there are two decorators
+# rather than one -- same reason as every other shared option here: define it once so
+# the help text cannot drift between commands.
+_output_option = click.option(
+    "-o", "--output", type=click.Path(path_type=Path), default=None, help="Output path (default: <source>_clean.<ext>)."
+)
+
+_video_output_option = click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Output path (default: <source>_clean with the same container).",
+)
 
 
 # Shared option decorator for commands that run the invisible-watermark pipeline.
@@ -325,38 +346,6 @@ def _visible_provenance(path: Path | None) -> frozenset[str]:
     from remove_ai_watermarks.api import visible_provenance
 
     return visible_provenance(path)
-
-
-def _remove_visible_auto(
-    image: NDArray[Any],
-    *,
-    source_path: Path | None = None,
-    backend: str = "auto",
-    sensitivity: str = "auto",
-) -> tuple[NDArray[Any], str | None]:
-    """Remove every auto-detected visible mark via the registry (localize -> fill).
-
-    Routes the ``all``/``batch`` visible step through the same registry path the
-    standalone ``visible`` command uses, so every registered mark is handled rather
-    than only the Gemini sparkle.
-    Returns ``(result, label-or-None)``; when no ``in_auto`` mark fires the image is
-    returned unchanged with ``None``. ``backend`` selects the shared fill; ``sensitivity``
-    controls how hard a borderline mark is trusted (auto reads metadata provenance)."""
-    from remove_ai_watermarks import watermark_registry
-
-    bk: watermark_registry.Backend = backend  # type: ignore[assignment]
-    sens = _parse_sensitivity(sensitivity)
-    provenance = _visible_provenance(source_path)
-    try:
-        result, removed = watermark_registry.remove_auto_marks(
-            image, sensitivity=sens, provenance=provenance, backend=bk
-        )
-    except RuntimeError as e:  # e.g. a selected migan/lama backend whose extra is absent
-        console.print(f"  Error: {e}")
-        raise SystemExit(1) from e
-    if not removed:
-        return image, None
-    return result, ", ".join(removed)
 
 
 def _parse_sensitivity(value: str) -> watermark_registry.Sensitivity:
@@ -607,7 +596,9 @@ def _run_visible_explicit(
     t0 = time.monotonic()
     try:
         with console.status(f"Removing {chosen.label}... ({resolved_backend})"):
-            result, _ = chosen.remove(image, backend=backend, provenance=relax, force=not detect)
+            # Reuse the detection printed above instead of re-detecting inside remove():
+            # nothing has touched `image` since, and the trust level is the same one.
+            result, _ = chosen.remove(image, backend=backend, provenance=relax, force=not detect, detection=detection)
     except RuntimeError as e:  # selected migan/lama backend whose extra is absent
         console.print(f"  Error: {e}")
         raise SystemExit(1) from e
@@ -629,9 +620,7 @@ def _run_visible_explicit(
 
 @main.command("visible")
 @click.argument("source", type=click.Path(exists=True, dir_okay=False, path_type=Path))
-@click.option(
-    "-o", "--output", type=click.Path(path_type=Path), default=None, help="Output path (default: <source>_clean.<ext>)."
-)
+@_output_option
 @click.option("--detect/--no-detect", default=True, help="Detect watermark before removal.")
 @click.option(
     "--mark",
@@ -713,9 +702,7 @@ def _parse_region(spec: str) -> tuple[int, int, int, int]:
 @main.command("erase")
 @click.argument("source", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--region", "regions", multiple=True, required=True, help="x,y,w,h box to erase (repeatable).")
-@click.option(
-    "-o", "--output", type=click.Path(path_type=Path), default=None, help="Output path (default: <source>_clean.<ext>)."
-)
+@_output_option
 @click.option(
     "--backend",
     type=click.Choice(["cv2", "migan", "lama"]),
@@ -787,9 +774,7 @@ def cmd_erase(
 # ── Invisible watermark removal ──
 @main.command("invisible")
 @click.argument("source", type=click.Path(exists=True, dir_okay=False, path_type=Path))
-@click.option(
-    "-o", "--output", type=click.Path(path_type=Path), default=None, help="Output path (default: <source>_clean.<ext>)."
-)
+@_output_option
 @_strength_option
 @_pipeline_option
 @_seed_option
@@ -1066,13 +1051,7 @@ def cmd_video_identify(source: Path, no_visible: bool, as_json: bool) -> None:
 @click.argument("source", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--check", is_flag=True, help="Check for AI metadata (don't modify).")
 @click.option("--remove", is_flag=True, help="Remove AI metadata.")
-@click.option(
-    "-o",
-    "--output",
-    type=click.Path(path_type=Path),
-    default=None,
-    help="Output path (default: <source>_clean with the same container).",
-)
+@_video_output_option
 @click.option("--keep-standard/--remove-all", default=True, help="Keep standard metadata.")
 def cmd_video_metadata(
     source: Path,
@@ -1110,13 +1089,7 @@ def cmd_video_metadata(
 
 @cmd_video.command("invisible")
 @click.argument("source", type=click.Path(exists=True, dir_okay=False, path_type=Path))
-@click.option(
-    "-o",
-    "--output",
-    type=click.Path(path_type=Path),
-    default=None,
-    help="Output path (default: <source>_clean with the same container).",
-)
+@_video_output_option
 @_video_invisible_options
 def cmd_video_invisible(
     source: Path,
@@ -1158,13 +1131,7 @@ def cmd_video_invisible(
 
 @cmd_video.command("visible")
 @click.argument("source", type=click.Path(exists=True, dir_okay=False, path_type=Path))
-@click.option(
-    "-o",
-    "--output",
-    type=click.Path(path_type=Path),
-    default=None,
-    help="Output path (default: <source>_clean with the same container).",
-)
+@_video_output_option
 @_video_visible_options
 @click.option("--strip-metadata/--keep-metadata", default=True, help="Strip AI metadata from the transcoded output.")
 def cmd_video_visible(
@@ -1206,13 +1173,7 @@ def cmd_video_visible(
 
 @cmd_video.command("all")
 @click.argument("source", type=click.Path(exists=True, dir_okay=False, path_type=Path))
-@click.option(
-    "-o",
-    "--output",
-    type=click.Path(path_type=Path),
-    default=None,
-    help="Output path (default: <source>_clean with the same container).",
-)
+@_video_output_option
 @_video_visible_options
 @click.option(
     "--invisible/--no-invisible",
@@ -1427,9 +1388,7 @@ def cmd_identify(ctx: click.Context, source: Path, no_visible: bool, as_json: bo
 # ── Combined "all" mode ──
 @main.command("all")
 @click.argument("source", type=click.Path(exists=True, dir_okay=False, path_type=Path))
-@click.option(
-    "-o", "--output", type=click.Path(path_type=Path), default=None, help="Output path (default: <source>_clean.<ext>)."
-)
+@_output_option
 @_visible_backend_option
 @_visible_sensitivity_option
 @_strength_option
@@ -1483,131 +1442,81 @@ def cmd_all(
 
     t0 = time.monotonic()
 
-    # Tracks whether step 2 (invisible / SynthID removal) was skipped because the
-    # GPU extra is missing. A skipped step 2 still produces an output file (visible
-    # mark + metadata stripped), so without a loud end-of-run notice + non-zero exit
-    # the user mistakes it for a clean result and ships an image that still carries
-    # the invisible watermark (recurring reports: #14, #47).
-    synthid_skipped = False
+    from remove_ai_watermarks.api import InvisibleOptions, MetadataStripIncomplete, remove_all
 
-    # Use a temp file for intermediate results so the user doesn't see
-    # a partial output file during long model downloads.
-    import tempfile
+    stage_labels = {
+        "visible": "\n  1) Visible watermark removal",
+        "invisible": "\n  2) Invisible watermark removal",
+        "metadata": "\n  3) AI metadata stripping",
+    }
+    # The library reports WHAT happened as a (stage, detail) pair of stable tokens; the
+    # console wording is the CLI's business. These two skips in particular carry guidance
+    # a library caller does not need but a user very much does.
+    stage_text = {
+        ("invisible", "no-signal"): (
+            "Skipped (no invisible AI watermark detected; pixels left intact).\n"
+            "    Not a clean-image guarantee: a pixel SynthID is undetectable once its\n"
+            "    metadata proxy is gone. Re-run with --force to scrub regardless."
+        ),
+        ("invisible", "unavailable"): (
+            f"Warning: Skipped - GPU dependencies not installed.\n    Install them with: pip install {INVISIBLE_EXTRA}"
+        ),
+        ("invisible", "removed"): "Invisible watermark removed",
+        ("metadata", "stripped"): "AI metadata stripped",
+    }
+    seen: set[str] = set()
 
-    tmp_fd, tmp_path_str = tempfile.mkstemp(suffix=source.suffix)
-    tmp_path = Path(tmp_path_str)
-    try:
-        import os
-
-        os.close(tmp_fd)
-
-        # ── Step 1: Visible watermark ──
-        console.print("\n  1) Visible watermark removal")
-        image, alpha = image_io.read_bgr_and_alpha(source)
-        if image is None:
-            console.print(f"Error: Failed to read image: {source}")
-            raise SystemExit(1)
-
-        h, w = image.shape[:2]
-        console.print(f"    Input: {source.name}  ({w}x{h})")
-
-        with console.status("Removing visible watermark..."):
-            result, removed_label = _remove_visible_auto(
-                image, source_path=source, backend=backend, sensitivity=sensitivity
-            )
-            if removed_label is not None:
-                console.print(f"    Visible watermark removed ({removed_label})")
-            else:
-                console.print("    Skipped (no visible watermark detected)")
-
-        # Save to temp file for invisible engine input (preserve alpha if present)
-        image_io.write_bgr_with_alpha(tmp_path, result, alpha)
-
-        # ── Step 2: Invisible watermark ──
-        console.print("\n  2) Invisible watermark removal")
-        from remove_ai_watermarks.invisible_engine import is_available as invisible_available
-
-        if not invisible_available():
-            synthid_skipped = True
+    def progress(stage: str, detail: str) -> None:
+        if stage in stage_labels and stage not in seen:
+            seen.add(stage)
+            console.print(stage_labels[stage])
+        if (text := stage_text.get((stage, detail))) is not None:
+            console.print(f"    {text}")
+        elif stage == "visible":
             console.print(
-                "    Warning: Skipped - GPU dependencies not installed.\n"
-                f"    Install them with: pip install {INVISIBLE_EXTRA}"
+                f"    Visible watermark removed ({detail})" if detail else "    Skipped (no visible watermark detected)"
             )
-        elif _should_skip_invisible_scrub(force, source):
-            # No locally-detectable invisible watermark -> skip the destructive
-            # regeneration (it would only degrade the image). The visible-removed
-            # pixels in tmp_path are kept and step 3 still strips metadata, so this
-            # is a SUCCESS (exit 0), unlike the GPU-missing skip above. Read the
-            # pristine `source`, not tmp_path whose C2PA the visible pass already
-            # dropped. Not a clean-image guarantee; --force overrides.
-            console.print(
-                "    Skipped (no invisible AI watermark detected; pixels left intact).\n"
-                "    Not a clean-image guarantee: a pixel SynthID is undetectable once its\n"
-                "    metadata proxy is gone. Re-run with --force to scrub regardless."
-            )
+        elif detail.startswith("strength="):
+            console.print(f"    Strength: {detail.removeprefix('strength=')}")
         else:
-            from remove_ai_watermarks.invisible_engine import InvisibleEngine
+            console.print(f"    {detail}")
 
-            def progress_cb(msg: str) -> None:
-                console.print(f"    {msg}")
-
-            inv_engine = InvisibleEngine(
-                pipeline=pipeline,
-                hf_token=hf_token,
-                progress_callback=progress_cb,
-                controlnet_conditioning_scale=controlnet_scale,
-                cpu_offload=cpu_offload,
-            )
-
-            # Detect the vendor from the pristine ORIGINAL (`source`); `tmp_path` has
-            # already lost its C2PA to the visible-removal pass, so reading it would
-            # always resolve to the unknown-vendor default.
-            vendor = vendor_for_strength(source)
-            console.print(f"    Strength: {_resolved_strength_for_display(source, strength, vendor, pipeline)}")
-            inv_engine.remove_watermark(
-                image_path=tmp_path,
-                output_path=tmp_path,
+    try:
+        outcome = remove_all(
+            source,
+            output,
+            backend=backend,  # type: ignore[arg-type]
+            sensitivity=_parse_sensitivity(sensitivity),
+            invisible=InvisibleOptions(
                 strength=strength,
+                pipeline=pipeline,
                 seed=seed,
+                hf_token=hf_token,
                 humanize=humanize,
                 unsharp=unsharp,
                 adaptive_polish=adaptive_polish,
                 max_resolution=max_resolution,
-                vendor=vendor,
+                controlnet_scale=controlnet_scale,
+                cpu_offload=cpu_offload,
                 tile=tile,
                 tile_size=tile_size,
                 tile_overlap=tile_overlap,
-            )
-            console.print("    Invisible watermark removed")
-
-        # ── Step 3: Metadata ──
-        console.print("\n  3) AI metadata stripping")
-        try:
-            from remove_ai_watermarks.metadata import strip_and_verify
-
-            _, leftover = strip_and_verify(tmp_path, tmp_path)
-        except Exception as e:
-            console.print(f"    Error: metadata strip failed: {e}")
-            raise SystemExit(1) from e
-        if leftover:
-            console.print(f"    Error: metadata stripping was incomplete; {', '.join(sorted(leftover))} survived")
-            raise SystemExit(1)
-        console.print("    AI metadata stripped")
-
-        # ── Write final result ──
-        # The invisible step (and downstream cv2.IMREAD_COLOR paths) drops alpha,
-        # so re-attach the original alpha plane unchanged when writing the final
-        # output for transparent formats.
-        final_bgr, _ = image_io.read_bgr_and_alpha(tmp_path)
-        if final_bgr is None:
-            console.print(f"Error: Failed to read intermediate file: {tmp_path}")
-            raise SystemExit(1)
-        _write_output_or_exit(output, final_bgr, alpha)
-
-    finally:
-        # Clean up temp file if it still exists
-        if tmp_path.exists():
-            tmp_path.unlink()
+                force=force,
+            ),
+            progress=progress,
+        )
+    except MetadataStripIncomplete as e:
+        console.print(f"    Error: metadata stripping was incomplete; {', '.join(sorted(e.surviving))} survived")
+        raise SystemExit(1) from e
+    except ValueError as e:
+        console.print(f"Error: {e}")
+        raise SystemExit(1) from e
+    except RuntimeError as e:  # a selected migan/lama backend whose extra is absent
+        console.print(f"  Error: {e}")
+        raise SystemExit(1) from e
+    except OSError as e:
+        console.print(f"  Error: {e}")
+        raise SystemExit(1) from e
 
     # ── Done ──
     elapsed = time.monotonic() - t0
@@ -1618,7 +1527,7 @@ def cmd_all(
     # the output looks processed but still carries the SynthID watermark. Make that
     # impossible to miss -- a prominent banner plus a non-zero exit so scripts and
     # batch callers can detect the incomplete run instead of trusting the file.
-    if synthid_skipped:
+    if outcome.invisible == "unavailable":
         console.print(
             "\n  =====================================================================\n"
             "  WARNING: the invisible (SynthID) watermark was NOT removed.\n"
@@ -1634,172 +1543,26 @@ def cmd_all(
 
 
 # ── Batch command ──
-def _passthrough_copy(img_path: Path, out_path: Path) -> None:
-    """Copy the input's pixels through to ``out_path`` unchanged (the invisible-mode skip
-    paths), so the output dir stays complete without touching the pixels."""
-    src_bgr, src_alpha = image_io.read_bgr_and_alpha(img_path)
-    if src_bgr is not None and not image_io.write_bgr_with_alpha(out_path, src_bgr, src_alpha):
-        # The point of this copy is to keep the output dir COMPLETE. A silently-dropped
-        # copy defeats that and leaves a hole the caller cannot see (Tier E, 2026-07-20).
-        raise OSError(f"failed to copy input through to output: {out_path}")
+def _batch_engine(mode: str, options: InvisibleOptions) -> object | None:
+    """Build the ONE invisible engine this batch reuses, or None.
 
-
-@dataclass(frozen=True)
-class _BatchOptions:
-    """Validated processing options shared by every image in one batch.
-
-    Click necessarily exposes these as individual command parameters, but the
-    processing core should receive one coherent value instead of a long positional
-    call. Keeping the object immutable also makes it safe to reuse while the
-    batch caches model instances in ``ctx.obj``.
+    Called once per run, not per image: ``--pipeline`` is a single CLI value, constant
+    across the batch, so building the model here and threading it down is what keeps the
+    diffusion stack from reloading for every file. Modes that never scrub get None, so
+    nothing is loaded at all.
     """
+    if mode not in ("all", "invisible"):
+        return None
+    from remove_ai_watermarks.invisible_engine import InvisibleEngine, is_available
 
-    strength: float | None
-    pipeline: str
-    seed: int | None
-    hf_token: str | None
-    humanize: float
-    backend: str = "auto"
-    sensitivity: str = "auto"
-    unsharp: float = 0.0
-    max_resolution: int = 0
-    controlnet_scale: float = 1.0
-    # None means "the user did not choose"; the library resolves it per profile.
-    adaptive_polish: bool | None = None
-    tile: bool = False
-    tile_size: int = 1024
-    tile_overlap: int = 128
-    force: bool = False
-    cpu_offload: bool = False
-
-
-def _run_batch_invisible(
-    ctx: click.Context,
-    img_path: Path,
-    out_path: Path,
-    mode: str,
-    options: _BatchOptions,
-) -> bool:
-    """Run or safely skip the invisible pass for one batch image.
-
-    Returns ``True`` only when a detectable target could not be processed because
-    the GPU dependencies are missing. The availability probe is intentionally
-    evaluated once so branching cannot observe inconsistent optional-dependency
-    state.
-    """
-    from remove_ai_watermarks.invisible_engine import is_available as invisible_available
-
-    skip_no_signal = _should_skip_invisible_scrub(options.force, img_path)
-    available = invisible_available()
-    if available and not skip_no_signal:
-        from remove_ai_watermarks.invisible_engine import InvisibleEngine
-
-        # Cache the engine in ctx.obj so the batch builds it once (pipeline is a
-        # single CLI value, constant across the run).
-        engines = ctx.obj.setdefault("_inv_engines", {})
-        if options.pipeline not in engines:
-            engines[options.pipeline] = InvisibleEngine(
-                pipeline=options.pipeline,
-                hf_token=options.hf_token,
-                controlnet_conditioning_scale=options.controlnet_scale,
-                cpu_offload=options.cpu_offload,
-            )
-        engines[options.pipeline].remove_watermark(
-            img_path if mode == "invisible" else out_path,
-            out_path,
-            strength=options.strength,
-            seed=options.seed,
-            humanize=options.humanize,
-            unsharp=options.unsharp,
-            adaptive_polish=options.adaptive_polish,
-            max_resolution=options.max_resolution,
-            tile=options.tile,
-            tile_size=options.tile_size,
-            tile_overlap=options.tile_overlap,
-            # Detect the vendor from the pristine original (`img_path`), not the
-            # visible-processed `out_path` whose C2PA is already gone.
-            vendor=vendor_for_strength(img_path),
-        )
-        return False
-
-    # Invisible-only mode has no preceding visible pass to create ``out_path``.
-    # Preserve a complete output directory while deliberately leaving pixels intact.
-    if mode == "invisible" and not out_path.exists():
-        _passthrough_copy(img_path, out_path)
-    return not available and not skip_no_signal
-
-
-def _process_batch_image(
-    ctx: click.Context,
-    img_path: Path,
-    out_path: Path,
-    mode: str,
-    options: _BatchOptions,
-) -> bool:
-    """Process a single image for batch mode.
-
-    Applies the requested watermark removal steps (visible, invisible,
-    metadata) to *img_path* and writes the result to *out_path*.
-
-    Returns True if the invisible (SynthID) scrub was skipped because the GPU deps
-    are missing while a signal was present -- so the batch caller can warn + exit
-    non-zero, mirroring the single ``all`` command.
-
-    Raises:
-        ValueError: If the image cannot be opened.
-    """
-    saved_alpha: NDArray[Any] | None = None
-    synthid_skipped = False
-
-    if mode in ("visible", "all"):
-        # Always read the ORIGINAL source: the visible pass is the first step, so a
-        # stale out_path from a previous run must not be re-processed as if it were
-        # the input. (The invisible step below reads out_path for `all` -- that chain
-        # is within a single run.)
-        image, alpha = image_io.read_bgr_and_alpha(img_path)
-        if image is None:
-            raise ValueError("Failed to read image")
-
-        result, _ = _remove_visible_auto(
-            image,
-            source_path=img_path,
-            backend=options.backend,
-            sensitivity=options.sensitivity,
-        )
-
-        # RAISE, never SystemExit: the batch loop catches per-image exceptions, counts
-        # them and exits non-zero. Discarding this flag made a read-only output directory
-        # produce ZERO files and still exit 0 -- silent data loss that also contradicted
-        # the documented batch contract (Tier E, 2026-07-20).
-        if not image_io.write_bgr_with_alpha(out_path, result, alpha):
-            raise OSError(f"failed to write output (is the destination writable?): {out_path}")
-        saved_alpha = alpha
-
-    if mode in ("invisible", "all"):
-        # Skip the destructive regeneration when no invisible watermark is locally
-        # detectable (would only degrade a clean image). Read the pristine `img_path`;
-        # `out_path` may already be the visible-processed result. --force overrides.
-        synthid_skipped = _run_batch_invisible(ctx, img_path, out_path, mode, options)
-
-    if mode in ("metadata", "all"):
-        from remove_ai_watermarks.metadata import strip_and_verify
-
-        # Same verification the single-image command does: the fail-safe copy-through
-        # would otherwise leave an AI-reading output and still exit 0, contradicting the
-        # batch contract that a failed image must make the run exit non-zero.
-        _, leftover = strip_and_verify(img_path if mode == "metadata" else out_path, out_path)
-        if leftover:
-            msg = f"AI metadata survived the strip ({', '.join(sorted(leftover))}); file could not be decoded"
-            raise RuntimeError(msg)
-
-    # In "all" mode, the invisible step (color-only OpenCV paths) drops alpha,
-    # so re-attach the cached alpha when the input had transparency.
-    if mode == "all" and saved_alpha is not None:
-        final_bgr, _ = image_io.read_bgr_and_alpha(out_path)
-        if final_bgr is not None and not image_io.write_bgr_with_alpha(out_path, final_bgr, saved_alpha):
-            raise OSError(f"failed to re-attach alpha to output: {out_path}")
-
-    return synthid_skipped
+    if not is_available():
+        return None
+    return InvisibleEngine(
+        pipeline=options.pipeline,
+        hf_token=options.hf_token,
+        controlnet_conditioning_scale=options.controlnet_scale,
+        cpu_offload=options.cpu_offload,
+    )
 
 
 @main.command("batch")
@@ -1867,28 +1630,25 @@ def cmd_batch(
     console.print(f"  Found {len(images)} images in {directory}")
     console.print(f"  Output -> {output_dir}")
     console.print(f"  Mode: {mode}")
-    options = _BatchOptions(
+    from remove_ai_watermarks.api import InvisibleOptions
+    from remove_ai_watermarks.api import remove_batch as api_remove_batch
+
+    invisible_options = InvisibleOptions(
         strength=strength,
         pipeline=pipeline,
         seed=seed,
         hf_token=hf_token,
         humanize=humanize,
-        backend=backend,
-        sensitivity=sensitivity,
         unsharp=unsharp,
+        adaptive_polish=adaptive_polish,
         max_resolution=max_resolution,
         controlnet_scale=controlnet_scale,
-        adaptive_polish=adaptive_polish,
+        cpu_offload=cpu_offload,
         tile=tile,
         tile_size=tile_size,
         tile_overlap=tile_overlap,
         force=force,
-        cpu_offload=cpu_offload,
     )
-
-    processed = 0
-    errors = 0
-    synthid_skipped_count = 0
 
     with Progress(
         SpinnerColumn(),
@@ -1899,28 +1659,36 @@ def cmd_batch(
         console=console,
     ) as progress:
         task = progress.add_task("Processing...", total=len(images))
+        done: set[str] = set()
 
-        for img_path in images:
-            out_path = output_dir / img_path.name
-            progress.update(task, description=f"{img_path.name}")
+        def on_progress(img: Path, stage: str, detail: str) -> None:
+            # `remove_batch` emits exactly one terminal stage per image in EVERY mode,
+            # so the bar advances on that and never on a mode-specific line.
+            progress.update(task, description=img.name)
+            if stage in ("done", "failed") and img.name not in done:
+                done.add(img.name)
+                progress.advance(task)
+            if ctx.obj.get("verbose"):
+                console.print(f"  {img.name}: {stage}{f' {detail}' if detail else ''}")
 
-            try:
-                if _process_batch_image(
-                    ctx=ctx,
-                    img_path=img_path,
-                    out_path=out_path,
-                    mode=mode,
-                    options=options,
-                ):
-                    synthid_skipped_count += 1
-                processed += 1
+        summary = api_remove_batch(
+            directory,
+            output_dir,
+            mode=mode,  # type: ignore[arg-type]
+            backend=backend,  # type: ignore[arg-type]
+            sensitivity=_parse_sensitivity(sensitivity),
+            invisible=invisible_options,
+            engine=_batch_engine(mode, invisible_options),
+            progress=on_progress,
+        )
+        progress.update(task, completed=len(images))
 
-            except Exception as e:
-                errors += 1
-                if ctx.obj.get("verbose"):
-                    console.print(f"  {img_path.name}: {e}")
+    processed, errors = summary.processed, summary.failed
+    synthid_skipped_count = len(summary.invisible_unavailable)
 
-            progress.advance(task)
+    if errors and ctx.obj.get("verbose"):
+        for failed_path, message in summary.errors:
+            console.print(f"  {failed_path.name}: {message}")
 
     console.print(f"\n  {processed} processed" + (f"  {errors} errors" if errors else ""))
 

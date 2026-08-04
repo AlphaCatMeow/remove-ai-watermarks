@@ -1625,14 +1625,14 @@ class TestSoraTemporalArbiter:
     _BOX = (40, 60, 150, 54)
 
     def test_four_frame_lookalike_run_is_too_short(self):
-        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_sora_localizations
+        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_localizations
 
         detections = [FrameLocalization(index, 0.70, self._BOX) for index in range(4)]
 
-        assert stabilize_sora_localizations(detections, provenance=False) == [None] * 4
+        assert stabilize_localizations("sora", detections, provenance=False) == [None] * 4
 
     def test_provenance_accepts_recurring_low_contrast_visual_match(self):
-        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_sora_localizations
+        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_localizations
 
         detections = [
             FrameLocalization(0, 0.59, self._BOX),
@@ -1642,10 +1642,10 @@ class TestSoraTemporalArbiter:
             FrameLocalization(4, 0.61, self._BOX),
         ]
 
-        assert stabilize_sora_localizations(detections, provenance=True) == [self._BOX] * 5
+        assert stabilize_localizations("sora", detections, provenance=True) == [self._BOX] * 5
 
     def test_confirmed_provenance_run_covers_transition_frames(self):
-        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_sora_localizations
+        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_localizations
 
         detections = [
             FrameLocalization(0, 0.30, (500, 300, 54, 54)),
@@ -1657,10 +1657,10 @@ class TestSoraTemporalArbiter:
             FrameLocalization(6, 0.30, (300, 100, 54, 54)),
         ]
 
-        assert stabilize_sora_localizations(detections, provenance=True) == [self._BOX] * 7
+        assert stabilize_localizations("sora", detections, provenance=True) == [self._BOX] * 7
 
     def test_transition_prefers_low_score_match_at_a_confirmed_position(self):
-        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_sora_localizations
+        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_localizations
 
         other_box = (500, 300, 150, 54)
         detections = [
@@ -1678,13 +1678,13 @@ class TestSoraTemporalArbiter:
             FrameLocalization(11, 0.62, other_box),
         ]
 
-        stabilized = stabilize_sora_localizations(detections, provenance=True)
+        stabilized = stabilize_localizations("sora", detections, provenance=True)
 
         assert stabilized[6] == self._BOX
         assert stabilized[7:] == [other_box] * 5
 
     def test_transition_without_a_match_keeps_previous_stable_position(self):
-        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_sora_localizations
+        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_localizations
 
         other_box = (500, 300, 150, 54)
         detections = [
@@ -1702,12 +1702,12 @@ class TestSoraTemporalArbiter:
             FrameLocalization(11, 0.62, other_box),
         ]
 
-        stabilized = stabilize_sora_localizations(detections, provenance=True)
+        stabilized = stabilize_localizations("sora", detections, provenance=True)
 
         assert stabilized[5:7] == [self._BOX, self._BOX]
 
     def test_unproven_weak_run_is_rejected(self):
-        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_sora_localizations
+        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_localizations
 
         detections = [
             FrameLocalization(0, 0.61, self._BOX),
@@ -1717,10 +1717,10 @@ class TestSoraTemporalArbiter:
             FrameLocalization(4, 0.61, self._BOX),
         ]
 
-        assert stabilize_sora_localizations(detections, provenance=False) == [None] * 5
+        assert stabilize_localizations("sora", detections, provenance=False) == [None] * 5
 
     def test_strong_recurring_visual_run_needs_no_metadata(self):
-        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_sora_localizations
+        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_localizations
 
         detections = [
             FrameLocalization(0, 0.61, self._BOX),
@@ -1730,10 +1730,10 @@ class TestSoraTemporalArbiter:
             FrameLocalization(4, 0.62, self._BOX),
         ]
 
-        assert stabilize_sora_localizations(detections, provenance=False) == [self._BOX] * 5
+        assert stabilize_localizations("sora", detections, provenance=False) == [self._BOX] * 5
 
     def test_isolated_lookalikes_at_different_positions_are_rejected(self):
-        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_sora_localizations
+        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_localizations
 
         detections = [
             FrameLocalization(0, 0.70, (10, 10, 150, 54)),
@@ -1741,10 +1741,10 @@ class TestSoraTemporalArbiter:
             FrameLocalization(2, 0.70, (650, 400, 150, 54)),
         ]
 
-        assert stabilize_sora_localizations(detections, provenance=True) == [None, None, None]
+        assert stabilize_localizations("sora", detections, provenance=True) == [None, None, None]
 
     def test_short_dropout_between_matching_boxes_is_filled(self):
-        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_sora_localizations
+        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_localizations
 
         detections = [
             FrameLocalization(0, 0.66, self._BOX),
@@ -1755,40 +1755,40 @@ class TestSoraTemporalArbiter:
             FrameLocalization(5, 0.66, self._BOX),
         ]
 
-        assert stabilize_sora_localizations(detections, provenance=False) == [self._BOX] * 6
+        assert stabilize_localizations("sora", detections, provenance=False) == [self._BOX] * 6
 
 
 class TestVeoTemporalArbiter:
     _BOX = (1132, 572, 56, 56)
 
     def test_eleven_frame_lookalike_run_is_too_short(self):
-        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_veo_localizations
+        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_localizations
 
         detections = [FrameLocalization(index, 0.70, self._BOX) for index in range(11)]
 
-        assert stabilize_veo_localizations(detections, provenance=False) == [None] * 11
+        assert stabilize_localizations("veo", detections, provenance=False) == [None] * 11
 
     def test_strong_fixed_run_covers_video_without_metadata(self):
-        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_veo_localizations
+        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_localizations
 
         detections = [FrameLocalization(index, 0.60, self._BOX) for index in range(12)]
         detections.extend(FrameLocalization(index, 0.20, (300, 200, 48, 48)) for index in range(12, 15))
 
-        assert stabilize_veo_localizations(detections, provenance=False) == [self._BOX] * 15
+        assert stabilize_localizations("veo", detections, provenance=False) == [self._BOX] * 15
 
     def test_google_provenance_accepts_recurring_low_contrast_diamond(self):
-        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_veo_localizations
+        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_localizations
 
         detections = [FrameLocalization(index, 0.47, self._BOX) for index in range(12)]
 
-        assert stabilize_veo_localizations(detections, provenance=True) == [self._BOX] * 12
+        assert stabilize_localizations("veo", detections, provenance=True) == [self._BOX] * 12
 
     def test_unproven_weak_run_is_rejected(self):
-        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_veo_localizations
+        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_localizations
 
         detections = [FrameLocalization(index, 0.52, self._BOX) for index in range(12)]
 
-        assert stabilize_veo_localizations(detections, provenance=False) == [None] * 12
+        assert stabilize_localizations("veo", detections, provenance=False) == [None] * 12
 
 
 class TestByteDanceTemporalArbiter:
@@ -1796,47 +1796,47 @@ class TestByteDanceTemporalArbiter:
     _DOLA_BOX = (1160, 680, 96, 22)
 
     def test_seedance_requires_twelve_recurring_frames(self):
-        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_seedance_localizations
+        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_localizations
 
         detections = [FrameLocalization(index, 0.50, self._SEEDANCE_BOX) for index in range(11)]
 
-        assert stabilize_seedance_localizations(detections, provenance=False) == [None] * 11
+        assert stabilize_localizations("seedance", detections, provenance=False) == [None] * 11
 
     def test_seedance_strong_run_covers_low_contrast_frames(self):
-        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_seedance_localizations
+        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_localizations
 
         detections = [FrameLocalization(index, 0.45, self._SEEDANCE_BOX) for index in range(12)]
         detections.extend(FrameLocalization(index, 0.20, (200, 100, 80, 60)) for index in range(12, 15))
 
-        assert stabilize_seedance_localizations(detections, provenance=False) == [self._SEEDANCE_BOX] * 15
+        assert stabilize_localizations("seedance", detections, provenance=False) == [self._SEEDANCE_BOX] * 15
 
     def test_seedance_rejects_a_slowly_drifting_scene_detail(self):
-        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_seedance_localizations
+        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_localizations
 
         detections = [FrameLocalization(index, 0.46, (1110 - index * 3, 610, 90, 66)) for index in range(14)]
 
-        assert stabilize_seedance_localizations(detections, provenance=False) == [None] * 14
+        assert stabilize_localizations("seedance", detections, provenance=False) == [None] * 14
 
     def test_dola_requires_twelve_recurring_frames(self):
-        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_dola_localizations
+        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_localizations
 
         detections = [FrameLocalization(index, 0.60, self._DOLA_BOX) for index in range(11)]
 
-        assert stabilize_dola_localizations(detections, provenance=True) == [None] * 11
+        assert stabilize_localizations("dola", detections, provenance=True) == [None] * 11
 
     def test_dola_provenance_accepts_recurring_low_contrast_text(self):
-        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_dola_localizations
+        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_localizations
 
         detections = [FrameLocalization(index, 0.49, self._DOLA_BOX) for index in range(12)]
 
-        assert stabilize_dola_localizations(detections, provenance=True) == [self._DOLA_BOX] * 12
+        assert stabilize_localizations("dola", detections, provenance=True) == [self._DOLA_BOX] * 12
 
     def test_dola_without_provenance_needs_a_strong_frame(self):
-        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_dola_localizations
+        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_localizations
 
         detections = [FrameLocalization(index, 0.51, self._DOLA_BOX) for index in range(12)]
 
-        assert stabilize_dola_localizations(detections, provenance=False) == [None] * 12
+        assert stabilize_localizations("dola", detections, provenance=False) == [None] * 12
 
     def test_bytedance_provenance_requires_ai_source_type(self):
         from remove_ai_watermarks.video_visible import has_bytedance_video_provenance
@@ -1855,23 +1855,24 @@ class TestAdditionalProviderTemporalArbiter:
     _KLING_BOX = (1018, 664, 245, 42)
 
     @pytest.mark.parametrize(
-        ("stabilizer_name", "box", "weak_score", "strong_score"),
+        ("mark", "box", "weak_score", "strong_score"),
         [
-            ("stabilize_hailuo_localizations", _HAILUO_BOX, 0.31, 0.35),
-            ("stabilize_kling_localizations", _KLING_BOX, 0.21, 0.25),
+            ("hailuo", _HAILUO_BOX, 0.31, 0.35),
+            ("kling", _KLING_BOX, 0.21, 0.25),
         ],
     )
     def test_requires_a_strong_anchored_twelve_frame_run(
         self,
-        stabilizer_name: str,
+        mark: str,
         box: tuple[int, int, int, int],
         weak_score: float,
         strong_score: float,
     ):
-        from remove_ai_watermarks import video_visible
-        from remove_ai_watermarks.video_visible import FrameLocalization
+        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_localizations
 
-        stabilize = getattr(video_visible, stabilizer_name)
+        def stabilize(dets):
+            return stabilize_localizations(mark, dets)
+
         weak = [FrameLocalization(index, weak_score, box) for index in range(12)]
         strong = [FrameLocalization(index, strong_score, box) for index in range(12)]
 
@@ -2165,7 +2166,7 @@ class TestVideoVisibleFullClip:
     def test_removes_complete_clip_and_preserves_sequence_and_audio(self, tmp_path: Path):
         from remove_ai_watermarks.metadata import get_ai_metadata
         from remove_ai_watermarks.video import remove_video_all, remove_video_metadata, remove_video_visible
-        from remove_ai_watermarks.video_visible import scan_video_marks, stabilize_sora_localizations
+        from remove_ai_watermarks.video_visible import scan_video_marks, stabilize_localizations
 
         ffmpeg, ffprobe = _ffmpeg_test_tools()
         frame_count = 18
@@ -2273,14 +2274,16 @@ class TestVideoVisibleFullClip:
         all_output_scan = scan_video_marks(all_output, ("sora",))["sora"]
         assert all(
             region is None
-            for region in stabilize_sora_localizations(
+            for region in stabilize_localizations(
+                "sora",
                 output_scan.detections,
                 provenance=False,
             )
         )
         assert all(
             region is None
-            for region in stabilize_sora_localizations(
+            for region in stabilize_localizations(
+                "sora",
                 all_output_scan.detections,
                 provenance=False,
             )

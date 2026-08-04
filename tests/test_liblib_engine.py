@@ -110,3 +110,26 @@ class TestDetectAndMask:
         eng = LibLibEngine()
         img = np.full((2400, 1792, 3), 100, np.uint8)
         assert eng.footprint_mask(img) is None
+
+    def test_confident_liblib_detection_suppresses_the_jimeng_pill(self):
+        # A LibLibAI image is TC260 too but is not Jimeng-basic: like Doubao/Qwen/
+        # Kling/RunningHub/Baidu, a confident LibLibAI detection must veto the pill.
+        # It was the one mark the hand-written veto list in ``_keep_pill`` missed.
+        from remove_ai_watermarks.watermark_registry import _keep_pill
+
+        assert not _keep_pill({"liblib"}, provenance=frozenset({"jimeng"}), footprint_flat=1.0)
+
+    def test_force_masks_the_whole_locate_box_on_a_clean_frame(self):
+        """``force`` takes priority over detection for this mark, unlike the base
+        policy: a --no-detect caller named the mark, so the honest footprint is the
+        whole geometry box even though nothing was detected."""
+        eng = LibLibEngine()
+        img = np.full((2400, 1792, 3), 100, np.uint8)
+        mask = eng.footprint_mask(img, force=True)
+        assert mask is not None
+        bx, by, bw, bh = eng.locate(img).bbox
+        ys, xs = np.where(mask > 0)
+        assert xs.min() <= bx
+        assert xs.max() >= bx + bw - 1
+        assert ys.min() <= by
+        assert ys.max() >= by + bh - 1

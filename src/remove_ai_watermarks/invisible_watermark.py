@@ -29,6 +29,9 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Iterable
     from pathlib import Path
+    from typing import Any
+
+    from numpy.typing import NDArray
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +84,7 @@ def _bits_to_bytes(bits: Iterable[object], nbytes: int) -> bytes:
     return bytes(int(value) for value in packed[:nbytes])
 
 
-def detect_invisible_watermark(image_path: Path) -> str | None:
+def detect_invisible_watermark(image_path: Path, *, image: NDArray[Any] | None = None) -> str | None:
     """Return the embedding scheme name if a known open watermark is decoded.
 
     Returns e.g. ``"Stable Diffusion XL"`` / ``"FLUX.2 (Black Forest Labs)"`` /
@@ -94,7 +97,10 @@ def detect_invisible_watermark(image_path: Path) -> str | None:
     from remove_ai_watermarks import image_io
     from remove_ai_watermarks.dwt_dct import decode_dwt_dct_lengths
 
-    img = image_io.imread(image_path)
+    # ``image`` lets a caller that has already decoded these pixels hand them in
+    # (mirrors gemini_engine.detect_sparkle_confidence). The decoder only reads the
+    # array -- it converts colour spaces into fresh buffers -- so no copy is needed.
+    img = image if image is not None else image_io.imread(image_path)
     if img is None:
         return None
 

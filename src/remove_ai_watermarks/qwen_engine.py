@@ -52,11 +52,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from remove_ai_watermarks import _text_mark_engine
-from remove_ai_watermarks._text_mark_engine import TextMarkConfig, TextMarkDetection, TextMarkEngine
+from remove_ai_watermarks._text_mark_engine import TextMarkConfig, TextMarkEngine
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from numpy.typing import NDArray
 
 # Locate geometry as a fraction of the image SHORT side (measured basis -- see
@@ -122,8 +120,6 @@ _CONFIG = TextMarkConfig(
     provenance_ncc_factor=1.0,
 )
 
-QwenDetection = TextMarkDetection
-
 
 def _alpha_template() -> NDArray[Any] | None:
     """The bundled Qwen alpha template (float [0,1]), or None."""
@@ -135,23 +131,8 @@ def _glyph_silhouette() -> NDArray[Any] | None:
     return _text_mark_engine.glyph_silhouette(_CONFIG.asset_name)
 
 
-def _template_match_score(box_mask: NDArray[Any], scale_base: int) -> float:
-    """TM_CCOEFF_NORMED of the Qwen glyph silhouette against ``box_mask``."""
-    return _text_mark_engine.template_match_score(box_mask, scale_base, _CONFIG)
-
-
 class QwenEngine(TextMarkEngine):
     """Detect/localize the visible Qwen "千问AI生成" watermark (locate -> mask; mask feeds the fill)."""
 
     def __init__(self) -> None:
         super().__init__(_CONFIG)
-
-
-def load_image_bgr(path: str | Path) -> NDArray[Any]:
-    """Read an image as BGR ndarray (helper for scripts/tests)."""
-    from remove_ai_watermarks import image_io
-
-    img = image_io.imread(path)
-    if img is None:
-        raise FileNotFoundError(f"Failed to read image: {path}")
-    return img

@@ -61,6 +61,10 @@ _MASK_W, _MASK_H = 0.205, 0.115  # width of W, height of W
 # invisible inpaint. Threshold = median Sobel magnitude over the footprint box at a
 # normalized width. The reliable bottom-right wordmark arm is NOT texture-gated:
 # a wordmark-confirmed pill is removed regardless.
+#
+# Measured through the PRODUCT path (the `_keep_pill` gate), not the raw detector, by
+# ``scripts/pill_gate_audit.py`` -- the raw path bypasses the gate and reads as a
+# disaster that the shipped behaviour does not have. Re-run it when the gate changes.
 _FLAT_TEXTURE_MAX = 6.0
 
 _silhouette: NDArray[Any] | None = None
@@ -163,8 +167,11 @@ class PillEngine:
         box = self._footprint_box(image)
         if box is None:
             return None
+        # Same primitive the shared fill uses, rather than a private zeros/fill copy.
+        # `dilate=0` because this footprint is already generous by construction; the
+        # box is clamped to the frame in _footprint_box and both origins are positive
+        # fractions, so boxes_to_mask's own clamping is a no-op here.
+        from remove_ai_watermarks import region_eraser
+
         x0, y0, x1, y1 = box
-        h, w = image.shape[:2]
-        mask = np.zeros((h, w), np.uint8)
-        mask[y0:y1, x0:x1] = 255
-        return mask
+        return region_eraser.boxes_to_mask(image.shape[:2], [(x0, y0, x1 - x0, y1 - y0)], dilate=0)

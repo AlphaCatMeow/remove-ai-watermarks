@@ -561,11 +561,18 @@ def _clip_sam_masks_to_boxes(
     image_size: tuple[int, int],
 ) -> list[np.ndarray]:
     """Match Impact Pack by intersecting each SAM mask with its detector box."""
+    # Same rectangle primitive the shared fill uses, rather than a private zeros/fill
+    # copy. `dilate=0` because this box CLIPS a SAM mask -- growing it would admit the
+    # pixels the clip exists to exclude. The function-local import keeps region_eraser's
+    # module-scope cv2 off this module's import path.
+    from remove_ai_watermarks.region_eraser import boxes_to_mask
+
     width, height = image_size
     clipped: list[np.ndarray] = []
     for mask, (x1, y1, x2, y2) in zip(masks, boxes, strict=True):
-        box_mask = np.zeros((height, width), dtype=np.uint8)
-        box_mask[max(0, y1) : min(height, y2), max(0, x1) : min(width, x2)] = 255
+        # (x, y, w, h) with w = x2 - x1 keeps x + w == x2, so a negative origin clamps
+        # to the same span the explicit max/min pair produced.
+        box_mask = boxes_to_mask((height, width), [(x1, y1, x2 - x1, y2 - y1)], dilate=0)
         clipped.append(np.bitwise_and(mask.astype(np.uint8), box_mask))
     return clipped
 

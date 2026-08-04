@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import functools
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -70,6 +70,26 @@ class _Candidate:
         if self.spatial < 0.25:
             return max(0.0, self.spatial * 0.5)
         return self.spatial * 0.50 + self.gradient * 0.30 + self.variance * 0.20
+
+
+@dataclass(frozen=True, slots=True)
+class _SparkleScan:
+    """The provenance-BLIND half of sparkle detection, reusable across trust levels.
+
+    ``source`` is the BGR-normalized image the false-positive gate re-reads, ``best``
+    the winning candidate, and ``base`` a template result carrying everything the scan
+    already resolved (``size`` and, when a candidate won, ``region`` and the component
+    scores). ``best is None`` covers both no-candidate cases; ``base`` distinguishes
+    them, since an empty image never resolves a ``size`` and a candidate-less one does.
+
+    Per-CALL only, never cached on the engine: ``remove_auto_marks`` re-invokes each
+    engine on a progressively cleaned frame within one process, so a memo on ``self``
+    would hand back a pre-fill scan of a different image.
+    """
+
+    source: NDArray[Any] | None
+    best: _Candidate | None
+    base: DetectionResult
 
 
 def get_watermark_size(width: int, height: int) -> WatermarkSize:
@@ -200,29 +220,62 @@ class GeminiEngine:
         trust_provenance: bool = False,
     ) -> DetectionResult:
         """Return the strongest sparkle-shaped bottom-right candidate."""
-        result = DetectionResult()
+        scan = self._sparkle_scan(image, force_size)
+        return self._verdict(scan, trust_provenance=trust_provenance)
+
+    def detect_watermark_both(
+        self, image: NDArray[Any], force_size: WatermarkSize | None = None
+    ) -> tuple[DetectionResult, DetectionResult]:
+        """``(strict, relaxed)`` from ONE scan of the image.
+
+        The scan -- global candidate search, corner promotion and fused scoring -- is
+        provenance-blind; ``trust_provenance`` only decides whether the false-positive
+        gate demotes the confidence afterwards. Two calls therefore repeated the whole
+        sweep to reach two verdicts.
+
+        The two results are DISTINCT objects with genuinely different confidences (the
+        gate rewrites one of them), and callers mutate them.
+        """
+        scan = self._sparkle_scan(image, force_size)
+        return (
+            self._verdict(scan, trust_provenance=False),
+            self._verdict(scan, trust_provenance=True),
+        )
+
+    def _sparkle_scan(self, image: NDArray[Any], force_size: WatermarkSize | None) -> _SparkleScan:
+        """Everything in detection that does not depend on the trust level."""
         if image is None or image.size == 0:
-            return result
+            return _SparkleScan(None, None, DetectionResult())
 
         source = image_io.to_bgr(image)
         height, width = source.shape[:2]
-        result.size = force_size or get_watermark_size(width, height)
+        size = force_size or get_watermark_size(width, height)
         candidates = self._global_candidates(source)
         promoted = self._corner_promote(source, candidates[0].spatial if candidates else -1.0)
         if promoted is not None:
             candidates.append(_Candidate(promoted[0], promoted[1], promoted[2], promoted[3]))
+        # The no-candidate result is NOT the empty-image one: `size` is already resolved
+        # here, and it is a public field the caller can force.
+        base = DetectionResult(size=size)
         if not candidates:
-            return result
+            return _SparkleScan(None, None, base)
 
         best = max((self._score_candidate(source, candidate) for candidate in candidates), key=lambda item: item.fused)
-        result.region = (best.x, best.y, best.scale, best.scale)
-        result.spatial_score = float(best.spatial)
-        result.gradient_score = float(best.gradient)
-        result.variance_score = float(best.variance)
+        base.region = (best.x, best.y, best.scale, best.scale)
+        base.spatial_score = float(best.spatial)
+        base.gradient_score = float(best.gradient)
+        base.variance_score = float(best.variance)
+        return _SparkleScan(source, best, base)
 
+    def _verdict(self, scan: _SparkleScan, *, trust_provenance: bool) -> DetectionResult:
+        """Apply the trust-level-dependent tail to a scan, as a fresh result object."""
+        result = replace(scan.base)
+        if scan.best is None or scan.source is None:
+            return result
+        best = scan.best
         confidence = best.fused
         if best.spatial >= 0.25 and confidence < self._SPARKLE_FP_CONF and not trust_provenance:
-            confidence = self._apply_false_positive_gate(source, best, confidence)
+            confidence = self._apply_false_positive_gate(scan.source, best, confidence)
         result.confidence = float(np.clip(confidence, 0.0, 1.0))
         result.detected = result.confidence >= 0.35
         return result

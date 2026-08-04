@@ -97,7 +97,7 @@ def _score(args: ScoreArgs) -> dict[str, Any] | None:
     eng = TextMarkEngine(build_config(asset, name, basis, overrides))
     loc = eng.locate(img)
     try:
-        score, box = eng._tophat_best(img, loc)
+        score, box = eng._ladder_best(img, loc)
     except Exception:
         return None
     return {"path": path_str, "score": round(float(score), 4), "box": box}
@@ -225,7 +225,7 @@ def sheets(pos: list[dict[str, Any]], name: str, per_sheet: int = 24) -> None:
 # genuinely unknown, which is the one case a dense ladder earns its cost -- but it also
 # hands clean corners extra chances to match, so it must never set a gate.
 _FIT_SCALES = tuple(round(0.4 * (1.03**i), 4) for i in range(80))  # 0.40 .. ~4.1
-# The ladder the product actually ships (`_text_mark_engine._tophat_best`).
+# The ladder the product actually ships (`_text_mark_engine._ladder_best`).
 _SHIPPED_LADDER = (0.8, 1.0, 1.25)
 
 
@@ -460,7 +460,7 @@ def _cross_score(args: tuple[str, Any, Any]) -> dict[str, Any] | None:
         eng = TextMarkEngine(cfg)
         loc = eng.locate(img)
         try:
-            score, _ = eng._tophat_best(img, loc)
+            score, _ = eng._ladder_best(img, loc)
         except Exception:
             return None
         out[key] = round(float(score), 4)

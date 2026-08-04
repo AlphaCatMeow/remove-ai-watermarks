@@ -48,13 +48,16 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from remove_ai_watermarks import _text_mark_engine
-from remove_ai_watermarks._text_mark_engine import TextMarkConfig, TextMarkDetection, TextMarkEngine
+from remove_ai_watermarks._text_mark_engine import (
+    TextMarkConfig,
+    TextMarkDetection,
+    TextMarkEngine,
+    TextMarkScan,
+)
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from numpy.typing import NDArray
 
 # Locate geometry as a fraction of the image WIDTH (the measured basis: every
@@ -111,22 +114,10 @@ _CONFIG = TextMarkConfig(
     provenance_ncc_factor=1.0,
 )
 
-RunningHubDetection = TextMarkDetection
-
 
 def _alpha_template() -> NDArray[Any] | None:
     """The bundled RunningHub alpha template (float [0,1]), or None."""
     return _text_mark_engine.load_alpha_template(_CONFIG.asset_name)
-
-
-def _glyph_silhouette() -> NDArray[Any] | None:
-    """Binary "RunningHub AI生成" silhouette (255 = glyph) from the alpha map, or None."""
-    return _text_mark_engine.glyph_silhouette(_CONFIG.asset_name)
-
-
-def _template_match_score(box_mask: NDArray[Any], scale_base: int) -> float:
-    """TM_CCOEFF_NORMED of the RunningHub glyph silhouette against ``box_mask``."""
-    return _text_mark_engine.template_match_score(box_mask, scale_base, _CONFIG)
 
 
 class RunningHubEngine(TextMarkEngine):
@@ -140,18 +131,21 @@ class RunningHubEngine(TextMarkEngine):
     _ANCHOR_MAX_X = 0.025
     _ANCHOR_MAX_Y = 0.015
 
-    def detect(self, image: NDArray[Any], *, provenance: bool = False) -> TextMarkDetection:
-        det = super().detect(image, provenance=provenance)
-        if not det.detected:
+    def _post_gate(self, det: TextMarkDetection, scan: TextMarkScan) -> TextMarkDetection:
+        """Demote a match that does not hug the top-left corner.
+
+        A shared post-gate rather than a ``detect`` override, so the single-pass
+        perception path (``detect_both``) cannot skip it.
+        """
+        if not det.detected or scan.loc is None:
             return det
-        loc = self.locate(image)
-        _, box = self._gray_best(image, loc)
+        box = det.match_box  # the sweep the scan already ran on this same loc
         if box is None:
             det.detected = False
             return det
-        h, w = image.shape[:2]
-        ax = (loc.x + box[0]) / w
-        ay = (loc.y + box[1]) / h
+        h, w = scan.frame
+        ax = (scan.loc.x + box[0]) / w
+        ay = (scan.loc.y + box[1]) / h
         if ax > self._ANCHOR_MAX_X or ay > self._ANCHOR_MAX_Y:
             logger.debug(
                 "RunningHub detect: score %.3f but match off-anchor (x=%.3f y=%.3f); demoting.",
@@ -161,13 +155,3 @@ class RunningHubEngine(TextMarkEngine):
             )
             det.detected = False
         return det
-
-
-def load_image_bgr(path: str | Path) -> NDArray[Any]:
-    """Read an image as BGR ndarray (helper for scripts/tests)."""
-    from remove_ai_watermarks import image_io
-
-    img = image_io.imread(path)
-    if img is None:
-        raise FileNotFoundError(f"Failed to read image: {path}")
-    return img
