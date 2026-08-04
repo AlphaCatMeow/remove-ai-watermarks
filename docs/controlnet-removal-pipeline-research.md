@@ -3,7 +3,10 @@
 > Research archive. This document records experiments, superseded defaults, and
 > deployment considerations from the time of the study. It does not define the
 > current CLI or Python API. See `README.md`, `docs/cli.md`, and
-> `docs/known-limitations.md` for current behavior.
+> `docs/known-limitations.md` for current behavior. Everything it names on the
+> face-restoration path was removed after this study: the `--restore-faces` and
+> `--face-id` flags, the `instantid`, `photomaker` and `faceid` extras, and their
+> modules. So were the `controlnet`, `sdxl`, `qwen` and `default` profiles.
 
 Date: 2026-06-02. Source: a manual primary-source pass (WebSearch + WebFetch over the
 watermark-removal-attack and SDXL-ControlNet literature). Prompted by issue #35
@@ -55,8 +58,7 @@ content it protects. Controlnet is the text/structure PRESERVATION pipeline; rem
 is set by STRENGTH, separately calibrated, not by the pipeline choice.
 
 This section is the single consolidated reference for the controlnet pipeline's
-removal behavior. (Mirrored briefly in `docs/synthid.md` §5.5 and the CLAUDE.md
-controlnet / face_restore bullets, which point here.)
+removal behavior. (Mirrored briefly in `docs/synthid.md` §5.5, which points here.)
 
 ### What we measured (real gpt-image + Gemini originals)
 
@@ -288,8 +290,8 @@ text-vs-scrub tension as an empirical question to measure, not assume.
 **Prototype (runs locally on 32 GB MPS — no dedicated GPU required):**
 
 Compute is NOT the bottleneck. On a 32 GB Apple-silicon machine (M5 here) native SDXL already
-runs entirely on MPS with no CPU fallback (~155 s at 1122x1402, verified — see `synthid.md` /
-CLAUDE.md). The prototype runs at **1024** (fewer pixels than that) with SDXL base + an SDXL
+runs entirely on MPS with no CPU fallback (~155 s at 1122x1402, verified 2026-05-31).
+The prototype runs at **1024** (fewer pixels than that) with SDXL base + an SDXL
 ControlNet + activations in **fp32** (MPS fp16 decodes to all-black NaN — issue #29 — confirmed
 on run 1 below; fp32 is the required default on mps/cpu) — fits the 32 GB budget with vae-tiling +
 attention-slicing; ~1-2 min/image, so a coarse sweep is a sub-hour background run. A dedicated GPU
@@ -534,7 +536,8 @@ https://instantid.github.io/ · https://arxiv.org/abs/2308.06721 (IP-Adapter)
 
 ### FaceID prototype run 1 -- 2026-06-03 (NEGATIVE on dense small-face groups)
 
-Built and shipped the masked multi-face FaceID layer (`--face-id`, `face_id.py`, `faceid` extra).
+Built and shipped the masked multi-face FaceID layer (`--face-id`, `face_id.py`, `faceid` extra;
+all three were removed after this run and never reached the tracked tree).
 First real run on the gemini_3 group photo (Google, s015, scale 0.6, native 2816 via cap 1536):
 insightface detected **17 faces**, the masked multi-face pass composed and ran end-to-end (non-black
 output), so the API is correct. **At s015 the result is a clear FAILURE: every face corrupted --

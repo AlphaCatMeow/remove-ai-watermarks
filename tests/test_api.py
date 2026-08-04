@@ -195,6 +195,32 @@ class TestRemoveVisibleOutputPath:
         assert out.exists()
 
 
+class TestInvisibleOptionsMirrorTheEngine:
+    """``InvisibleOptions`` forwards to ``InvisibleEngine`` and promises every default
+    mirrors it. Compare the signatures field by field rather than pinning the values we
+    happen to know about, so the next field added on one side and not the other fails
+    here. See the incident record in ``docs/module-internals.md``."""
+
+    def test_every_default_matches_the_engine(self):
+        import dataclasses
+        import inspect
+
+        from remove_ai_watermarks.invisible_engine import InvisibleEngine
+
+        engine = {
+            name: p.default
+            for method in (InvisibleEngine.__init__, InvisibleEngine.remove_watermark)
+            for name, p in inspect.signature(method).parameters.items()
+            if p.default is not inspect.Parameter.empty
+        }
+        # ``force`` is a pipeline decision made before the engine runs, so it has no
+        # engine counterpart; ``remove_watermark`` spells the controlnet knob out in full.
+        renamed = {"controlnet_scale": "controlnet_conditioning_scale"}
+        options = {f.name: f.default for f in dataclasses.fields(api.InvisibleOptions) if f.name != "force"}
+
+        assert options == {name: engine.get(renamed.get(name, name), "<not an engine parameter>") for name in options}
+
+
 class TestRemoveAllLibrary:
     """The three-stage pipeline is a library function, not CLI-only.
 

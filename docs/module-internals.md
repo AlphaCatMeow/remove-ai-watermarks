@@ -75,12 +75,31 @@ Regression coverage:
 
 ## High-level Python API
 
-[`api.py`](../src/remove_ai_watermarks/api.py) provides:
+[`api.py`](../src/remove_ai_watermarks/api.py) provides the visible-mark entry
+points:
 
 - `remove_visible`
 - `visible_provenance`
 
-The package root exposes both lazily through
+and the image pipeline that the `all` and `batch` commands are thin wrappers
+over:
+
+- `remove_all`, returning a `RemoveAllResult` after the visible, invisible, and
+  metadata stages
+- `remove_batch`, returning a `BatchSummary` for one directory and one mode
+- `InvisibleOptions`, the invisible stage's knobs as one immutable value. Every
+  default mirrors `InvisibleEngine`, so a bare `InvisibleOptions()` behaves
+  exactly like calling the engine with no arguments. Two silently stopped:
+  `max_resolution=None` reached `_target_size`'s `max_resolution > 0` and raised
+  `TypeError` on every library call, and `cpu_offload=True` made a library run
+  slower than the identical CLI run. `TestInvisibleOptionsMirrorTheEngine`
+  compares the two signatures field by field
+- `MetadataStripIncomplete`, raised before any write when AI metadata survives
+
+`remove_all` reports progress as `(stage, detail)` pairs of stable tokens, not
+prose the caller has to parse back.
+
+The package root exposes all of them lazily through
 [`__getattr__`](../src/remove_ai_watermarks/__init__.py), keeping a plain package
 import free of the heavier image and model imports.
 
@@ -261,9 +280,9 @@ carries `accepts_provenance`, which forces `provenance=False` for Hailuo and Kli
 — they have no metadata that could confirm them, and the guarantee used to be
 structural (their wrappers took no `provenance` parameter at all). Provenance can relax a low-contrast run only
 after recurring visual evidence exists. Sora transition frames follow the
-nearest confirmed moving position only with Sora provenance. Veo, Seedance,
-Dola, Hailuo, and Kling additionally require candidates to remain anchored to
-the start of a run. This rejects slowly drifting scene details that still have
+nearest confirmed moving position only with Sora provenance. Seedance, Dola,
+Hailuo, and Kling additionally require candidates to remain anchored to the
+start of a run. This rejects slowly drifting scene details that still have
 high frame-to-frame overlap. Hailuo and Kling do not infer provenance from
 technical encoder tags; their confirmed public samples carried no provider
 metadata.
@@ -784,7 +803,7 @@ everything it has been tested at:
 | Gemini app | 1.40 MP | -- | 0.1066 (the curve's own value) |
 
 Read the last two rows before concluding the curve's low end is under-driven. Against
-the 4.33 MP Gemini boundary the sub-1 MP rungs of 0.084-0.094 look short, but at those
+the 4.33 MP Gemini boundary the sub-1 MP rungs of 0.084-0.098 look short, but at those
 sizes the curve's own values verify clean, which is what a resolution-scaled
 requirement would predict. There is no measured size at which the shipped curve fails,
 so it is left alone.

@@ -216,8 +216,11 @@ def remove_visible(
 class InvisibleOptions:
     """The invisible stage's knobs, as one value instead of a dozen parameters.
 
-    Mirrors ``InvisibleEngine.remove_watermark``. Immutable so a batch can build it once
-    and reuse it across every image while the engine itself is cached separately.
+    Every default MIRRORS ``InvisibleEngine``, so a bare ``InvisibleOptions()`` behaves
+    exactly like calling the engine with no arguments; two once drifted and broke
+    silently, so ``TestInvisibleOptionsMirrorTheEngine`` compares the two signatures
+    field by field. Immutable so a batch can build it once and reuse it across every
+    image while the engine itself is cached separately.
     """
 
     strength: float | None = None
@@ -227,9 +230,9 @@ class InvisibleOptions:
     humanize: float = 0.0
     unsharp: float = 0.0
     adaptive_polish: bool | None = None
-    max_resolution: int | None = None
+    max_resolution: int = 0
     controlnet_scale: float = 1.0
-    cpu_offload: bool = True
+    cpu_offload: bool = False
     tile: bool = False
     tile_size: int = 1024
     tile_overlap: int = 128

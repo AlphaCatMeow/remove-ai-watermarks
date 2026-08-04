@@ -48,7 +48,10 @@ uv tool install --force "remove-ai-watermarks[visible,heif]"
 
 ## Video processing
 
-Video metadata inspection and stripping work with the default package. Stable
+Video metadata inspection works with the default package, and MP4 and MOV
+stripping uses the in-tree ISOBMFF box walker. Stripping the non-ISOBMFF
+containers (MKV, WebM, AVI, FLV, and the audio formats) and writing any cleaned
+video need ffmpeg on PATH, for example `brew install ffmpeg`. Stable
 visible-mark identification and removal, full video cleaning, and visible/all
 batch modes need the `video` extra:
 
@@ -102,7 +105,7 @@ application actually uses:
 | `lama` | big-LaMa ONNX fill backend | `visible`, ONNX Runtime | Model download, no Torch |
 | `qwen-zimage` | Invisible image-watermark removal, both CUDA-only profiles | `diffusion`, DiffSynth | Yes |
 | `all` | Every production feature | All rows above | Yes |
-| `dev` | Tests, linting, typing, and upstream parity checks | `visible`, `detect`, upstream invisible-watermark | Yes, for parity tests |
+| `dev` | Tests, linting, typing, and upstream parity checks | `video`, `detect`, upstream invisible-watermark | Yes, for parity tests |
 
 Dependency composition:
 
@@ -188,8 +191,10 @@ Run the complete project gate:
 bash maintain.sh
 ```
 
-The script runs dependency checks, linting, formatting checks, type checking,
-and the test suite.
+The script syncs every optional backend on top of the `dev` environment above,
+then runs dependency checks, linting, formatting, type checking, and the test
+suite. It applies Ruff fixes and formatting in place rather than only reporting
+them.
 
 ## Hugging Face authentication
 

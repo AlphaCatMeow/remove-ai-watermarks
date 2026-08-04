@@ -79,6 +79,15 @@ class TestTargetSize:
         assert _target_size(4096, 4096, 0) is None
         assert _target_size(123, 456, 0) is None
 
+    def test_the_engine_default_is_itself_a_valid_input(self):
+        # Read the default off the signature rather than restating 0: a caller forwards
+        # whatever ``remove_watermark`` declares, and ``None`` there would reach the
+        # ``max_resolution > 0`` test below as a TypeError instead of "no cap".
+        import inspect
+
+        default = inspect.signature(InvisibleEngine.remove_watermark).parameters["max_resolution"].default
+        assert _target_size(1024, 768, default) is None
+
     def test_negative_cap_treated_as_native(self):
         assert _target_size(4096, 4096, -1) is None
 

@@ -22,8 +22,9 @@ defaults. This page focuses on choosing the right command.
 | `visible` or `erase` with big-LaMa | `remove-ai-watermarks[lama]` |
 | `invisible` and `all` (needs CUDA) | `remove-ai-watermarks[qwen-zimage]` |
 | `video metadata` and `video identify --no-visible` | Default package |
-| `video identify`, `video visible`, and visible/all batch modes | `remove-ai-watermarks[video]` |
-| `video invisible` and `video all --invisible` | `remove-ai-watermarks[video,diffusion]` |
+| `video identify` | `remove-ai-watermarks[video]` |
+| `video visible`, `video all`, and visible/all batch modes | `remove-ai-watermarks[video]` plus ffmpeg on PATH |
+| `video invisible` and `video all --invisible` | `remove-ai-watermarks[video,diffusion]` plus ffmpeg on PATH |
 | HEIC/HEIF/AVIF pixel input | Add `remove-ai-watermarks[heif]` |
 | Every production command and backend | `remove-ai-watermarks[all]` |
 
@@ -67,7 +68,8 @@ remove-ai-watermarks visible image.png -o clean.png
 The default behavior:
 
 - checks every registered visible mark;
-- removes every detected match;
+- removes every detected match, except the weakly detected Jimeng label pill,
+  which needs corroboration (see [supported signals](supported-signals.md));
 - selects the best installed fill backend;
 - strips AI metadata from the output.
 
@@ -132,7 +134,8 @@ Two more knobs tune the fill. `--dilate N` (default 3) grows every box by `N`
 pixels before inpainting, which helps when a mark has a soft edge or a drop
 shadow just outside the box you measured; it applies to every backend because it
 shapes the mask. `--inpaint-method telea|ns` selects the classical algorithm and
-only affects the `cv2` backend.
+only affects the `cv2` backend. Like `visible`, `erase` strips AI metadata from
+the output by default; pass `--keep-metadata` to retain it.
 
 ## Strip AI metadata
 
@@ -439,10 +442,16 @@ The command runs:
 
 The visible options and diffusion options are also available on `all`.
 
-If invisible removal is required but the `qwen-zimage` extra is unavailable, `all` still
-writes the result of the visible and metadata stages, prints a prominent
-warning, and exits with code 1. This prevents a partial result from being
-reported as complete.
+When the `qwen-zimage` extra is unavailable, `all` still writes the result of
+the visible and metadata stages, prints a prominent warning, and exits with code
+1. That happens on every run without the extra: the skipped stage is what would
+have decided whether a signal was there. This prevents a partial result from
+being reported as complete.
+
+If the extra is installed but the machine has no CUDA, which is the usual macOS
+case, the run fails at engine construction instead: `all` prints
+`Error: Invisible-watermark removal is CUDA-only ...`, writes no output at all,
+and exits with code 1.
 
 ## Process a directory
 

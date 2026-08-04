@@ -448,6 +448,14 @@ the payload, reconstituting SynthID in text. The lesson held and shaped the
 current design: **content is preserved by REGENERATING it under structural
 conditioning, never by copying original pixels.**
 
+> **Superseded in 0.24.0.** The `controlnet`, `sdxl`, `qwen` and `default` profiles
+> were removed, and a retired name is now rejected at parse time rather than routed
+> onward. `--pipeline` accepts only `qwen-zimage` (the default) and `sdxl-zimage`;
+> both are CUDA-only, both condition their global stage on a canny edge map, and both
+> run the same Z-Image face stage. The bullets below are a record of what was measured
+> on the removed profiles, kept because the oracle verdicts are still the evidence the
+> current design rests on.
+
 - **Text + structure:** `--pipeline controlnet` (SDXL img2img + a canny ControlNet) is
   **THE DEFAULT pipeline since 2026-06-09** (`--pipeline default` opts down to plain
   SDXL img2img for inputs without text/faces). It conditions the regeneration on the
@@ -480,21 +488,21 @@ conditioning, never by copying original pixels.**
   measured at. See §5.2.**
 - **Highest-fidelity CUDA option:** `--pipeline qwen-zimage` is the recommended
   quality mode when preserving face identity matters more than latency, model size,
-  and GPU cost. ControlNet remains the default because it is much cheaper and supports
+  and GPU cost. ControlNet was then the default, because it was much cheaper and ran on
   CUDA, XPU, MPS, and CPU, but canny conditioning preserves edges rather than identity.
   On two direct upstream comparisons, `qwen-zimage` retained substantially more
   ArcFace identity than polished ControlNet. On 2026-07-25 the exact six-output
   `visible -> qwen-zimage -> metadata` candidate was negative in the corresponding
   OpenAI and Gemini oracles. This is a quality recommendation for the measured content,
   not broad removal certification; very small text can still degrade.
-  See `docs/known-limitations.md` for the metrics, runtime, and validation scope.
-- **Face identity:** canny holds face *structure* but not *identity*. The standard
-  SDXL and ControlNet profiles do not run a separate face-restoration option.
-  Earlier GFPGAN, PhotoMaker, and FaceID experiments were removed after they
-  degraded identity or risked reintroducing source pixels. The separate
-  `qwen-zimage` profile now provides the only shipped face-specific stage:
-  YuNet and SAM locate faces, then Z-Image regenerates the selected original
-  face crops before a feathered composite. See
+  See `docs/qwen-improvement-research.md` for the identity and text metrics and the
+  validation scope of those comparisons.
+- **Face identity:** canny holds face *structure* but not *identity*. The removed
+  SDXL and ControlNet profiles did not run a separate face-restoration stage, and
+  earlier GFPGAN, PhotoMaker, and FaceID experiments were dropped after they
+  degraded identity or risked reintroducing source pixels. Both shipped profiles
+  now run the same face-specific stage: YuNet and SAM locate faces, then Z-Image
+  regenerates the selected original face crops before a feathered composite. See
   `docs/controlnet-removal-pipeline-research.md` for the historical experiments.
 
 ### 5.2 Strength setting

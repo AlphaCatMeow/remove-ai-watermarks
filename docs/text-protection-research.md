@@ -2,6 +2,8 @@
 
 > Research archive. This page records evaluated ideas, including rejected
 > prototypes. Current behavior is documented in the user guides and source.
+> The `text_protector.py` module it describes was removed from the library
+> afterwards.
 
 Date: 2026-05-29. Source: a deep-research run (104 agents, 5 search angles, sources
 fetched and 3-vote adversarially verified). Not committed automatically — saved as a

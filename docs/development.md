@@ -14,7 +14,7 @@ The optional TrustMark decoder downloads weights into its installed package dire
 
 ## CI
 
-`.github/workflows/test.yml` runs Ruff and a cross-platform supported-Python test matrix with default plus development dependencies. Diffusion and model-running tests skip in that matrix; metadata, identification, visible removal, the DWT-DCT decoder, and the OpenCV eraser remain covered across operating systems.
+`.github/workflows/test.yml` runs Ruff, a cross-platform test matrix over the supported-Python floor and the latest supported minor with default plus development dependencies, and a separate job that installs ffmpeg on Ubuntu to run the full-clip video test. Diffusion and model-running tests skip in that matrix; metadata, identification, visible removal, the DWT-DCT decoder, and the OpenCV eraser remain covered across operating systems.
 
 Keep `uv.lock` compatible with `uv sync --frozen`. Dependency pull-request checks use GitHub's merge result against current `main`; if `main` moves, merge it locally and rerun the full gate because a newer linter can expose stale directives in later code.
 

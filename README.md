@@ -39,7 +39,7 @@ removal.
 | Remove a registered visible AI mark from video | `video visible` | No |
 | Process a directory of videos | `video batch` | Depends on mode |
 | Remove video SynthID with the certified VAE profile | `video invisible` | Recommended |
-| Regenerate an image to disrupt invisible watermarks | `invisible` | Recommended |
+| Regenerate an image to disrupt invisible watermarks | `invisible` | Required (CUDA) |
 | Run visible, invisible, and metadata removal | `all` | Recommended |
 | Process a directory | `batch` | Depends on mode |
 
@@ -92,6 +92,8 @@ Strip metadata without running visible inpainting or diffusion:
 remove-ai-watermarks metadata image.png --remove -o clean.png
 ```
 
+Without `-o` this command overwrites the source in place.
+
 Inspect or remove AI metadata from an MP4, MOV, M4V, WebM, MKV, AVI, or FLV
 file:
 
@@ -100,8 +102,9 @@ remove-ai-watermarks video metadata input.mp4 --check
 remove-ai-watermarks video metadata input.mp4 --remove -o clean.mp4
 ```
 
-The metadata command does not transcode video or audio streams. When `-o` is
-omitted it writes `<source>_clean` and preserves the original. MP4 and MOV
+The `video metadata` command does not transcode video or audio streams. Unlike
+the image command above, when `-o` is omitted it writes `<source>_clean` and
+preserves the original. MP4 and MOV
 inspection includes the native TC260 `AIGC` tag in
 `moov.udta.meta.keys/ilst`, including a `moov` placed after the media payload.
 MKV and WebM inspection reads the normative
@@ -288,7 +291,7 @@ remove-ai-watermarks batch ./images --mode all
 Visible mark support includes:
 
 - Google Gemini and Nano Banana sparkle;
-- Doubao, Jimeng, Qwen, Kling, Baidu, LibLibAI, and RunningHub labels;
+- Doubao, Jimeng, Qwen, Kling, Yuanbao, Baidu, LibLibAI, and RunningHub labels;
 - one calibrated Samsung Galaxy AI label variant.
 
 Metadata and provenance inspection covers C2PA, EXIF, XMP, IPTC, common
@@ -351,8 +354,9 @@ The high level API accepts a file path or a BGR NumPy array. For path inputs it
 also reads provenance metadata, preserves alpha, and can strip AI metadata from
 the written result.
 
-See the [Python API guide](docs/python-api.md) for visible removal, provenance
-inspection, metadata stripping, and diffusion usage.
+See the [Python API guide](docs/python-api.md) for visible removal, the full
+`remove_all` and `remove_batch` pipeline, provenance inspection, metadata
+stripping, and diffusion usage.
 
 ## ComfyUI
 

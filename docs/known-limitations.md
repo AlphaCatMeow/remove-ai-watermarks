@@ -57,12 +57,12 @@ Invisible removal does not decode and delete a payload. It regenerates the
 image through a diffusion pipeline. Faces, text, colors, and fine detail can
 change even when the watermark is successfully disrupted.
 
-ControlNet is the default compatibility profile. It conditions on edges to
-preserve structure, but edges do not preserve identity or exact texture.
-
-The CUDA only `qwen-zimage` profile adds a separate face stage and is the
-highest fidelity option in the current implementation. It is larger, slower,
-and still may alter small text or difficult faces.
+`qwen-zimage` is the default profile and `sdxl-zimage` the only alternative.
+Both are CUDA only and differ only in the global regeneration model: each
+conditions that stage on a canny edge map, which preserves structure but not
+identity or exact texture, and each then runs the same face stage.
+`qwen-zimage` is the higher fidelity of the two. Both are large, slow, and may
+still alter small text or difficult faces.
 
 ### Removal cannot be verified locally for proprietary SynthID
 

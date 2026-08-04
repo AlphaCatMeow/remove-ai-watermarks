@@ -1,7 +1,9 @@
 # Deep research: SynthID-safe face-identity recovery for SDXL (2026-06-08)
 
 > Research archive. This dated follow-up records evidence available during the
-> study. It is not the current command reference.
+> study. It is not the current command reference. The `instantid` and `photomaker`
+> extras it discusses, the `--restore-faces` flag, and their modules were all removed
+> from the library afterwards.
 
 **Stats:** {"angles": 6, "sourcesFetched": 28, "claimsExtracted": 104, "claimsVerified": 25, "confirmed": 19, "killed": 6, "afterSynthesis": 6, "urlDupes": 1, "budgetDropped": 7, "agentCalls": 111}
 
@@ -149,8 +151,9 @@ on Modal A100 in two phases:
    - v3 (tighter ellipse 0.32*bw x 0.42*bh + per-channel mean color match to
      local cleaned canvas + softer feather): patchwork visually softened; faces
      still read as studio portraits inserted into the scene, not as people
-     shot in the scene. Single portrait identity drifted (tatsunari -> "round
-     Asian male" vs original's thin face).
+     shot in the scene. Single portrait identity drifted (the single-portrait
+     fixture regenerated as a generic "round Asian male" vs the original's thin
+     face).
 2. **Phase 2: InstantID img2img on cleaned crop.** Switched to the upstream
    `pipeline_stable_diffusion_xl_instantid_img2img` (downloaded at first use
    from raw.githubusercontent.com; requires `trust_remote_code=True`). Same

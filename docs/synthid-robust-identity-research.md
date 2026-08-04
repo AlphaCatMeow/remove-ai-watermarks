@@ -3,7 +3,8 @@
 > Research archive. This document evaluates approaches considered during the
 > study. It does not describe the current public interface. The current
 > pipelines and limits are documented in `docs/cli.md` and
-> `docs/known-limitations.md`.
+> `docs/known-limitations.md`. The path it calls shipped -- `photomaker_restore.py`
+> and the `photomaker` extra -- was removed from the library afterwards.
 
 > **Status (2026-06-08): retired.** Every approach described below was empirically
 > tested and rejected -- see `docs/synthid-robust-identity-research-2026-06-08.md`

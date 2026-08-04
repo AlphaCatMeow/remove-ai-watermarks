@@ -1,6 +1,6 @@
 ---
 globs: ["src/**/*.py", "tests/**/*.py", "scripts/**/*.py", "pyproject.toml", "uv.lock", "maintain.sh", ".github/workflows/*.yml"]
-description: Command contracts, project gate, typing boundaries, and model-adjacent test invariants.
+description: Command contracts, project gate, typing boundaries, model-adjacent test invariants, and the detection-path measurement rule.
 ---
 
 # Development invariants
@@ -37,6 +37,11 @@ Do not classify an entire module as untestable because its main path downloads a
   stage's; `sdxl-zimage` shipped doing exactly that and crashed on every image with a
   face. When one profile inherits another's stage, guard the invariants that stage
   relies on, not just the code path.
+- the `InvisibleOptions` defaults, in `test_api.py`. When one signature promises to
+  mirror another, compare them field by field rather than pinning the values you happen
+  to know about, so the next field added on one side and not the other fails at the
+  seam. Two of these defaults drifted in practice and neither needed a GPU to catch;
+  the incident is recorded in `docs/module-internals.md`.
 
 Use availability checks only for paths that actually load large models.
 

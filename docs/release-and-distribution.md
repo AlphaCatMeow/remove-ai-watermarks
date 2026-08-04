@@ -71,9 +71,10 @@ The source distribution uses an explicit allowlist for `/src`, `/LICENSE`,
 `[tool.hatch.build.targets.sdist]` in `pyproject.toml`. It also defensively
 excludes `/data`, `/tmp`, and `/.sc`. Keep both controls: calibration captures,
 test corpora, generated research outputs, and local session state do not belong
-in the published package archive. The matching local-root entries in
-`.gitignore` prevent accidental commits, but are not a substitute for the build
-boundary because hatchling may include untracked files.
+in the published package archive. `.gitignore` covers `tmp/` and `.sc/`, so those
+never reach a commit, but ignore rules are not the build boundary -- hatchling may
+include untracked files, and `data/` is deliberately tracked, so the sdist exclude
+is the only control keeping it out of the archive.
 
 ## Build backend
 
