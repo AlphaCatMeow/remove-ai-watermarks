@@ -782,13 +782,19 @@ class TestIdentifyVisibleTextMarks:
         """The web path identify(check_visible=True, check_invisible=False) must
         decode the image exactly once and share the array across the sparkle +
         text-mark detectors. Two decodes of the same bitmap spiked memory on the
-        small web worker (the OOM the decode-once refactor addresses)."""
+        small web worker (the OOM the decode-once refactor addresses).
+
+        Count decodes OF THE SOURCE, not every ``imread`` in the process: the Gemini
+        engine loads its own bundled capture assets on first construction, so a
+        process-wide count was 3 on a cold engine and 1 on a warm one, and the test
+        passed only when some earlier test happened to build the engine first."""
         import remove_ai_watermarks.image_io as image_io
 
         real_imread = image_io.imread
         with patch.object(image_io, "imread", side_effect=real_imread) as mock_imread:
             identify(tmp_clean_png, check_visible=True, check_invisible=False)
-        assert mock_imread.call_count == 1
+        source_decodes = [c for c in mock_imread.call_args_list if Path(c.args[0]) == Path(tmp_clean_png)]
+        assert len(source_decodes) == 1
 
     def test_missing_pixel_extra_preserves_metadata_verdict(self, tmp_png_with_ai_metadata: Path):
         import remove_ai_watermarks.image_io as image_io
