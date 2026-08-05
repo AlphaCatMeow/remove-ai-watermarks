@@ -2,19 +2,26 @@
 
 from __future__ import annotations
 
+import csv
 import sys
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
 import pytest
 
 from remove_ai_watermarks import optional_deps, video_encoding, video_invisible
-from remove_ai_watermarks.video_synthid import DEFAULT_VIDEO_SYNTHID_NOISE_STD
+from remove_ai_watermarks.video_synthid import (
+    DEFAULT_VIDEO_SYNTHID_FPS,
+    DEFAULT_VIDEO_SYNTHID_LONG_SIDE,
+    DEFAULT_VIDEO_SYNTHID_NOISE_STD,
+)
 
 if TYPE_CHECKING:
-    from pathlib import Path
     from typing import BinaryIO
+
+ORACLE_MANIFEST = Path(__file__).resolve().parents[1] / "data" / "evaluations" / "video-synthid-oracle.csv"
 
 
 def test_encoder_redirects_large_stderr_while_frames_are_streaming(
@@ -281,8 +288,36 @@ def test_probe_video_timestamps_uses_best_effort_pts(
     assert video_encoding.probe_video_timestamps(source) == (0.0, 0.041667)
 
 
-def test_default_noise_matches_full_clip_oracle_floor() -> None:
-    assert DEFAULT_VIDEO_SYNTHID_NOISE_STD == 0.15
+def test_shipped_defaults_match_a_certified_manifest_row() -> None:
+    """The shipped operating point must be one the provider oracle actually cleared.
+
+    Pinning the constant alone was not enough. Only ``noise_std`` was asserted, so
+    ``long_side`` and ``fps`` could move to an uncertified geometry with a green
+    suite -- and they are two thirds of what the oracle was shown. Reading the
+    manifest ties all three to the evidence: raising the resolution or the frame
+    rate now fails here until a ``not_detected`` row exists for that exact triple.
+
+    The tuple stops at three fields because the model is a fourth thing the oracle
+    was shown and neither tracked row records it. That omission is data-driven: add
+    ``vae`` here in the same commit as the first row that records one.
+    """
+    with ORACLE_MANIFEST.open(newline="", encoding="utf-8") as stream:
+        certified = {
+            (float(row["noise_std"]), int(row["long_side"]), float(row["fps"]))
+            for row in csv.DictReader(stream)
+            # The manifest deliberately leaves unrecorded fields empty, so a row
+            # missing part of its configuration certifies no triple and is skipped
+            # rather than crashing the parse.
+            if row["output_verdict"] == "not_detected"
+            and all(row[field] for field in ("noise_std", "long_side", "fps"))
+        }
+
+    assert certified, f"{ORACLE_MANIFEST.name} records no fully configured certified row"
+    shipped = (DEFAULT_VIDEO_SYNTHID_NOISE_STD, DEFAULT_VIDEO_SYNTHID_LONG_SIDE, DEFAULT_VIDEO_SYNTHID_FPS)
+    assert shipped in certified, (
+        f"shipped (noise_std, long_side, fps)={shipped} has no certified row in "
+        f"{ORACLE_MANIFEST.name}; certified: {sorted(certified)}"
+    )
 
 
 def test_stream_batches_consumes_only_one_batch_ahead() -> None:

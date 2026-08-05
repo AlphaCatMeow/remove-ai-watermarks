@@ -252,7 +252,35 @@ quality measurements. Neither is a watermark detector. The high-level result
 reports completed removal without a separate verification-status flag. The companion
 `scripts/video_synthid_sweep.py` imports the same engine helpers to build a
 matched control and candidate grid, preventing research and shipped
-regeneration paths from drifting. The full-clip oracle floor is
+regeneration paths from drifting.
+
+The engine's `psnr_db` is measured against the already-resized frame and before
+the encoder, so it scores the VAE round trip plus latent noise and cannot see
+the downscale, the decimation, or the codec. No in-loop metric can: the
+candidate frame is captured before it reaches the encoder pipe.
+`scripts/video_fidelity_probe.py` covers the rest by decoding the delivered file
+after muxing, upscaling it back to the source geometry, and scoring it against
+the untouched source frames. It also reports the delivered file's bitrate, so a
+fixed-crf bitrate rise cannot read as unchanged quality; because the mux copies
+source audio verbatim, that figure is a container bitrate, not a video one. The
+probe streams and accumulates the same way the engine does, so its peak memory
+does not grow with clip length. It drives the source through the engine's own
+`_iter_sampled_frames` at the source geometry rather than repeating the
+selection rule: a frame-count check cannot catch a rule that reorders frames
+without changing how many, so the rule itself has to be shared.
+
+`load_video_vae_runtime` asserts the default model's latent scaling factor
+against `VIDEO_SYNTHID_VAE_SCALING_FACTOR` and warns that no certified profile
+exists for any other model. The published `sd-vae-ft-mse` config carries no
+`scaling_factor` key, so the value is a `diffusers` class default under an
+upper-unbounded pin, and the certified profile is a perturbation-to-signal ratio
+rather than a bare `noise_std`. A library bump that moved that default would
+otherwise rescale every perturbation with a green suite. The validated factor is
+carried on `VideoVaeRuntime` and passed into encode and decode, so the gated
+value and the applied value are one measurement rather than three independent
+reads. `scripts/video_synthid_sweep.py` loads through the same function: the
+harness that produces the certified rows is the last place that should be exempt
+from the gate. The full-clip oracle floor is
 `noise_std=0.15`: on the public eight-second Veo carrier, `0.10` remained
 detected while `0.15` did not.
 

@@ -118,6 +118,14 @@ rather than clip duration. Runtime still grows linearly with duration, and the
 separate multi-candidate research sweep deliberately retains its short sampled
 prefix so it can reuse identical latents across candidate strengths.
 
+The reported `psnr_db` is measured against the already-resized frame and before
+the H.264 encode, so it excludes the downscale, the frame decimation, and the
+encoder. It measures the VAE round trip plus latent noise at the working geometry.
+[`video-synthid-quality-research.md`](video-synthid-quality-research.md) records
+what the manifest rows constrain, what a higher-resolution or higher-frame-rate
+profile would need in order to be certified, and the audio-track question this
+path has not yet answered.
+
 ### Strength is content and seed dependent
 
 The two profiles resolve an unset strength differently, because different things

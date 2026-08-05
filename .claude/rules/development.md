@@ -82,4 +82,25 @@ Before changing anything in the detection path, record the detectors' exact verd
 over a local sample first and diff them after. A refactor here is only correct if that
 record is byte-identical, and a green test suite does not establish that on its own.
 
+## A certified operating point is data, not a constant
+
+The video SynthID default is only meaningful as a row in
+`data/evaluations/video-synthid-oracle.csv`, so
+`test_shipped_defaults_match_a_certified_manifest_row` derives the pin from that
+manifest instead of restating literals. Pinning `noise_std` alone had let `long_side`
+and `fps` -- two thirds of what the oracle was actually shown -- move with a green
+suite.
+
+The certified profile is a perturbation-to-signal ratio, not a bare `noise_std`, so
+the latent scaling factor is gated in `load_video_vae_runtime`, carried on
+`VideoVaeRuntime`, and passed into encode and decode: the validated value and the
+applied value are one measurement. Anything that produces oracle evidence loads
+through that function. `video_synthid_sweep.py` hand-rolled the load and was the one
+path exempt from the gate it exists to feed, which is exactly backwards.
+
+Prove a video-path refactor the same way the detection path is proven, and without
+needing an oracle carrier: build a clip from a tracked fixture with ffmpeg, run the
+engine before and after, and require an identical output sha256. Keep the generated
+media outside the repository.
+
 Environment setup, dependency recovery, CI behavior, and fixture policy: [`../../docs/development.md`](../../docs/development.md).

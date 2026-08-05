@@ -398,6 +398,14 @@ verifier verdict blank:
 uv run --extra video --extra diffusion python scripts/video_synthid_sweep.py input.mp4 -o sweep/
 ```
 
+To score what an output actually cost, use `scripts/video_fidelity_probe.py`:
+the engine's own PSNR is measured before the resize and the encode, so only the
+probe sees the delivered picture.
+
+```bash
+uv run --extra video python scripts/video_fidelity_probe.py input.mp4 input_clean.mp4
+```
+
 The control must still be SynthID-positive before a negative candidate can
 count as removal evidence. In the 2026-07-29 two-clip calibration, both matched
 controls were positive in Gemini's built-in SynthID verifier; the stronger

@@ -33,6 +33,7 @@ from remove_ai_watermarks.video_synthid import (
     DEFAULT_VIDEO_SYNTHID_NOISE_STD,
     DEFAULT_VIDEO_SYNTHID_VAE,
     VIDEO_SYNTHID_LATENT_MULTIPLE,
+    VIDEO_SYNTHID_VAE_SCALING_FACTOR,
 )
 from remove_ai_watermarks.video_temporal import (
     _backward_map,
@@ -70,6 +71,9 @@ class VideoVaeRuntime:
     requested_device: str
     resolved_device: str
     vae: Any
+    # The gate that validates this factor and the encode/decode calls that apply it
+    # must read one value, not three independent reads of the same attribute.
+    scaling_factor: float
 
 
 def is_available() -> bool:
@@ -133,11 +137,22 @@ def load_video_vae_runtime(
     vae = AutoencoderKL.from_pretrained(model, torch_dtype=dtype).to(resolved_device)
     vae.eval()
     vae.enable_slicing()
+    scaling_factor = float(vae.config.scaling_factor)
+    log.info("Latent scaling factor %.5f", scaling_factor)
+    if model != DEFAULT_VIDEO_SYNTHID_VAE:
+        log.warning("No oracle-certified profile exists for %s; the shipped noise_std is not calibrated for it", model)
+    elif scaling_factor != VIDEO_SYNTHID_VAE_SCALING_FACTOR:
+        raise RuntimeError(
+            f"{model} loaded with latent scaling factor {scaling_factor}, but the certified "
+            f"profile is defined against {VIDEO_SYNTHID_VAE_SCALING_FACTOR}. The perturbation "
+            "would be rescaled and the output would no longer match any certified row."
+        )
     return VideoVaeRuntime(
         model=model,
         requested_device=device,
         resolved_device=resolved_device,
         vae=vae,
+        scaling_factor=scaling_factor,
     )
 
 
@@ -262,12 +277,12 @@ def _encode_frame_latents(
     vae: Any,
     device: str,
     batch_size: int,
+    scaling_factor: float,
 ) -> list[Any]:
     """Encode source frames once so every candidate can reuse identical latents."""
     import torch
 
     latent_batches: list[Any] = []
-    scaling_factor = float(vae.config.scaling_factor)
     with torch.inference_mode():
         for batch in _frame_batches(frames, batch_size):
             rgb = np.stack([frame[:, :, ::-1] for frame in batch])
@@ -284,12 +299,12 @@ def _decode_frame_latents(
     vae: Any,
     noise_std: float,
     shared_noise: Any,
+    scaling_factor: float,
 ) -> list[np.ndarray]:
     """Decode cached latents with one perturbation shared across time."""
     import torch
 
     output: list[np.ndarray] = []
-    scaling_factor = float(vae.config.scaling_factor)
     with torch.inference_mode():
         for latents in latent_batches:
             perturbed = latents + noise_std * shared_noise.expand(latents.shape[0], -1, -1, -1)
@@ -411,9 +426,18 @@ def regenerate_video_candidate(
                     vae=vae,
                     device=resolved_device,
                     batch_size=batch_size,
+                    scaling_factor=runtime.scaling_factor,
                 )
                 latents = latent_batches[0]
                 if shared_noise is None:
+                    # Removal strength is the ratio of the perturbation to this spread,
+                    # not noise_std alone: it is the only local quantity that makes two
+                    # models' doses comparable.
+                    log.info(
+                        "First latent batch spread %.4f against noise_std %.4f",
+                        float(latents.float().std()),
+                        noise_std,
+                    )
                     shared_noise = _shared_latent_noise(
                         latents.shape[1:],
                         seed=seed,
@@ -425,6 +449,7 @@ def regenerate_video_candidate(
                     vae=vae,
                     noise_std=noise_std,
                     shared_noise=shared_noise,
+                    scaling_factor=runtime.scaling_factor,
                 )
                 for reference, candidate in zip(frames, regenerated, strict=True):
                     frame_pipe.write(candidate.tobytes())

@@ -37,4 +37,5 @@ The current behavior is defined by the code, tests, README, and user guides.
 - [Doubao reverse-alpha research](research-doubao-distillation.md)
 - [SynthID identity research](synthid-robust-identity-research.md)
 - [SynthID identity follow-up](synthid-robust-identity-research-2026-06-08.md)
+- [Video SynthID quality research](video-synthid-quality-research.md)
 - [Text protection research](text-protection-research.md)
