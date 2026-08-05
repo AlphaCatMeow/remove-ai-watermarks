@@ -386,6 +386,31 @@ metadata extraction from verdict logic:
 - `identify` preserves the path-based API and adds the optional registered
   visible-mark and open invisible-watermark decoders after extraction.
 
+### Portable metadata record
+
+[`metadata_record.py`](../src/remove_ai_watermarks/metadata_record.py) produces the
+record `evidence_from_metadata_record` consumes, so collection and verdict can run
+on different machines. Its contract is equality with the file path, and the three
+defects found while establishing that equality are the reason each rule exists:
+
+- It walks the file's RAW head, never the `scan_head` buffer. That buffer is the
+  head concatenated with late metadata payloads, so a structural walk runs off the
+  end of the real head and parses appended bytes as chunks — which produced 11 MB
+  records and a phantom AIGC signal.
+- Samsung Galaxy AI splits its evidence: the `PhotoEditor_Re_Edit_Data` marker sits
+  in the post-EOI trailer while the `genAIType` value it is gated on can sit inside
+  the entropy-coded scan (measured on one file: marker at 580 619, value at
+  382 953). A marked file therefore keeps the whole tail window, not just the
+  trailer.
+- PIL's info keys are emitted in the file path's own candidate order
+  (`Software`, `Source`, `Title`, `Description`, then EXIF). `generator_from_metadata`
+  returns the FIRST candidate carrying a known token, so dict order alone changed
+  the reported platform on nine NovelAI files.
+
+Pixel forensics are deliberately absent: nothing in the provenance path reads them.
+Verified over 3,609 research-scan records — dropping every pixel section changed no
+verdict.
+
 The DWT-DCT detector and the visible-mark stage share a single decode of the
 source, held by
 a per-call `_SharedDecode`. It exposes two accessors because the two arms need

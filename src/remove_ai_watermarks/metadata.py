@@ -306,11 +306,16 @@ def scan_head(image_path: Path, size: int = 1024 * 1024) -> bytes:
     past large boxes like ``mdat``) and PNG ``tEXt`` / ``iTXt`` / ``eXIf`` chunks
     (seeking past ``IDAT``).
 
+    A file at least ``size`` bytes long additionally gets the metadata text its
+    decoder can reach but a raw read cannot (:func:`_decoder_visible_text`): a
+    compressed PNG ``zTXt`` packet, or a chunk past the window in a container with no
+    late-chunk reader here. A file that fits inside ``size`` is exactly
+    ``f.read(size)``, since the raw read already holds every byte.
+
     This is the shared input for every C2PA / AIGC / IPTC byte scan. The
     extensions catch a manifest or XMP packet placed AFTER the media data -- a
     non-faststart MP4 manifest, or a PNG XMP packet appended after the pixels --
-    which a fixed first-MB read would miss. For other inputs, and for files that
-    fit within ``size``, it is exactly ``f.read(size)`` -- behavior-neutral.
+    which a fixed first-MB read would miss.
 
     The result is memoized per (path, size, mtime): one ``identify``/``get_ai_metadata``
     call fans out to ~8 byte-scan detectors that each call this on the same file, so
@@ -347,7 +352,60 @@ def _scan_head_impl(image_path: Path, size: int) -> bytes:
         # len(head) == size means the file is at least `size` bytes, so metadata
         # chunks may lie beyond the window; otherwise the whole PNG is in `head`.
         head += _png_late_metadata(image_path, size)
+    if len(head) >= size:
+        head += _decoder_visible_text(image_path, head)
     return head
+
+
+# Text values the image decoder can reach that a raw byte read cannot. Bounded: a
+# packet larger than this is not a provenance label.
+_DECODED_TEXT_LIMIT = 512 * 1024
+# Decoder values that are binary payloads with their own readers, not metadata text.
+# An ICC profile is colour data and can run to hundreds of kilobytes; appending it
+# would bloat the buffer every later detector re-scans, for no signal.
+_DECODER_BINARY_KEYS = frozenset({"icc_profile"})
+
+
+def _decoder_visible_text(image_path: Path, head: bytes) -> bytes:
+    """Metadata text PIL can decode but the raw window does not contain.
+
+    Two placements defeat a fixed byte read, and both were found in a real corpus
+    rather than imagined:
+
+    * COMPRESSED -- a PNG ``zTXt`` chunk is zlib-deflated, so an XMP packet carrying
+      a TC260 AIGC label is unreadable as bytes while PIL inflates it on open. Five
+      corpus files carried a China AIGC label that ``identify`` reported as no signal
+      at all.
+    * BEYOND THE WINDOW in a container with no late-chunk reader -- a WebP XMP chunk
+      at offset 1 093 039 sits 44 kB past the 1 MiB window, and unlike PNG and
+      ISOBMFF, RIFF has no seek-past-the-pixels extension here. Three corpus files
+      hid an IPTC "Made with AI" tag and a C2PA ``trainedAlgorithmicMedia`` that way.
+
+    Only text ALREADY MISSING from ``head`` is appended, so the common case adds
+    nothing and no detector sees a value twice. Skipped entirely when the file fits
+    inside the window, since then the raw read already holds every byte.
+    """
+    try:
+        from PIL import Image
+
+        with Image.open(image_path) as img:
+            values = [value for key, value in img.info.items() if key not in _DECODER_BINARY_KEYS]
+    except Exception as exc:  # a container PIL cannot open: the raw scan stands alone
+        logger.debug("decoder-visible text unavailable for %s: %s", image_path, exc)
+        return b""
+
+    out = bytearray()
+    for value in values:
+        if isinstance(value, str):
+            encoded = value.encode("utf-8", "replace")
+        elif isinstance(value, bytes):
+            encoded = value
+        else:
+            continue
+        if len(encoded) > _DECODED_TEXT_LIMIT or not encoded or encoded in head:
+            continue
+        out += b"\x00" + encoded
+    return bytes(out)
 
 
 def has_ai_metadata(image_path: Path) -> bool:
@@ -1485,3 +1543,15 @@ def xai_signature(image_path: Path) -> bool:
     if key is None:
         return _xai_signature_impl(image_path)
     return _xai_signature_cached(*key)
+
+
+# ── Shared with the portable metadata record ────────────────────────
+# `metadata_record` must read exactly the windows and markers the file path reads: a
+# record built from a different window is a record whose verdict can disagree with
+# `identify` on the same image. Aliased rather than renamed because the private names
+# are load-bearing in this module's own tests and in a corpus script.
+QUICK_SCAN_BYTES = _QUICK_SCAN_BYTES
+SAMSUNG_EDITOR_MARKER = _SAMSUNG_EDITOR_MARKER
+read_file_tail = _read_file_tail
+png_late_metadata = _png_late_metadata
+exif_text = _exif_text

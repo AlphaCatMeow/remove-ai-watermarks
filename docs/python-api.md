@@ -182,8 +182,45 @@ evidence = extract_provenance_evidence(Path("input.png"))
 report = identify_from_evidence(evidence)
 ```
 
-If metadata was collected by another component, normalize its nested record
-without reopening the original file:
+### Collect once, judge elsewhere
+
+`collect_metadata_record` splits the two halves apart: it is the only step that
+touches the file, and it returns a JSON-serializable record the verdict can be
+built from on another machine, in another process, or later.
+
+```python
+import json
+
+from remove_ai_watermarks.identify import evidence_from_metadata_record, identify_from_evidence
+from remove_ai_watermarks.metadata_record import collect_metadata_record
+
+record = collect_metadata_record(Path("input.png"))   # reads the file
+blob = json.dumps(record)                             # ship it anywhere
+
+evidence = evidence_from_metadata_record(json.loads(blob), path=Path("input.png"))
+report = identify_from_evidence(evidence)             # reads nothing
+```
+
+The verdict is the same one `identify(path, check_visible=False,
+check_invisible=False)` returns for that file. That equality is the record's whole
+contract, and it is verified two ways: over the tracked provenance fixtures in
+`tests/test_metadata_record.py`, and over a local corpus, where 3,478 images
+(every file carrying a rare signal, plus a random slice) produced identical
+reports through both paths.
+
+A record carries metadata regions, never pixels: marker segments before the JPEG
+scan, every PNG chunk except `IDAT`, RIFF chunks except the coded image, the
+ISOBMFF provenance boxes, the container's trailer, the parsed EXIF tags the
+verdict reads by name, PIL's info mapping, and the C2PA manifest store. Typical
+size is 13 kB (p90 93 kB); the tail belongs to images carrying a large embedded
+manifest, where the store itself dominates.
+
+The `path` argument is metadata: it labels the report and is never opened by
+either function, so a record collected elsewhere can be judged against a path that
+does not exist locally.
+
+If metadata was collected by another component instead, normalize its nested
+record the same way:
 
 ```python
 from remove_ai_watermarks.identify import (
