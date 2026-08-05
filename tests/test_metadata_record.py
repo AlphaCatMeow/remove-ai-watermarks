@@ -17,10 +17,12 @@ import pytest
 from PIL import Image
 
 from remove_ai_watermarks.identify import (
+    PROVENANCE_REPORT_SCHEMA_VERSION,
     ProvenanceReport,
     evidence_from_metadata_record,
     identify,
     identify_from_evidence,
+    identify_metadata_record,
 )
 from remove_ai_watermarks.metadata_record import HEAD_WINDOW, collect_metadata_record
 
@@ -31,7 +33,7 @@ COMPARED = ("is_ai_generated", "platform", "confidence", "ai_source_kind", "ai_f
 def _verdict_via_record(path: Path) -> ProvenanceReport:
     """The contractor's path: collect, serialize, judge -- without the file."""
     record = json.loads(json.dumps(collect_metadata_record(path)))
-    return identify_from_evidence(evidence_from_metadata_record(record, path=path))
+    return identify_metadata_record(record, path=path)
 
 
 def _assert_same_verdict(path: Path) -> None:
@@ -166,6 +168,26 @@ class TestRecordShape:
 
         assert record["container"] == "unknown"
         assert record["metadata_base64"] == ""
+
+
+class TestReportTransport:
+    def test_report_contract_is_versioned_json_and_omits_local_path(self, tmp_path: Path):
+        path = _noise_png(tmp_path / "plain.png")
+
+        payload = identify_metadata_record(collect_metadata_record(path), path=path).to_dict()
+
+        assert payload["schema_version"] == PROVENANCE_REPORT_SCHEMA_VERSION == 1
+        assert "path" not in payload
+        assert json.loads(json.dumps(payload)) == payload
+
+    def test_convenience_entry_point_matches_explicit_sequence(self, tmp_path: Path):
+        path = _noise_png(tmp_path / "plain.png")
+        record = collect_metadata_record(path)
+
+        explicit = identify_from_evidence(evidence_from_metadata_record(record, path=path))
+        convenience = identify_metadata_record(record, path=path)
+
+        assert convenience == explicit
 
 
 def test_a_webp_record_matches(tmp_path: Path):

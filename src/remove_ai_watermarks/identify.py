@@ -70,6 +70,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Stable JSON contract for callers that pass a verdict between services. Bump this
+# only for a breaking shape or semantic change; adding optional fields is compatible.
+PROVENANCE_REPORT_SCHEMA_VERSION = 1
+
 # How much of a non-PNG container to binary-scan for the C2PA issuer.
 _SCAN_BYTES = 1024 * 1024
 
@@ -382,6 +386,32 @@ class ProvenanceReport:
     # AI-generation markers). Non-empty means the provenance is internally
     # inconsistent -- a strong tell of spoofed, transplanted, or laundered metadata.
     integrity_clashes: list[str] = field(default_factory=list[str])
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the versioned, JSON-safe verdict contract.
+
+        ``path`` is deliberately omitted. It is extraction context, not part of the
+        verdict, and local filesystem paths should not cross a service boundary.
+        """
+        return {
+            "schema_version": PROVENANCE_REPORT_SCHEMA_VERSION,
+            "is_ai_generated": self.is_ai_generated,
+            "platform": self.platform,
+            "confidence": self.confidence,
+            "ai_source_kind": self.ai_source_kind,
+            "ai_from_metadata": self.ai_from_metadata,
+            "watermarks": list(self.watermarks),
+            "signals": [
+                {
+                    "name": signal.name,
+                    "detail": signal.detail,
+                    "confidence": signal.confidence,
+                }
+                for signal in self.signals
+            ],
+            "caveats": list(self.caveats),
+            "integrity_clashes": list(self.integrity_clashes),
+        }
 
 
 def extract_provenance_evidence(image_path: Path) -> ProvenanceEvidence:
@@ -1168,6 +1198,16 @@ def identify_from_evidence(
         check_visible=check_visible,
         check_invisible=check_invisible,
     )
+
+
+def identify_metadata_record(record: dict[str, Any], *, path: Path) -> ProvenanceReport:
+    """Build a metadata-only verdict from a portable metadata record.
+
+    This is the service-integration entry point: the source file is never opened,
+    and callers receive the same verdict as the explicit
+    ``evidence_from_metadata_record`` / ``identify_from_evidence`` sequence.
+    """
+    return identify_from_evidence(evidence_from_metadata_record(record, path=path))
 
 
 def identify(

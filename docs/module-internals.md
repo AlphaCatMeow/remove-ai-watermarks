@@ -340,7 +340,16 @@ metadata scanners and `remove_ai_metadata`.
 
 Key contracts:
 
-- `scan_head` is the shared cached input for bounded byte scans.
+- `scan_head` is the shared cached input for bounded byte scans. It fills the buffer
+  in two layers. Structural readers first, one per container, each seeking past the
+  pixel payload to reach metadata placed beyond the window: `isobmff.scan_c2pa_region`,
+  `_png_late_metadata`, `_riff_late_metadata`. A decoder-backed fallback last,
+  `_decoder_visible_text`, for metadata the raw bytes do not spell at all — a
+  zlib-compressed PNG `zTXt` packet is readable only after inflation. The layers are
+  ordered that way because the structural readers work on files no decoder can open.
+- A C2PA reader failure is logged at warning, not debug. It returns the same `None` as
+  a file with no manifest, so nothing downstream can distinguish "no credentials" from
+  "the credentials could not be read", and the second silently downgrades a verdict.
 - JPEG stripping walks metadata segments and preserves the entropy-coded image
   scan.
 - ISOBMFF containers use
@@ -395,21 +404,20 @@ defects found while establishing that equality are the reason each rule exists:
 
 - It walks the file's RAW head, never the `scan_head` buffer. That buffer is the
   head concatenated with late metadata payloads, so a structural walk runs off the
-  end of the real head and parses appended bytes as chunks — which produced 11 MB
-  records and a phantom AIGC signal.
+  end of the real head and parses appended bytes as chunks, inflating the record and
+  creating false signals.
 - Samsung Galaxy AI splits its evidence: the `PhotoEditor_Re_Edit_Data` marker sits
   in the post-EOI trailer while the `genAIType` value it is gated on can sit inside
-  the entropy-coded scan (measured on one file: marker at 580 619, value at
-  382 953). A marked file therefore keeps the whole tail window, not just the
-  trailer.
+  the entropy-coded scan. A marked file therefore keeps the whole tail window, not
+  just the trailer.
 - PIL's info keys are emitted in the file path's own candidate order
   (`Software`, `Source`, `Title`, `Description`, then EXIF). `generator_from_metadata`
-  returns the FIRST candidate carrying a known token, so dict order alone changed
-  the reported platform on nine NovelAI files.
+  returns the FIRST candidate carrying a known token, so preserving candidate order
+  is part of verdict equivalence.
 
 Pixel forensics are deliberately absent: nothing in the provenance path reads them.
-Verified over 3,609 research-scan records — dropping every pixel section changed no
-verdict.
+Verdict equivalence is checked over tracked fixtures and a separate local evaluation
+corpus.
 
 The DWT-DCT detector and the visible-mark stage share a single decode of the
 source, held by

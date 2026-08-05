@@ -1316,6 +1316,30 @@ class TestAIGCLabel:
         assert b"ContentProducer" in _png_late_metadata(p, 8)
         assert b"ContentProducer" in scan_head(p, 8)
 
+    def test_scan_head_collects_webp_metadata_past_window(self, tmp_path: Path):
+        """WebP stores ``XMP `` AFTER the pixels, so on any WebP above the window a
+        fixed read can stop short of an IPTC "Made with AI" tag."""
+        from remove_ai_watermarks.metadata import _riff_late_metadata, scan_head
+
+        p = tmp_path / "late.webp"
+        xmp = (
+            b"<x:xmpmeta><photoshop:DigitalSourceType>trainedAlgorithmicMedia</photoshop:DigitalSourceType></x:xmpmeta>"
+        )
+        Image.new("RGB", (16, 16)).save(p, "WEBP", xmp=xmp)
+
+        assert b"trainedAlgorithmicMedia" in _riff_late_metadata(p, 12)
+        assert b"trainedAlgorithmicMedia" in scan_head(p, 12)
+
+    def test_riff_late_metadata_ignores_the_coded_image(self, tmp_path: Path):
+        """The point of stepping chunk by chunk rather than reading through: the
+        pixel payload never enters the scan buffer."""
+        from remove_ai_watermarks.metadata import _riff_late_metadata
+
+        p = tmp_path / "plain.webp"
+        Image.new("RGB", (64, 64), (200, 30, 30)).save(p, "WEBP")
+
+        assert _riff_late_metadata(p, 12) == b""
+
 
 class TestHuggingFaceJob:
     """HuggingFace-hosted job marker (``hf-job-id`` PNG text chunk)."""

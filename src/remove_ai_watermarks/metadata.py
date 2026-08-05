@@ -285,6 +285,54 @@ def _png_late_metadata(image_path: Path, window: int) -> bytes:
     return bytes(out)
 
 
+# RIFF/WebP chunks that carry metadata rather than coded pixels.
+_RIFF_META_CHUNKS: frozenset[bytes] = frozenset({b"EXIF", b"XMP ", b"ICCP", b"C2PA"})
+
+
+def _riff_late_metadata(image_path: Path, window: int, *, max_total: int = 4 * 1024 * 1024) -> bytes:
+    """Payloads of RIFF metadata chunks that start *beyond* the first ``window``
+    bytes, found by stepping over the (large) coded-image chunk.
+
+    The WebP layout puts ``XMP ``/``EXIF`` AFTER the pixels, so a fixed read can stop
+    before an IPTC or C2PA AI label. This is the RIFF analogue of
+    :func:`_png_late_metadata`; it returns only chunks past ``window`` so bytes
+    already in the head are not duplicated, and empty when there are none.
+
+    ``max_total`` caps what a metadata scan can pull into memory, the same ceiling
+    ``isobmff.scan_c2pa_region`` applies. Clamping each chunk to the bytes that remain
+    is not enough on its own: a corrupt or crafted file can declare one ``XMP `` chunk
+    spanning most of itself, and this runs on the memoized verdict path for images from
+    arbitrary sources. A label that needs more than 4 MB of XMP does not exist.
+    """
+    out = bytearray()
+    try:
+        with open(image_path, "rb") as f:
+            if f.read(4) != b"RIFF":
+                return b""
+            f.seek(0, 2)
+            file_size = f.tell()
+            position = 12  # 'RIFF' + size + form type
+            while position + 8 <= file_size and len(out) < max_total:
+                f.seek(position)
+                header = f.read(8)
+                if len(header) < 8:
+                    break
+                chunk_type = header[:4]
+                (length,) = struct.unpack("<I", header[4:8])
+                start = position + 8
+                # Clamp to what remains: a malformed 32-bit length must not push the
+                # walk past EOF and abandon a genuine label chunk after it.
+                safe_length = max(0, min(length, file_size - start))
+                if chunk_type in _RIFF_META_CHUNKS and start >= window:
+                    f.seek(start)
+                    out += f.read(min(safe_length, max_total - len(out)))
+                position = start + safe_length + (safe_length & 1)  # chunks are word-aligned
+    except OSError as exc:
+        logger.debug("RIFF late-metadata scan failed on %s: %s", image_path, exc)
+        return b""
+    return bytes(out)
+
+
 def _stat_key(image_path: Path) -> tuple[str, int, int] | None:
     """Cache key identifying this file's exact CONTENT, or None when it cannot stat.
 
@@ -352,6 +400,8 @@ def _scan_head_impl(image_path: Path, size: int) -> bytes:
         # len(head) == size means the file is at least `size` bytes, so metadata
         # chunks may lie beyond the window; otherwise the whole PNG is in `head`.
         head += _png_late_metadata(image_path, size)
+    elif head[:4] == b"RIFF" and head[8:12] == b"WEBP" and len(head) == size:
+        head += _riff_late_metadata(image_path, size)
     if len(head) >= size:
         head += _decoder_visible_text(image_path, head)
     return head
@@ -369,17 +419,16 @@ _DECODER_BINARY_KEYS = frozenset({"icc_profile"})
 def _decoder_visible_text(image_path: Path, head: bytes) -> bytes:
     """Metadata text PIL can decode but the raw window does not contain.
 
-    Two placements defeat a fixed byte read, and both were found in a real corpus
-    rather than imagined:
+    This is the last of two layers, not the first. Metadata placed BEYOND the window
+    is the structural readers' job (``_png_late_metadata``, ``_riff_late_metadata``,
+    the ISOBMFF box walk), and they work on a file no decoder can open. What is left
+    for this one is metadata the bytes do not spell at all:
 
     * COMPRESSED -- a PNG ``zTXt`` chunk is zlib-deflated, so an XMP packet carrying
-      a TC260 AIGC label is unreadable as bytes while PIL inflates it on open. Five
-      corpus files carried a China AIGC label that ``identify`` reported as no signal
-      at all.
-    * BEYOND THE WINDOW in a container with no late-chunk reader -- a WebP XMP chunk
-      at offset 1 093 039 sits 44 kB past the 1 MiB window, and unlike PNG and
-      ISOBMFF, RIFF has no seek-past-the-pixels extension here. Three corpus files
-      hid an IPTC "Made with AI" tag and a C2PA ``trainedAlgorithmicMedia`` that way.
+      a TC260 AIGC label is unreadable as bytes while PIL inflates it on open.
+
+    It stays container-agnostic on purpose: it is the net under a placement no
+    structural reader here knows about yet.
 
     Only text ALREADY MISSING from ``head`` is appended, so the common case adds
     nothing and no detector sees a value twice. Skipped entirely when the file fits

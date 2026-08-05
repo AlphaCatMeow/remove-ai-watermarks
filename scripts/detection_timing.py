@@ -39,7 +39,6 @@ DATA SAFETY
   Read-only over a local dataset. Writes only to the given output prefix, which
   belongs outside the repository.
 
-    uv run python scripts/detection_timing.py data/spaces/originals .local-eval/timing/run
     uv run python scripts/detection_timing.py <dataset> <prefix> --limit 200
 """
 

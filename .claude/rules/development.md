@@ -81,8 +81,7 @@ rules follow, and both were broken in practice before they were written down:
   builder; a mask path that re-runs its own sweep is how the two drift apart.
 
 The C2PA manifest-store JSON is NOT stable across reads: the reader regenerates manifest
-URNs and instance ids, so two reads of one unchanged file matched in 54 of 120 measured
-cases. Compare the derived `c2pa_info`, never the raw store.
+URNs and instance ids. Compare the derived `c2pa_info`, never the raw store.
 
 A third seam reaches the same verdict: `collect_metadata_record` ->
 `evidence_from_metadata_record` -> `identify_from_evidence`, the path a caller uses when
@@ -90,9 +89,8 @@ collection and verdict run on different machines. Its contract is equality with
 `identify(path, check_visible=False, check_invisible=False)` on the same image, and it
 can break from EITHER side -- a region the collector stops walking, or a placement the
 file path learns to read and the record does not. `tests/test_metadata_record.py` pins
-it over the tracked fixtures; the corpus comparison is what actually finds the gaps
-(three real ones so far, recorded in `docs/module-internals.md`). Change either side and
-re-run both.
+it over the tracked fixtures; a separate local evaluation corpus catches placements the
+fixtures do not cover. Change either side and re-run both.
 
 Before changing anything in the detection path, record the detectors' exact verdicts
 over a local sample first and diff them after. A refactor here is only correct if that

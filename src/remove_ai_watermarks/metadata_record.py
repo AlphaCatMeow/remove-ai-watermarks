@@ -82,6 +82,11 @@ def _jpeg_regions(data: bytes) -> bytes:
 
     The scan itself is skipped by walking to SOS and then jumping to the trailing
     EOI, so a 20 MB photo contributes only its markers.
+
+    TWIN: ``metadata._strip_jpeg_metadata_lossless`` walks the same marker chain. The
+    two were left separate on purpose -- that one couples the walk to "return False and
+    fall back to a PIL re-encode", a decision the lossless strip path owns and this one
+    must not inherit -- so a fix to marker handling belongs in BOTH.
     """
     out = bytearray()
     index, size = 2, len(data)
@@ -106,7 +111,13 @@ def _jpeg_regions(data: bytes) -> bytes:
 
 
 def _png_regions(data: bytes) -> bytes:
-    """Every chunk except the ``IDAT`` payloads, plus whatever follows IEND."""
+    """Every chunk except the ``IDAT`` payloads, plus whatever follows IEND.
+
+    TWIN: ``metadata._png_late_metadata`` walks the same chunk chain by SEEKING over
+    the file rather than over a buffer, and keeps an allowlist rather than skipping
+    ``IDAT``. Both filters are deliberate: inside the window the file path sees every
+    chunk type raw, past it only the allowlist survives.
+    """
     out = bytearray()
     size = len(data)
     position = len(PNG_SIGNATURE)
@@ -127,7 +138,12 @@ def _png_regions(data: bytes) -> bytes:
 
 
 def _riff_regions(data: bytes) -> bytes:
-    """Every RIFF chunk except the coded image payloads."""
+    """Every RIFF chunk except the coded image payloads.
+
+    TWIN: ``metadata._riff_late_metadata`` (seek-based, past the scan window) and
+    ``_internal.riff`` (AVI ``LIST/INFO``). Same chunk-stepping arithmetic, three
+    input models.
+    """
     out = bytearray(data[:12])  # 'RIFF' + size + 'WEBP'
     size = len(data)
     position = 12
@@ -168,10 +184,9 @@ def _container_regions(image_path: Path, head: bytes) -> tuple[str, bytes]:
     """(container label, metadata bytes) for the container ``head`` starts with.
 
     ``head`` must be the file's raw first bytes. Handing this the ``scan_head``
-    buffer instead is a trap that was walked into once: that buffer is the head
-    CONCATENATED with late metadata payloads, so a structural walk runs off the end
-    of the real head and parses the appended bytes as chunks -- which produced 11 MB
-    records and a phantom AIGC signal before the two were separated.
+    buffer instead is a trap: that buffer is the head CONCATENATED with late metadata
+    payloads, so a structural walk runs off the end of the real head and parses the
+    appended bytes as chunks, inflating the record and creating false signals.
     """
     from remove_ai_watermarks._internal.isobmff import is_isobmff
     from remove_ai_watermarks.metadata import png_late_metadata
@@ -211,9 +226,8 @@ def _trailer(image_path: Path, container: str) -> bytes:
     tail = read_file_tail(image_path, TAIL_WINDOW)
     if SAMSUNG_EDITOR_MARKER in tail:
         # Galaxy AI splits its evidence: the marker sits in the post-EOI trailer, but
-        # the `genAIType` value it is gated on can sit INSIDE the entropy-coded scan
-        # (measured: marker at 580 619, value at 382 953 in the same file). Keeping
-        # only the trailer therefore carries the marker without the value and the
+        # the `genAIType` value it is gated on can sit INSIDE the entropy-coded scan.
+        # Keeping only the trailer therefore carries the marker without the value and the
         # verdict silently drops the Samsung signal, so a marked file keeps the whole
         # window. Only Samsung-marked files pay for it.
         return tail
@@ -250,8 +264,7 @@ def _exif_pairs(info: dict[str, Any]) -> dict[str, str]:
     in the regions. ``xai_signature_pair`` wants an (ImageDescription, Artist) pair,
     and ``_external_exif_generator`` looks for Software / Make / Artist /
     ImageDescription. Ship the bytes alone and both silently return nothing, which
-    is exactly how a first draft of this collector lost every Grok and NovelAI
-    verdict in a corpus run.
+    is how a collector can silently lose Grok and NovelAI verdicts.
     """
     exif_bytes = info.get("exif")
     if not exif_bytes:
@@ -283,11 +296,9 @@ def _pil_info(info: dict[str, Any]) -> dict[str, str]:
         return value.decode("utf-8", "replace") if isinstance(value, bytes) else str(value)
 
     # Emitted in the file path's own candidate order. ``generator_from_metadata``
-    # returns the FIRST candidate carrying a known token, and a record that listed
-    # PIL's keys in their natural dict order picked a different string for the same
-    # image -- nine NovelAI files came back as "NovelAI generated image" where the
-    # file path says "NovelAI". Same verdict, different platform text, and the two
-    # paths are supposed to be indistinguishable.
+    # returns the FIRST candidate carrying a known token. A record using PIL's natural
+    # dict order can therefore choose a different platform string than the file path,
+    # even though the two paths are supposed to be indistinguishable.
     out: dict[str, str] = {}
     for key in _GENERATOR_TEXT_KEYS:
         value = info.get(key)

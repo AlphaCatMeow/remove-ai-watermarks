@@ -72,6 +72,18 @@ from typing import Any
 from PIL import Image
 from PIL.IptcImagePlugin import getiptcinfo
 
+# Pillow cannot open HEIC/HEIF without this opener, and it does not auto-register.
+# Skipping it does not fail loudly: HEIC records lose EXIF and most pixel features
+# while the scan continues as if the container were merely unreadable. Deliberately a
+# copy of `image_io._register_heif` rather than an import: this script keeps the
+# minimal dependency set its docstring advertises and never imports the package. The
+# suppression is as wide as the original's, so a broken libheif degrades the scan
+# instead of killing it at import.
+with contextlib.suppress(Exception):
+    import pillow_heif
+
+    pillow_heif.register_heif_opener()
+
 SUPPORTED = {
     ".png",
     ".jpg",
