@@ -55,7 +55,10 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# The package's OWN tree, not the repository root: from a worktree, an editable
+# install resolves `remove_ai_watermarks` to the MAIN checkout, so a script measuring
+# this tree would silently import a different one.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from remove_ai_watermarks import identify as identify_mod
 from remove_ai_watermarks import metadata as metadata_mod

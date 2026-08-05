@@ -30,6 +30,8 @@ from remove_ai_watermarks._internal.c2pa import (
     cbor_text_after,
     extract_c2pa_info,
     soft_binding_vendors_in,
+    synthid_vendors_in,
+    synthid_verdict,
 )
 from remove_ai_watermarks._internal.constants import (
     C2PA_AI_TOOLS,
@@ -980,9 +982,24 @@ def _identify_from_evidence(
             platform = f"C2PA signer: {cloud_vendor} (cloud manifest)"
 
     # ── SynthID metadata proxy ──────────────────────────────────────
-    # get_ai_metadata already sets synthid_watermark for both PNG (caBX parser)
-    # and non-PNG (its own synthid_source fallback), so no extra scan is needed.
+    # Structured first (the PNG caBX parser and the manifest store both fill
+    # `synthid_watermark`), then the byte scan for the containers that keep the
+    # manifest where no parser reaches it.
+    #
+    # The scan lives HERE, in the verdict, and not in extraction, for the same reason
+    # `soft_binding` below does: extraction has two implementations -- one reading a
+    # file, one reading a portable record -- and a rule that lives in only one of them
+    # is a rule the other silently lacks. It did: 74 corpus images reported SynthID
+    # through `identify` and not through the record, because `get_ai_metadata`'s own
+    # fallback has no counterpart on the record side. `get_ai_metadata` keeps its copy
+    # for its own callers; the verdict no longer depends on which extractor ran.
     synthid = meta.get("synthid_watermark")
+    # The literal byte checks mirror `metadata.synthid_source` exactly rather than
+    # reusing the derived `has_c2pa` / `c2pa_source_kind` above, which are broader:
+    # the file path's answer must not move.
+    trained_source = b"trainedAlgorithmicMedia" in head or b"TrainedAlgorithmicMedia" in head
+    if not synthid and trained_source and c2pa_marker_in(head) and (vendors := synthid_vendors_in(head)):
+        synthid = synthid_verdict(", ".join(vendors))
     if synthid:
         watermarks.append(f"SynthID watermark, inferred from C2PA metadata ({synthid})")
         caveats.append(_SYNTHID_CAVEAT)

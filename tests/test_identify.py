@@ -1353,3 +1353,56 @@ class TestSharedPixelDecode:
             report = identify(self.SAMPLE, check_visible=True, check_invisible=False)
         assert not any(s.name.startswith("visible_") for s in report.signals)
         assert report.is_ai_generated is True  # the C2PA verdict survives the decode failure
+
+
+class TestSynthIdProxyIsDecidedInTheVerdict:
+    """The SynthID byte scan belongs to the verdict, not to extraction.
+
+    Extraction has two implementations -- one reading a file, one reading a portable
+    record -- so a rule that lives in only one of them is a rule the other silently
+    lacks. This one did: 74 corpus images reported SynthID through ``identify`` and
+    not through the record."""
+
+    # A JUMBF-wrapped manifest from a SynthID-pairing signer on AI-generated content:
+    # the exact shape `synthid_source`'s byte scan is gated on. Spliced into a real
+    # JPEG as a well-formed APP11 segment, because a malformed one is skipped by the
+    # record's structural walk and the test would compare two different inputs.
+    MANIFEST = b"jumb c2pa Google LLC trainedAlgorithmicMedia"
+
+    def _jpeg_with_manifest(self, path: Path) -> Path:
+        import numpy as np
+        from PIL import Image
+
+        Image.fromarray(np.zeros((32, 32, 3), dtype=np.uint8)).save(path, "JPEG")
+        data = path.read_bytes()
+        segment = b"\xff\xeb" + (len(self.MANIFEST) + 2).to_bytes(2, "big") + self.MANIFEST
+        path.write_bytes(data[:2] + segment + data[2:])
+        return path
+
+    def test_both_paths_infer_it_from_the_same_bytes(self, tmp_path: Path):
+        from remove_ai_watermarks.identify import identify_metadata_record
+        from remove_ai_watermarks.metadata_record import collect_metadata_record
+
+        path = self._jpeg_with_manifest(tmp_path / "gemini.jpg")
+
+        via_file = identify(path, check_visible=False, check_invisible=False)
+        via_record = identify_metadata_record(collect_metadata_record(path), path=path)
+
+        assert any("SynthID" in mark for mark in via_file.watermarks)
+        assert via_record.watermarks == via_file.watermarks
+
+    def test_it_needs_a_manifest_and_an_ai_source_type(self, tmp_path: Path):
+        """The vendor name alone is not evidence: an ordinary photo mentioning
+        "Google LLC" in EXIF must not acquire a SynthID verdict."""
+        import numpy as np
+        from PIL import Image
+
+        path = tmp_path / "photo.jpg"
+        Image.fromarray(np.zeros((32, 32, 3), dtype=np.uint8)).save(path, "JPEG")
+        data = path.read_bytes()
+        note = b"Google LLC Pixel"
+        path.write_bytes(data[:2] + b"\xff\xeb" + (len(note) + 2).to_bytes(2, "big") + note + data[2:])
+
+        report = identify(path, check_visible=False, check_invisible=False)
+
+        assert not any("SynthID" in mark for mark in report.watermarks)
