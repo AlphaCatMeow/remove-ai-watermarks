@@ -41,7 +41,25 @@ Do not classify an entire module as untestable because its main path downloads a
   mirror another, compare them field by field rather than pinning the values you happen
   to know about, so the next field added on one side and not the other fails at the
   seam. Two of these defaults drifted in practice and neither needed a GPU to catch;
-  the incident is recorded in `docs/module-internals.md`.
+  the incident is recorded in `docs/module-internals.md`. Keep the comparison free of
+  an exception table: a field that needs one is a field that belongs elsewhere, which
+  is what `force` turned out to be.
+
+A defaults comparison is not a forwarding test, and the two fail differently. Pin the
+VALUE at the seam, not just the name -- `_run_invisible` passed the whole suite with
+`controlnet_conditioning_scale` hardcoded, because nothing asserted the caller's value
+arrived. `test_every_field_arrives_at_the_engine_with_the_caller_s_value` drives the
+real seam with every field set off its default, so one test covers the whole bag
+instead of one assertion per knob.
+
+Count the seams before believing a knob is covered. Each of `force` and
+`controlnet_conditioning_scale` reaches the engine through TWO paths -- `remove_all`
+versus `remove_batch(mode="all")` for the first, `_run_invisible` versus `_batch_engine`
+for the second -- and in both cases guarding one path left the other free to hardcode a
+constant with a green suite. The mode-parametrized guards in
+`TestRemoveBatchLibrary::test_force_reaches_the_scrub_gate_in_every_scrubbing_mode` and
+`TestBatchCommand::test_batch_controlnet_scale_flows_to_the_cached_engine` exist because
+that is what actually happened.
 
 Use availability checks only for paths that actually load large models.
 

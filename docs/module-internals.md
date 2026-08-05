@@ -87,13 +87,21 @@ over:
 - `remove_all`, returning a `RemoveAllResult` after the visible, invisible, and
   metadata stages
 - `remove_batch`, returning a `BatchSummary` for one directory and one mode
-- `InvisibleOptions`, the invisible stage's knobs as one immutable value. Every
-  default mirrors `InvisibleEngine`, so a bare `InvisibleOptions()` behaves
-  exactly like calling the engine with no arguments. Two silently stopped:
-  `max_resolution=None` reached `_target_size`'s `max_resolution > 0` and raised
-  `TypeError` on every library call, and `cpu_offload=True` made a library run
-  slower than the identical CLI run. `TestInvisibleOptionsMirrorTheEngine`
-  compares the two signatures field by field
+- `InvisibleOptions`, the invisible stage's knobs as one immutable value. Engine
+  knobs only, under the engine's own names and defaults, so a bare
+  `InvisibleOptions()` behaves exactly like calling the engine with no arguments.
+  The engine takes them across two callables, `__init__` for what shapes the
+  loaded stack and `remove_watermark` for the per-image ones, so `_run_invisible`
+  forwards each field to the right one rather than splatting the whole bag. Two
+  defaults silently stopped
+  mirroring: `max_resolution=None` reached `_target_size`'s `max_resolution > 0`
+  and raised `TypeError` on every library call, and `cpu_offload=True` made a
+  library run slower than the identical CLI run.
+  `TestInvisibleOptionsMirrorTheEngine` compares the two signatures field by
+  field, and deliberately keeps no exception table: a field needing one is a
+  field that belongs elsewhere. `force` was such a field, and it decides whether
+  the engine runs rather than how, so it is a parameter of `remove_all` and
+  `remove_batch` next to `backend` and `sensitivity`
 - `MetadataStripIncomplete`, raised before any write when AI metadata survives
 
 `remove_all` reports progress as `(stage, detail)` pairs of stable tokens, not

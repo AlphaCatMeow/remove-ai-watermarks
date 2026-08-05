@@ -216,11 +216,18 @@ def remove_visible(
 class InvisibleOptions:
     """The invisible stage's knobs, as one value instead of a dozen parameters.
 
-    Every default MIRRORS ``InvisibleEngine``, so a bare ``InvisibleOptions()`` behaves
-    exactly like calling the engine with no arguments; two once drifted and broke
-    silently, so ``TestInvisibleOptionsMirrorTheEngine`` compares the two signatures
-    field by field. Immutable so a batch can build it once and reuse it across every
-    image while the engine itself is cached separately.
+    ENGINE KNOBS ONLY, under the engine's own names and defaults, so a bare
+    ``InvisibleOptions()`` behaves exactly like calling the engine with no arguments.
+    The engine takes them across TWO callables -- ``__init__`` for the ones that shape
+    the loaded stack, ``remove_watermark`` for the per-image ones -- so this is not a
+    splat-through bag; ``_run_invisible`` forwards each field to the right one.
+    ``TestInvisibleOptionsMirrorTheEngine`` compares the signatures field by field with
+    no exception table to maintain: a decision made before the engine runs, like
+    ``force``, is a parameter of ``remove_all`` next to ``backend`` and ``sensitivity``,
+    not a knob smuggled in here.
+
+    Immutable so a batch can build it once and reuse it across every image while the
+    engine itself is cached separately.
     """
 
     strength: float | None = None
@@ -231,13 +238,11 @@ class InvisibleOptions:
     unsharp: float = 0.0
     adaptive_polish: bool | None = None
     max_resolution: int = 0
-    controlnet_scale: float = 1.0
+    controlnet_conditioning_scale: float = 1.0
     cpu_offload: bool = False
     tile: bool = False
     tile_size: int = 1024
     tile_overlap: int = 128
-    # Scrub even when no invisible watermark is locally detectable.
-    force: bool = False
 
 
 # What the invisible stage did. "unavailable" is the one outcome the caller must
@@ -365,6 +370,7 @@ def remove_all(
     backend: Backend = "auto",
     sensitivity: Sensitivity = "auto",
     invisible: InvisibleOptions | None = None,
+    force: bool = False,
     engine: Any | None = None,
     progress: Callable[[str, str], None] | None = None,
 ) -> RemoveAllResult:
@@ -373,6 +379,11 @@ def remove_all(
     Stages are chained through a file in the SYSTEM temp dir, not next to ``output``:
     the point of staging is that the user never sees a partial output file during a long
     model download, and writing the partial next to the final defeats that.
+
+    ``force`` scrubs even when no invisible watermark is locally detectable. It sits
+    here rather than in ``InvisibleOptions`` because it decides WHETHER the engine runs,
+    which is settled before the engine is built; the options carry only what the engine
+    itself takes.
 
     ``engine`` accepts an already-constructed ``InvisibleEngine`` so a batch can build
     the model once; leave it None to construct one per call.
@@ -425,7 +436,7 @@ def remove_all(
             raise OSError(f"failed to write the staged intermediate: {staged}")
 
         # ── 2. Invisible watermark ──
-        outcome = _run_invisible(src, staged, staged, opts, engine, say, evidence)
+        outcome = _run_invisible(src, staged, staged, opts, engine, say, evidence, force)
 
         # ── 3. AI metadata ──
         # Read the pristine ORIGINAL for provenance above and the STAGED file here:
@@ -458,6 +469,7 @@ def _run_invisible(
     engine: Any | None,
     say: Callable[[str, str], None],
     evidence: _SourceEvidence,
+    force: bool,
 ) -> InvisibleOutcome:
     """Run, or deliberately skip, the diffusion scrub.
 
@@ -472,7 +484,7 @@ def _run_invisible(
     if not is_available():
         say("invisible", "unavailable")
         return "unavailable"
-    if not (opts.force or evidence.has_invisible_target()):
+    if not (force or evidence.has_invisible_target()):
         say("invisible", "no-signal")
         return "no-signal"
 
@@ -494,7 +506,7 @@ def _run_invisible(
             pipeline=opts.pipeline,
             hf_token=opts.hf_token,
             progress_callback=lambda message: say("invisible", message),
-            controlnet_conditioning_scale=opts.controlnet_scale,
+            controlnet_conditioning_scale=opts.controlnet_conditioning_scale,
             cpu_offload=opts.cpu_offload,
         )
     engine.remove_watermark(
@@ -538,6 +550,7 @@ def remove_batch(
     backend: Backend = "auto",
     sensitivity: Sensitivity = "auto",
     invisible: InvisibleOptions | None = None,
+    force: bool = False,
     engine: Any | None = None,
     progress: Callable[[Path, str, str], None] | None = None,
 ) -> BatchSummary:
@@ -545,8 +558,8 @@ def remove_batch(
 
     Never raises for a single bad image: a per-file failure is counted and recorded in
     ``BatchSummary.errors`` so one unreadable file cannot abandon the rest of the
-    directory. ``engine`` is threaded straight through, so a caller that passes a
-    constructed ``InvisibleEngine`` loads the model once for the whole run.
+    directory. ``force`` and ``engine`` are threaded straight through, so a caller that
+    passes a constructed ``InvisibleEngine`` loads the model once for the whole run.
 
     ``progress`` receives ``(path, stage, detail)``. Every image ends with exactly one
     terminal stage -- ``done`` or ``failed`` -- whatever the mode does in between, so a
@@ -567,7 +580,7 @@ def remove_batch(
     for img_path in sorted(p for p in src_dir.iterdir() if is_supported_format(p)):
         out_path = out_dir / img_path.name
         try:
-            outcome = _run_batch_one(img_path, out_path, mode, backend, sensitivity, invisible, engine, say)
+            outcome = _run_batch_one(img_path, out_path, mode, backend, sensitivity, invisible, force, engine, say)
         except Exception as exc:
             failed += 1
             errors.append((img_path, str(exc)))
@@ -590,6 +603,7 @@ def _run_batch_one(
     backend: Backend,
     sensitivity: Sensitivity,
     invisible: InvisibleOptions | None,
+    force: bool,
     engine: Any | None,
     say: Callable[[Path, str, str], None],
 ) -> InvisibleOutcome | None:
@@ -604,6 +618,7 @@ def _run_batch_one(
             backend=backend,
             sensitivity=sensitivity,
             invisible=invisible,
+            force=force,
             engine=engine,
             progress=lambda stage, detail: say(img_path, stage, detail),
         )
@@ -653,6 +668,7 @@ def _run_batch_one(
         engine,
         lambda stage, detail: say(img_path, stage, detail),
         _SourceEvidence(img_path),
+        force,
     )
     if not out_path.exists():
         # Keep the output directory COMPLETE even when the pixels are deliberately

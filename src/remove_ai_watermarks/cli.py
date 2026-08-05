@@ -1496,13 +1496,13 @@ def cmd_all(
                 unsharp=unsharp,
                 adaptive_polish=adaptive_polish,
                 max_resolution=max_resolution,
-                controlnet_scale=controlnet_scale,
+                controlnet_conditioning_scale=controlnet_scale,
                 cpu_offload=cpu_offload,
                 tile=tile,
                 tile_size=tile_size,
                 tile_overlap=tile_overlap,
-                force=force,
             ),
+            force=force,
             progress=progress,
         )
     except MetadataStripIncomplete as e:
@@ -1560,7 +1560,7 @@ def _batch_engine(mode: str, options: InvisibleOptions) -> object | None:
     return InvisibleEngine(
         pipeline=options.pipeline,
         hf_token=options.hf_token,
-        controlnet_conditioning_scale=options.controlnet_scale,
+        controlnet_conditioning_scale=options.controlnet_conditioning_scale,
         cpu_offload=options.cpu_offload,
     )
 
@@ -1642,12 +1642,11 @@ def cmd_batch(
         unsharp=unsharp,
         adaptive_polish=adaptive_polish,
         max_resolution=max_resolution,
-        controlnet_scale=controlnet_scale,
+        controlnet_conditioning_scale=controlnet_scale,
         cpu_offload=cpu_offload,
         tile=tile,
         tile_size=tile_size,
         tile_overlap=tile_overlap,
-        force=force,
     )
 
     with Progress(
@@ -1678,6 +1677,7 @@ def cmd_batch(
             backend=backend,  # type: ignore[arg-type]
             sensitivity=_parse_sensitivity(sensitivity),
             invisible=invisible_options,
+            force=force,
             engine=_batch_engine(mode, invisible_options),
             progress=on_progress,
         )

@@ -196,10 +196,12 @@ class TestRemoveVisibleOutputPath:
 
 
 class TestInvisibleOptionsMirrorTheEngine:
-    """``InvisibleOptions`` forwards to ``InvisibleEngine`` and promises every default
-    mirrors it. Compare the signatures field by field rather than pinning the values we
-    happen to know about, so the next field added on one side and not the other fails
-    here. See the incident record in ``docs/module-internals.md``."""
+    """``InvisibleOptions`` forwards to ``InvisibleEngine`` and promises every NAME and
+    default mirrors it. Compare the signatures field by field rather than pinning the
+    values we happen to know about, so the next field added on one side and not the
+    other fails here. The comparison deliberately has no exception table: a field that
+    needs one is a field that belongs somewhere else, which is why ``force`` is a
+    parameter of ``remove_all``. See the incident record in ``docs/module-internals.md``."""
 
     def test_every_default_matches_the_engine(self):
         import dataclasses
@@ -213,12 +215,67 @@ class TestInvisibleOptionsMirrorTheEngine:
             for name, p in inspect.signature(method).parameters.items()
             if p.default is not inspect.Parameter.empty
         }
-        # ``force`` is a pipeline decision made before the engine runs, so it has no
-        # engine counterpart; ``remove_watermark`` spells the controlnet knob out in full.
-        renamed = {"controlnet_scale": "controlnet_conditioning_scale"}
-        options = {f.name: f.default for f in dataclasses.fields(api.InvisibleOptions) if f.name != "force"}
+        options = {f.name: f.default for f in dataclasses.fields(api.InvisibleOptions)}
 
-        assert options == {name: engine.get(renamed.get(name, name), "<not an engine parameter>") for name in options}
+        assert options == {name: engine.get(name, "<not an engine parameter>") for name in options}
+
+    @pytest.mark.skipif(not CHATGPT.exists(), reason="sample image not present")
+    def test_every_field_arrives_at_the_engine_with_the_caller_s_value(self, monkeypatch, tmp_path):
+        """A defaults comparison is not a forwarding test. `_run_invisible` hands each
+        field to one of TWO engine callables by hand, and a hardcoded literal there is
+        invisible to the mirror above -- `controlnet_conditioning_scale` shipped that way
+        and the whole suite stayed green. Drive the real seam with every field set OFF
+        its default and assert the caller's value arrives, whichever callable takes it."""
+        import dataclasses
+
+        from remove_ai_watermarks import invisible_engine
+
+        # Every value differs from the default, so a hardcoded default cannot pass.
+        opts = api.InvisibleOptions(
+            strength=0.42,
+            pipeline="sdxl-zimage",
+            seed=7,
+            hf_token="token",
+            humanize=0.3,
+            unsharp=0.2,
+            adaptive_polish=True,
+            max_resolution=1536,
+            controlnet_conditioning_scale=0.65,
+            cpu_offload=True,
+            tile=True,
+            tile_size=768,
+            tile_overlap=64,
+        )
+        seen: dict[str, object] = {}
+
+        class FakeEngine:
+            def __init__(self, **kwargs):
+                seen.update(kwargs)
+
+            def remove_watermark(self, **kwargs):
+                seen.update(kwargs)
+
+        monkeypatch.setattr(invisible_engine, "is_available", lambda: True)
+        monkeypatch.setattr(invisible_engine, "InvisibleEngine", FakeEngine)
+        api._run_invisible(
+            CHATGPT,
+            CHATGPT,
+            tmp_path / "out.png",
+            opts,
+            None,
+            lambda _stage, _detail: None,
+            api._SourceEvidence(CHATGPT),
+            True,
+        )
+
+        missing = {f.name: getattr(opts, f.name) for f in dataclasses.fields(opts) if f.name not in seen}
+        assert not missing, f"never forwarded to the engine: {missing}"
+        wrong = {
+            f.name: (getattr(opts, f.name), seen[f.name])
+            for f in dataclasses.fields(opts)
+            if seen[f.name] != getattr(opts, f.name)
+        }
+        assert not wrong, f"forwarded a value the caller did not pass (want, got): {wrong}"
 
 
 class TestRemoveAllLibrary:
@@ -380,6 +437,43 @@ class TestRemoveBatchLibrary:
 
         assert summary.processed == 0
         assert summary.failed == 1
+
+    @pytest.mark.parametrize("mode", ["all", "invisible"])
+    @pytest.mark.parametrize(("force", "expected"), [(True, "removed"), (False, "no-signal")])
+    def test_force_reaches_the_scrub_gate_in_every_scrubbing_mode(self, monkeypatch, tmp_path, mode, force, expected):
+        """``force`` reaches the gate through a DIFFERENT seam per mode: ``all`` re-enters
+        ``remove_all``, ``invisible`` calls ``_run_invisible`` directly. Only the second
+        was guarded, and pinning the first to False passed the whole suite while every
+        output kept its watermark and the run still reported the files as processed."""
+        from remove_ai_watermarks import api, image_io, invisible_engine
+
+        src = tmp_path / "in"
+        src.mkdir()
+        for i in range(2):
+            image_io.imwrite(src / f"img{i}.png", np.full((64, 64, 3), 120, np.uint8))
+        scrubbed: list[Path] = []
+
+        class FakeEngine:
+            def remove_watermark(self, **kwargs):
+                scrubbed.append(kwargs["image_path"])
+                image_io.imwrite(kwargs["output_path"], np.full((64, 64, 3), 120, np.uint8))
+
+        monkeypatch.setattr(invisible_engine, "is_available", lambda: True)
+        events: list[tuple[str, str]] = []
+
+        summary = api.remove_batch(
+            src,
+            tmp_path / "out",
+            mode=mode,
+            backend="cv2",
+            force=force,
+            engine=FakeEngine(),
+            progress=lambda _p, stage, detail: events.append((stage, detail)),
+        )
+
+        assert summary.processed == 2
+        assert ("invisible", expected) in events
+        assert len(scrubbed) == (2 if force else 0)
 
 
 class TestSourceEvidenceHolder:

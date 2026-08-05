@@ -485,6 +485,26 @@ class TestAllCommand:
         assert result.exit_code == 0, result.output
         assert mock_cls.call_args.kwargs["cpu_offload"] is True
 
+    def test_all_controlnet_scale_flows_to_engine(self, runner, sample_png, tmp_path):
+        """The click option is `--controlnet-scale`, the engine parameter is
+        `controlnet_conditioning_scale`, and `InvisibleOptions` now uses the engine's
+        spelling so the translation happens once. Pin the value, not just the name:
+        hardcoding the constant in `_run_invisible` passed the whole suite before."""
+        mock_cls, _mock_engine = _mock_invisible_engine()
+        output = tmp_path / "clean.png"
+        with (
+            patch("remove_ai_watermarks.cli.InvisibleEngine", mock_cls, create=True),
+            patch("remove_ai_watermarks.invisible_engine.InvisibleEngine", mock_cls),
+            patch("remove_ai_watermarks.invisible_engine.is_available", return_value=True),
+        ):
+            result = runner.invoke(
+                main,
+                ["all", str(sample_png), "-o", str(output), "--controlnet-scale", "0.65", "--force"],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert mock_cls.call_args.kwargs["controlnet_conditioning_scale"] == pytest.approx(0.65)
+
     def test_all_nonexistent_file(self, runner):
         result = runner.invoke(main, ["all", "/nonexistent/file.png"])
         assert result.exit_code != 0
@@ -801,6 +821,26 @@ class TestBatchCommand:
 
         assert result.exit_code == 0, result.output
         assert mock_cls.call_args.kwargs["cpu_offload"] is True
+
+    @pytest.mark.parametrize("mode", ["invisible", "all"])
+    def test_batch_controlnet_scale_flows_to_the_cached_engine(self, runner, tmp_path, mode):
+        """`_batch_engine` is a SECOND engine-construction site: `all` builds its engine
+        inside `_run_invisible`, batch prebuilds one for the whole directory. Pinning the
+        value on the `all` path alone leaves this one free to hardcode a constant."""
+        input_dir = _make_batch_dir(tmp_path)
+        output_dir = tmp_path / "output"
+        mock_cls, _mock_engine = _mock_invisible_engine()
+        args = ["batch", str(input_dir), "-o", str(output_dir), "--mode", mode]
+        with (
+            patch("remove_ai_watermarks.cli.InvisibleEngine", mock_cls, create=True),
+            patch("remove_ai_watermarks.invisible_engine.InvisibleEngine", mock_cls),
+            patch("remove_ai_watermarks.cli.invisible_available", return_value=True, create=True),
+            patch("remove_ai_watermarks.invisible_engine.is_available", return_value=True),
+        ):
+            result = runner.invoke(main, [*args, "--controlnet-scale", "0.65", "--force"])
+
+        assert result.exit_code == 0, result.output
+        assert mock_cls.call_args.kwargs["controlnet_conditioning_scale"] == pytest.approx(0.65)
 
     def test_batch_invisible_skips_no_signal_and_copies_through(self, runner, tmp_path):
         """P0#5: batch invisible mode skips the scrub on signal-less images (no

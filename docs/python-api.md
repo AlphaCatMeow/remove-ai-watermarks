@@ -106,10 +106,16 @@ from remove_ai_watermarks import InvisibleOptions
 raiw.remove_all(
     "input.png",
     "clean.png",
-    invisible=InvisibleOptions(strength=0.35, force=True),
+    invisible=InvisibleOptions(strength=0.35),
+    force=True,
     progress=print,
 )
 ```
+
+`InvisibleOptions` carries only what `InvisibleEngine` itself takes, and uses the
+engine's own parameter names and defaults. `force`, which decides whether the
+engine runs at all, is a parameter of `remove_all` and `remove_batch` alongside
+`backend` and `sensitivity`.
 
 If AI metadata survives the strip, `remove_all` raises `MetadataStripIncomplete`
 **before** writing anything: an AI-readable output is worse than no output.
