@@ -119,4 +119,12 @@ needing an oracle carrier: build a clip from a tracked fixture with ffmpeg, run 
 engine before and after, and require an identical output sha256. Keep the generated
 media outside the repository.
 
+Frame sampling is compared as `timestamp + 1e-9 >= next_sample_time`, so mutating
+that `>=` to `>` changes nothing and a green suite proves nothing. Mutate the phase
+or the period instead -- starting the accumulator half a period late shifts the
+selection by one frame while keeping the count identical, which is the drift a
+frame-count check cannot see and what
+`test_pairing_follows_the_engine_sampling_rule_not_just_the_frame_count` exists to
+catch.
+
 Environment setup, dependency recovery, CI behavior, and fixture policy: [`../../docs/development.md`](../../docs/development.md).

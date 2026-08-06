@@ -83,3 +83,4 @@ jobs:
         run: >-
           uv run pytest -vv -o faulthandler_timeout=60
           tests/test_video.py::TestVideoVisibleFullClip
+          tests/test_video_fidelity_probe.py

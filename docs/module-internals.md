@@ -348,6 +348,13 @@ Regression coverage:
   properties, metadata stripping, and a large-`mdat` metadata case that rejects
   any full-source `read_bytes()` call. CI installs ffmpeg explicitly for this
   test so the integration gate cannot silently skip.
+- [`test_video_fidelity_probe.py`](../tests/test_video_fidelity_probe.py), which
+  builds its clips from solid-color frames whose index is recoverable from the
+  pixels, so a decimation that keeps the frame count but shifts the phase scores
+  far worse instead of passing unnoticed. It also asserts that the probe binds the
+  engine's sampler rather than a copy of it, and it holds the suite's only
+  constraint on that sampler's phase. Nothing here needs a model, but it does need
+  ffmpeg, so CI runs this file in the same job that installs it.
 
 ## Metadata and provenance
 
