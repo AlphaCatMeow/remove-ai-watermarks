@@ -1,6 +1,6 @@
 [project]
 name = "remove-ai-watermarks"
-version = "0.25.0"
+version = "0.26.0"
 description = "AI watermark remover for visible, invisible, and provenance marks in images and video"
 readme = "README.md"
 requires-python = ">=3.10.1"
@@ -37,6 +37,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Multimedia :: Graphics",
     "Topic :: Multimedia :: Graphics :: Graphics Conversion",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",

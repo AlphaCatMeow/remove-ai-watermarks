@@ -29,7 +29,9 @@ if TYPE_CHECKING:
     from typing import BinaryIO
 
 _C2paReader: Any = None
+_C2paError: Any = None
 with contextlib.suppress(Exception):
+    from c2pa import C2paError as _C2paError  # pyright: ignore[reportMissingTypeStubs]
     from c2pa import Reader as _C2paReader  # pyright: ignore[reportMissingTypeStubs]
 
 _C2PA_READER_AVAILABLE = _C2paReader is not None
@@ -48,10 +50,22 @@ def reader_available() -> bool:
 
 
 def _manifest_json_uncached(path: str) -> str | None:
+    """The manifest store as JSON, or None when this file has no readable manifest.
+
+    Two outcomes are routine and stay at debug: a file with no manifest (``try_create``
+    returns None) and a container the reader does not support. ANY other failure is
+    logged at warning, because the caller cannot tell the difference from the return
+    value and the consequence is severe: the verdict silently falls back to the raw
+    byte scan and can lose a high-confidence signal. The log line preserves the
+    diagnostic context needed to investigate an intermittent reader failure.
+    """
     try:
         reader = _C2paReader.try_create(path)
+    except _C2paError.NotSupported as error:
+        logger.debug("C2PA reader does not support %s: %s", path, error)
+        return None
     except Exception as error:
-        logger.debug("C2PA reader rejected %s: %s", path, error)
+        logger.warning("C2PA reader failed to open %s: %s: %s", path, type(error).__name__, error)
         return None
     if reader is None:
         return None
@@ -59,7 +73,9 @@ def _manifest_json_uncached(path: str) -> str | None:
         with reader:
             return cast("str", reader.json())
     except Exception as error:
-        logger.debug("C2PA reader could not serialize %s: %s", path, error)
+        # The reader opened the file, so a manifest is there; failing to serialize it
+        # is never routine.
+        logger.warning("C2PA reader could not serialize %s: %s: %s", path, type(error).__name__, error)
         return None
 
 

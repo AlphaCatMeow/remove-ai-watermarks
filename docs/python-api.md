@@ -182,8 +182,61 @@ evidence = extract_provenance_evidence(Path("input.png"))
 report = identify_from_evidence(evidence)
 ```
 
-If metadata was collected by another component, normalize its nested record
-without reopening the original file:
+### Collect once, judge elsewhere
+
+`collect_metadata_record` splits the two halves apart: it is the only step that
+touches the file, and it returns a JSON-serializable record the verdict can be
+built from on another machine, in another process, or later.
+
+```python
+import json
+
+from remove_ai_watermarks.identify import identify_metadata_record
+from remove_ai_watermarks.metadata_record import collect_metadata_record
+
+record = collect_metadata_record(Path("input.png"), schema_version=1)   # reads the file
+blob = json.dumps(record)                             # ship it anywhere
+
+report = identify_metadata_record(json.loads(blob), path=Path("input.png"))  # reads nothing
+payload = report.to_dict(schema_version=1)            # versioned JSON contract
+```
+
+The collection record has `record_type="provenance_metadata"`,
+`schema_version=1`, and a `status`. A vanished or unreadable source produces an
+`error` record with structured `issues`; `identify_metadata_record` rejects that
+record instead of turning a collection failure into an unknown-image verdict.
+Unknown schema versions, non-integer aliases, and native records without a
+`complete` collection status are rejected explicitly.
+
+The verdict is the same one `identify(path, check_visible=False,
+check_invisible=False)` returns for that file. That equality is the record's whole
+contract and is verified over the tracked provenance fixtures and a separate local
+evaluation corpus. `ProvenanceReport.to_dict()` is the stable service boundary: it
+adds a `schema_version`, contains only JSON-safe values, and deliberately omits the
+local source path.
+
+Package and transport versions evolve independently. Long-lived consumers should
+request the schema they implement, as above, instead of assuming the installed
+package's latest schema. Within schema 1, existing fields, types, meanings,
+`signals[].name` values, and `watermarks[]` labels remain compatible; releases may
+add fields that consumers must ignore. A breaking change requires a new schema while
+the schema 1 serializer remains available for rolling upgrades. Asking a release for
+an unsupported schema raises `ValueError` rather than silently returning another
+shape.
+
+A record carries metadata regions, not the primary coded-pixel stream: marker
+segments before the JPEG scan, every PNG chunk except `IDAT`, RIFF chunks except the
+coded image, the ISOBMFF provenance boxes, the container's trailer, the parsed EXIF tags the
+verdict reads by name, PIL's info mapping, and the C2PA manifest store. Record size
+is bounded by those metadata regions and trailers; images with large embedded
+manifests naturally produce larger records.
+
+The `path` argument is metadata: it labels the report and is never opened by
+either function, so a record collected elsewhere can be judged against a path that
+does not exist locally.
+
+If metadata was collected by another component instead, normalize its nested
+record the same way:
 
 ```python
 from remove_ai_watermarks.identify import (
@@ -199,12 +252,53 @@ evidence = evidence_from_metadata_record(record, path=Path("input.png"))
 report = identify_from_evidence(evidence)
 ```
 
-The normalizer recursively preserves text and byte values. It also decodes
+Unversioned third-party records are normalized recursively for compatibility. The
+normalizer preserves text and byte values. It also decodes
 strings prefixed with `hex:` and fields named `base64` or ending in
-`_base64`. Diagnostic values under `error` and `kind` are ignored because they
-describe the collector rather than the source file. Pass a C2PA manifest-store
-dictionary in `record["c2pa_store"]`, or through the explicit
+`_base64`. Diagnostic, transport, timing, hash, provenance-result, and pixel-result
+subtrees are ignored because they describe the collector or a derived result rather
+than the source file. A versioned portable record is stricter still: only
+`metadata_base64`, `tail_base64`, `pil`, `exif`, and `c2pa_store` are accepted as
+source evidence. Other `record_type` values are rejected, so do not pass a broad
+forensic inspection record to this API. Pass a C2PA manifest-store dictionary in
+`record["c2pa_store"]`, or through the explicit
 `c2pa_manifest_store` argument.
+
+### Broad metadata inspection
+
+`collect_forensic_metadata` provides the wide metadata-only record used by forensic
+inspection and migration adapters. It preserves hashes and timestamps, full EXIF and
+IPTC, C2PA, container inventories, bounded raw metadata payloads, and embedded
+thumbnail forensics. It does not calculate a provenance verdict or pixel statistics.
+
+```python
+from remove_ai_watermarks.forensic_metadata import collect_forensic_metadata
+
+record = collect_forensic_metadata(Path("input.png"), schema_version=1)
+assert record["record_type"] == "forensic_metadata"
+```
+
+This record is intentionally not accepted by `identify_metadata_record`. Collect the
+small strict provenance record separately and publish the resulting
+`ProvenanceReport.to_dict()` as the detector contract.
+
+### Pixel evidence
+
+`extract_pixel_evidence` decodes once and calculates the DCT, FFT, residual, ELA,
+gradient, and color families. Its versioned `to_dict()` result has a semantic
+`status`: `complete`, `partial` when an individual family failed, or `error` when the
+source could not be decoded. Transported errors contain only the exception class, so
+local paths stay in the caller's logs rather than crossing the service boundary.
+
+```python
+from remove_ai_watermarks.pixel_evidence import extract_pixel_evidence
+
+pixels = extract_pixel_evidence(Path("input.png"), artifacts=False, timings=True)
+payload = pixels.to_dict(schema_version=1)
+```
+
+Timings and spatial artifacts are opt-in. Artifacts include image-identifying data
+such as a thumbnail and perceptual hash; aggregate feature families do not.
 
 `identify_from_evidence` does not reopen the source file by default: it evaluates
 metadata only, and registered visible marks and pixel-backed invisible watermarks

@@ -22,6 +22,7 @@ from __future__ import annotations
 import base64
 import itertools
 import logging
+import struct
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
@@ -30,6 +31,8 @@ from remove_ai_watermarks._internal.c2pa import (
     cbor_text_after,
     extract_c2pa_info,
     soft_binding_vendors_in,
+    synthid_vendors_in,
+    synthid_verdict,
 )
 from remove_ai_watermarks._internal.constants import (
     C2PA_AI_TOOLS,
@@ -37,6 +40,7 @@ from remove_ai_watermarks._internal.constants import (
     C2PA_IDENTITY_AI_ORGS,
     C2PA_ISSUERS,
 )
+from remove_ai_watermarks._internal.schema import require_schema_version
 from remove_ai_watermarks.metadata import (
     AI_METADATA_KEYS,
     AIGC_MARKERS,
@@ -69,6 +73,10 @@ if TYPE_CHECKING:
     from remove_ai_watermarks.watermark_registry import MarkDetection
 
 logger = logging.getLogger(__name__)
+
+# Stable JSON contract for callers that pass a verdict between services. Bump this
+# only for a breaking shape or semantic change; adding optional fields is compatible.
+PROVENANCE_REPORT_SCHEMA_VERSION = 1
 
 # How much of a non-PNG container to binary-scan for the C2PA issuer.
 _SCAN_BYTES = 1024 * 1024
@@ -169,7 +177,32 @@ def _external_metadata(value: Any) -> tuple[list[tuple[str, Any]], bytes]:
     """Index nested metadata and recover common encoded binary values in one pass."""
     pairs: list[tuple[str, Any]] = []
     parts: list[bytes] = []
-    diagnostic_keys = {"error", "kind"}
+    diagnostic_keys = {
+        "artifacts",
+        "birthtime",
+        "color",
+        "content_format",
+        "dct",
+        "ela",
+        "error",
+        "extension",
+        "fft",
+        "file",
+        "filename",
+        "full",
+        "gradient",
+        "kind",
+        "mtime",
+        "name",
+        "noise",
+        "path",
+        "pixel",
+        "provenance",
+        "sha256",
+        "signals",
+        "size_bytes",
+        "timing_ms",
+    }
 
     def visit(item: Any) -> None:
         if isinstance(item, dict):
@@ -177,7 +210,6 @@ def _external_metadata(value: Any) -> tuple[list[tuple[str, Any]], bytes]:
             for key, nested in mapping.items():
                 key_text = str(key)
                 pairs.append((key_text, nested))
-                parts.append(key_text.encode("utf-8", "replace"))
                 if key_text.lower() in diagnostic_keys:
                     continue
                 if isinstance(nested, str) and (key_text == "base64" or key_text.endswith("_base64")):
@@ -241,17 +273,69 @@ def _external_exif_generator(pairs: list[tuple[str, Any]], scan: bytes) -> str |
     return generator_from_metadata(candidates, scan)
 
 
+def _metadata_source_kind(info: dict[str, Any], scan: bytes) -> str | None:
+    """Normalize the source type wherever it is carried: C2PA or IPTC/XMP.
+
+    A composite marker contains ``TrainedAlgorithmicMedia`` as a substring, so it
+    is removed before looking for a standalone full-generation marker. When a file
+    genuinely carries both kinds, full generation wins.
+    """
+    structured = info.get("ai_source_kind")
+    without_composites = scan.replace(b"compositeWithTrainedAlgorithmicMedia", b"").replace(b"compositeSynthetic", b"")
+    generated = structured == "generated" or any(
+        marker in without_composites for marker in (b"trainedAlgorithmicMedia", b"TrainedAlgorithmicMedia")
+    )
+    if generated:
+        return "generated"
+    if structured == "enhanced" or any(
+        marker in scan for marker in (b"compositeWithTrainedAlgorithmicMedia", b"compositeSynthetic")
+    ):
+        return "enhanced"
+    return None
+
+
 def evidence_from_metadata_record(
     record: dict[str, Any], *, path: Path, c2pa_manifest_store: str | dict[str, Any] | None = None
 ) -> ProvenanceEvidence:
     """Normalize an externally collected metadata record into provenance evidence.
 
-    The record may contain arbitrary nested dictionaries and lists. Text, bytes,
-    hexadecimal values prefixed with ``hex:``, and fields named ``base64`` or
-    ending in ``_base64`` are included in the shared byte scan. No source file is
-    opened.
+    Unversioned external records may contain arbitrary nested dictionaries and
+    lists. Versioned native records accept only the source-derived fields emitted by
+    ``collect_metadata_record``; other native record types and unknown schema
+    versions are rejected. No source file is opened.
     """
-    pairs, scan = _external_metadata(record)
+    from remove_ai_watermarks.metadata_record import METADATA_RECORD_SCHEMA_VERSION, METADATA_RECORD_TYPE
+
+    # Records produced by ``collect_metadata_record`` are a versioned transport
+    # contract. Only their source-derived fields are evidence: the filename,
+    # container label and schema bookkeeping describe the collector and must never
+    # become detector input. Shape-detect the pre-versioned form as well so records
+    # emitted by 0.26 remain safe and readable.
+    record_type = record.get("record_type")
+    if record_type not in (None, METADATA_RECORD_TYPE):
+        raise ValueError(f"Unsupported metadata record type: {record_type!r}")
+    if record_type == METADATA_RECORD_TYPE:
+        require_schema_version(
+            record.get("schema_version"),
+            contract="provenance metadata",
+            supported=(METADATA_RECORD_SCHEMA_VERSION,),
+        )
+        status = record.get("status")
+        if status == "error":
+            raise ValueError("Provenance metadata collection failed")
+        if status != "complete":
+            raise ValueError(f"Unsupported provenance metadata collection status: {status!r}")
+    is_portable_record = record_type == METADATA_RECORD_TYPE or {
+        "container",
+        "metadata_base64",
+        "tail_base64",
+    }.issubset(record)
+    evidence_record = (
+        {key: record[key] for key in ("metadata_base64", "tail_base64", "pil", "exif") if key in record}
+        if is_portable_record
+        else record
+    )
+    pairs, scan = _external_metadata(evidence_record)
     store = c2pa_manifest_store
     if store is None:
         candidate = record.get("c2pa_store")
@@ -358,13 +442,13 @@ class ProvenanceReport:
     is_ai_generated: bool | None  # True / False is never asserted; None = unknown
     platform: str | None
     confidence: str  # "high" | "medium" | "none"
-    # Coarse AI-origin kind from the C2PA digital-source-type, so a caller can
-    # branch on full generation vs an AI-touched real photo:
+    # Coarse AI-origin kind from a C2PA or standalone IPTC/XMP digital-source-type,
+    # so a caller can branch on full generation vs an AI-touched real photo:
     #   "generated" -- digitalSourceType trainedAlgorithmicMedia (fully AI).
     #   "enhanced"  -- compositeWithTrainedAlgorithmicMedia (real content with an
     #                  AI-composited region; scrub the AI region, keep the photo).
-    #   None        -- no C2PA AI source-type (verdict, if AI, came from another
-    #                  signal: IPTC, AIGC, local gen params, xAI, ...).
+    #   None        -- no AI digital-source-type (verdict, if AI, came from another
+    #                  signal: AIGC, local gen params, xAI, ...).
     ai_source_kind: str | None = None
     # True when the AI verdict rests on a metadata or embedded-invisible signal
     # (C2PA AI issuer / SynthID proxy, IPTC, AIGC, local gen params, EXIF/xAI, or
@@ -382,6 +466,42 @@ class ProvenanceReport:
     # AI-generation markers). Non-empty means the provenance is internally
     # inconsistent -- a strong tell of spoofed, transplanted, or laundered metadata.
     integrity_clashes: list[str] = field(default_factory=list[str])
+
+    def to_dict(
+        self,
+        *,
+        schema_version: int = PROVENANCE_REPORT_SCHEMA_VERSION,
+    ) -> dict[str, Any]:
+        """Return the versioned, JSON-safe verdict contract.
+
+        ``path`` is deliberately omitted. It is extraction context, not part of the
+        verdict, and local filesystem paths should not cross a service boundary.
+        Request an explicit schema for a long-lived transport consumer.
+        """
+        schema_version = require_schema_version(
+            schema_version,
+            contract="provenance report",
+            supported=(1,),
+        )
+        return {
+            "schema_version": schema_version,
+            "is_ai_generated": self.is_ai_generated,
+            "platform": self.platform,
+            "confidence": self.confidence,
+            "ai_source_kind": self.ai_source_kind,
+            "ai_from_metadata": self.ai_from_metadata,
+            "watermarks": list(self.watermarks),
+            "signals": [
+                {
+                    "name": signal.name,
+                    "detail": signal.detail,
+                    "confidence": signal.confidence,
+                }
+                for signal in self.signals
+            ],
+            "caveats": list(self.caveats),
+            "integrity_clashes": list(self.integrity_clashes),
+        }
 
 
 def extract_provenance_evidence(image_path: Path) -> ProvenanceEvidence:
@@ -445,6 +565,72 @@ _DEVICE_C2PA_PLATFORM: tuple[tuple[bytes, str], ...] = (
     # of unrelated manifests (e.g. OpenAI), so the bare token mis-attributes.
     (b"Truepic_Lens", "Truepic Lens (verified capture)"),
 )
+
+
+def _metadata_region(head: bytes) -> bytes:
+    """The part of the scan buffer that can hold metadata, with the coded pixels cut out.
+
+    The vendor registries are matched as raw substrings, and the shortest tokens are
+    four and five bytes (``Bria``, ``Adobe``, ``Canva``). Over a megabyte of compressed
+    pixel data a four-byte sequence appears by chance about once in three thousand
+    images -- measured: ``Bria`` matched inside the entropy-coded scan of 4 of 14,707
+    corpus JPEGs, in none of which the manifest names Bria. That is not a cosmetic
+    mislabel, because the Bria entry carries ``asserts_ai``: a chance match can declare
+    an image AI-generated.
+
+    ``c2pa_marker_in`` already refuses a bare ``c2pa`` substring for the same reason.
+    This is the same defence for the registries: they see the container's metadata and
+    not its pixels.
+
+    JPEG keeps the marker segments before the entropy-coded scan, PNG every chunk but
+    ``IDAT``, and both keep the trailer past the end marker. Anything ``scan_head``
+    APPENDED past the window is metadata by construction (late chunks, boxes, decoder
+    text), so it is always kept and never walked -- walking it is what produced 11 MB
+    records and a phantom AIGC signal in the record collector.
+
+    Trimming happens only when the container actually parses: a JPEG whose marker walk
+    reaches the coded scan, a PNG whose chunk walk reaches ``IDAT``. Anything else --
+    a malformed container, a synthetic blob, a format with no walker here -- is
+    returned whole. Cutting a buffer this function did not understand would drop real
+    evidence to avoid a chance match, which is the wrong way round.
+    """
+    raw, appended = head[:_SCAN_BYTES], head[_SCAN_BYTES:]
+    if raw[:2] == b"\xff\xd8":
+        index, size = 2, len(raw)
+        while index + 1 < size:
+            if raw[index] != 0xFF:
+                return head  # not a marker boundary: the walk is lost, keep everything
+            marker = raw[index + 1]
+            if marker in (0xDA, 0xD9):  # SOS / EOI: the coded scan follows
+                end = raw.rfind(b"\xff\xd9")
+                return raw[:index] + (raw[end + 2 :] if end >= index else b"") + appended
+            if 0xD0 <= marker <= 0xD7 or marker == 0x01:
+                index += 2
+                continue
+            if index + 4 > size:
+                break
+            length = int.from_bytes(raw[index + 2 : index + 4], "big")
+            if length < 2 or index + 2 + length > size:
+                break
+            index += 2 + length
+        return head  # ran out of buffer before the scan: nothing was skipped anyway
+    if raw[:8] == b"\x89PNG\r\n\x1a\n":
+        out = bytearray()
+        position, size, saw_idat = 8, len(raw), False
+        while position + 8 <= size:
+            (length,) = struct.unpack(">I", raw[position : position + 4])
+            chunk_type = raw[position + 4 : position + 8]
+            start = position + 8
+            if chunk_type == b"IDAT":
+                saw_idat = True
+            else:
+                out += chunk_type + raw[start : start + min(length, size - start)]
+            position = start + length + 4
+            if chunk_type == b"IEND":
+                out += raw[position:]
+                break
+        return bytes(out) + appended if saw_idat else head
+    return head
 
 
 def _first_token_match(head: bytes, table: tuple[tuple[bytes, str], ...]) -> str | None:
@@ -883,23 +1069,22 @@ def _identify_from_evidence(
     # score, the latter can be a by-product of our own SDXL removal pass, so
     # neither is a trustworthy "the generator stamped its identity" claim.
     ai_vendor_claims: dict[str, str] = {}
-    camera_label = _device_platform(head)
-    signer_label = _signer_platform(head)
+    # The vendor registries match short raw substrings, so they read the container's
+    # metadata rather than its pixels -- see `_metadata_region`. Every other check
+    # below keeps the full buffer: their markers are long and distinctive.
+    region = _metadata_region(head)
+    camera_label = _device_platform(region)
+    signer_label = _signer_platform(region)
 
     # ── C2PA Content Credentials ────────────────────────────────────
     has_c2pa = bool(info) or c2pa_marker_in(head)
-    issuers = [info["issuer"]] if info.get("issuer") else _issuers_in(head)
+    issuers = [info["issuer"]] if info.get("issuer") else _issuers_in(region)
     # Full AI generation (trainedAlgorithmicMedia) vs an AI-enhanced real photo
     # (compositeWithTrainedAlgorithmicMedia). The structured kind is parsed once in
     # _internal.c2pa._populate_registry_fields (covers PNG + any container the c2pa-python
     # reader handles); fall back to a raw head scan for the non-PNG raw-blob path
     # where extract_c2pa_info returns {}. Full generation wins when both appear.
-    c2pa_source_kind = info.get("ai_source_kind")
-    if c2pa_source_kind is None:
-        if b"trainedAlgorithmicMedia" in head:
-            c2pa_source_kind = "generated"
-        elif b"compositeWithTrainedAlgorithmicMedia" in head:
-            c2pa_source_kind = "enhanced"
+    source_kind = _metadata_source_kind(info, head)
     # An identity-AI issuer (a pure-generator brand like Dreamina) asserts AI even
     # without a digitalSourceType -- some ByteDance/Dreamina manifests ship no
     # trainedAlgorithmicMedia, so the registered generator name is the only signal.
@@ -907,7 +1092,7 @@ def _identify_from_evidence(
     # does not reopen the incidental-mention problem the common-word issuers have.
     issuer_blob = " ".join(issuers)
     c2pa_identity_ai = has_c2pa and any(org in issuer_blob for org in C2PA_IDENTITY_AI_ORGS)
-    c2pa_is_ai = c2pa_source_kind is not None or c2pa_identity_ai
+    c2pa_is_ai = source_kind is not None or c2pa_identity_ai
     # Generator string (for the signal detail): structured for PNG, CBOR-scanned
     # for other containers. Best-effort -- some manifests key it as
     # `claim_generator_info` (Pixel), so this can be None even when a device is
@@ -915,7 +1100,7 @@ def _identify_from_evidence(
     generator = (
         info.get("claim_generator")
         or cbor_text_after(head, b"claim_generator")
-        or (", ".join(tools) if (tools := _ai_tools_in(head)) else None)
+        or (", ".join(tools) if (tools := _ai_tools_in(region)) else None)
     )
     # Platform: a distinctive device/camera token in the manifest wins (it is the
     # signer/producer), then an editing-app/AI-device signer (Samsung Galaxy,
@@ -950,9 +1135,24 @@ def _identify_from_evidence(
             platform = f"C2PA signer: {cloud_vendor} (cloud manifest)"
 
     # ── SynthID metadata proxy ──────────────────────────────────────
-    # get_ai_metadata already sets synthid_watermark for both PNG (caBX parser)
-    # and non-PNG (its own synthid_source fallback), so no extra scan is needed.
+    # Structured first (the PNG caBX parser and the manifest store both fill
+    # `synthid_watermark`), then the byte scan for the containers that keep the
+    # manifest where no parser reaches it.
+    #
+    # The scan lives HERE, in the verdict, and not in extraction, for the same reason
+    # `soft_binding` below does: extraction has two implementations -- one reading a
+    # file, one reading a portable record -- and a rule that lives in only one of them
+    # is a rule the other silently lacks. It did: 74 corpus images reported SynthID
+    # through `identify` and not through the record, because `get_ai_metadata`'s own
+    # fallback has no counterpart on the record side. `get_ai_metadata` keeps its copy
+    # for its own callers; the verdict no longer depends on which extractor ran.
     synthid = meta.get("synthid_watermark")
+    # The literal byte checks mirror `metadata.synthid_source` exactly rather than
+    # reusing the derived `has_c2pa` / `source_kind` above, which are broader:
+    # the file path's answer must not move.
+    trained_source = b"trainedAlgorithmicMedia" in head or b"TrainedAlgorithmicMedia" in head
+    if not synthid and trained_source and c2pa_marker_in(head) and (vendors := synthid_vendors_in(region)):
+        synthid = synthid_verdict(", ".join(vendors))
     if synthid:
         watermarks.append(f"SynthID watermark, inferred from C2PA metadata ({synthid})")
         caveats.append(_SYNTHID_CAVEAT)
@@ -964,7 +1164,7 @@ def _identify_from_evidence(
     # ── C2PA soft-binding: a named forensic/third-party watermark vendor ─
     # (Adobe TrustMark, Digimarc, Imatag, ...). Present in the manifest even when
     # the watermark itself can't be decoded; names whose watermark stamped the pixels.
-    soft_binding = meta.get("soft_binding") or (", ".join(v) if (v := soft_binding_vendors_in(head)) else None)
+    soft_binding = meta.get("soft_binding") or (", ".join(v) if (v := soft_binding_vendors_in(region)) else None)
     if soft_binding:
         signals.append(Signal("soft_binding", f"C2PA soft binding: {soft_binding}", "high"))
         watermarks.append(f"Forensic watermark soft binding ({soft_binding})")
@@ -1136,9 +1336,9 @@ def _identify_from_evidence(
         is_ai_generated=is_ai,
         platform=platform,
         confidence=confidence,
-        # Only meaningful when the AI verdict actually came from the C2PA source
-        # type; a non-C2PA AI signal (IPTC/AIGC/local gen) leaves it None.
-        ai_source_kind=c2pa_source_kind if (is_ai and has_c2pa) else None,
+        # Meaningful for the same digitalSourceType whether carried by C2PA or a
+        # standalone IPTC/XMP label. Other AI signals leave it None.
+        ai_source_kind=source_kind if (is_ai and (has_c2pa or iptc)) else None,
         ai_from_metadata=ai_from_metadata,
         watermarks=watermarks,
         signals=signals,
@@ -1168,6 +1368,16 @@ def identify_from_evidence(
         check_visible=check_visible,
         check_invisible=check_invisible,
     )
+
+
+def identify_metadata_record(record: dict[str, Any], *, path: Path) -> ProvenanceReport:
+    """Build a metadata-only verdict from a portable metadata record.
+
+    This is the service-integration entry point: the source file is never opened,
+    and callers receive the same verdict as the explicit
+    ``evidence_from_metadata_record`` / ``identify_from_evidence`` sequence.
+    """
+    return identify_from_evidence(evidence_from_metadata_record(record, path=path))
 
 
 def identify(

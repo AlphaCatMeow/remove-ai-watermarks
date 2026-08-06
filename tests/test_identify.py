@@ -113,6 +113,36 @@ class TestProvenanceEvidence:
         assert evidence.exif_generator == "NovelAI"
 
     @pytest.mark.parametrize(
+        "record",
+        [
+            {"name": "trainedAlgorithmicMedia.jpg"},
+            {"sha256": "jumb-c2pa-OpenAI-trainedAlgorithmicMedia"},
+            {"pil": {"trainedAlgorithmicMedia": "plain"}},
+            {"signals": {"provenance": {"is_ai_generated": True}}},
+            {"pixel": {"error": "trainedAlgorithmicMedia"}},
+        ],
+    )
+    def test_external_diagnostics_and_arbitrary_keys_are_not_evidence(self, tmp_path: Path, record: dict):
+        report = identify_from_evidence(evidence_from_metadata_record(record, path=tmp_path / "plain.jpg"))
+
+        assert report.is_ai_generated is None
+        assert report.signals == []
+
+    def test_external_metadata_value_is_evidence(self, tmp_path: Path):
+        record = {
+            "exif": {
+                "0th": {
+                    "ImageDescription": "digitalSourceType=trainedAlgorithmicMedia",
+                }
+            }
+        }
+
+        report = identify_from_evidence(evidence_from_metadata_record(record, path=tmp_path / "generated.jpg"))
+
+        assert report.is_ai_generated is True
+        assert report.ai_source_kind == "generated"
+
+    @pytest.mark.parametrize(
         "filename",
         [
             "chatgpt-1.png",
@@ -443,6 +473,18 @@ class TestIdentifyRealSamples:
         r = identify(p, check_visible=False, check_invisible=False)
         assert r.is_ai_generated is True
         assert r.platform == "Apple Photos (Clean Up AI edit)"
+        assert r.ai_source_kind == "enhanced"
+
+    def test_standalone_iptc_composite_synthetic_is_enhanced(self, tmp_path: Path):
+        p = tmp_path / "composite.jpg"
+        p.write_bytes(
+            b'\xff\xd8\xff\xe1<x:xmpmeta Iptc4xmpExt:DigitalSourceType="compositeSynthetic"></x:xmpmeta>\xff\xd9'
+        )
+
+        r = identify(p, check_visible=False, check_invisible=False)
+
+        assert r.is_ai_generated is True
+        assert r.ai_source_kind == "enhanced"
 
     def test_flux_bfl_c2pa_png(self):
         # flux-1.png: real Black Forest Labs FLUX.2 Playground output (signed C2PA).
@@ -1353,3 +1395,106 @@ class TestSharedPixelDecode:
             report = identify(self.SAMPLE, check_visible=True, check_invisible=False)
         assert not any(s.name.startswith("visible_") for s in report.signals)
         assert report.is_ai_generated is True  # the C2PA verdict survives the decode failure
+
+
+class TestSynthIdProxyIsDecidedInTheVerdict:
+    """The SynthID byte scan belongs to the verdict, not to extraction.
+
+    Extraction has two implementations -- one reading a file, one reading a portable
+    record -- so a rule that lives in only one of them is a rule the other silently
+    lacks. This one did: 74 corpus images reported SynthID through ``identify`` and
+    not through the record."""
+
+    # A JUMBF-wrapped manifest from a SynthID-pairing signer on AI-generated content:
+    # the exact shape `synthid_source`'s byte scan is gated on. Spliced into a real
+    # JPEG as a well-formed APP11 segment, because a malformed one is skipped by the
+    # record's structural walk and the test would compare two different inputs.
+    MANIFEST = b"jumb c2pa Google LLC trainedAlgorithmicMedia"
+
+    def _jpeg_with_manifest(self, path: Path) -> Path:
+        import numpy as np
+        from PIL import Image
+
+        Image.fromarray(np.zeros((32, 32, 3), dtype=np.uint8)).save(path, "JPEG")
+        data = path.read_bytes()
+        segment = b"\xff\xeb" + (len(self.MANIFEST) + 2).to_bytes(2, "big") + self.MANIFEST
+        path.write_bytes(data[:2] + segment + data[2:])
+        return path
+
+    def test_both_paths_infer_it_from_the_same_bytes(self, tmp_path: Path):
+        from remove_ai_watermarks.identify import identify_metadata_record
+        from remove_ai_watermarks.metadata_record import collect_metadata_record
+
+        path = self._jpeg_with_manifest(tmp_path / "gemini.jpg")
+
+        via_file = identify(path, check_visible=False, check_invisible=False)
+        via_record = identify_metadata_record(collect_metadata_record(path), path=path)
+
+        assert any("SynthID" in mark for mark in via_file.watermarks)
+        assert via_record.watermarks == via_file.watermarks
+
+    def test_it_needs_a_manifest_and_an_ai_source_type(self, tmp_path: Path):
+        """The vendor name alone is not evidence: an ordinary photo mentioning
+        "Google LLC" in EXIF must not acquire a SynthID verdict."""
+        import numpy as np
+        from PIL import Image
+
+        path = tmp_path / "photo.jpg"
+        Image.fromarray(np.zeros((32, 32, 3), dtype=np.uint8)).save(path, "JPEG")
+        data = path.read_bytes()
+        note = b"Google LLC Pixel"
+        path.write_bytes(data[:2] + b"\xff\xeb" + (len(note) + 2).to_bytes(2, "big") + note + data[2:])
+
+        report = identify(path, check_visible=False, check_invisible=False)
+
+        assert not any("SynthID" in mark for mark in report.watermarks)
+
+
+class TestRegistryScansSkipTheCodedPixels:
+    """The vendor registries match short raw substrings -- the shortest are four and
+    five bytes. Over a megabyte of compressed pixel data such a sequence turns up by
+    chance: `Bria` matched inside the entropy-coded scan of 4 of 14,707 corpus JPEGs,
+    and that entry asserts AI, so a chance match can declare an image AI-generated.
+    `c2pa_marker_in` already refuses a bare `c2pa` substring for the same reason."""
+
+    def _jpeg(self, path: Path, *, in_segment: bytes = b"", in_scan: bytes = b"") -> Path:
+        import numpy as np
+        from PIL import Image
+
+        Image.fromarray(np.zeros((32, 32, 3), dtype=np.uint8)).save(path, "JPEG")
+        data = path.read_bytes()
+        if in_segment:
+            payload = b"jumb c2pa trainedAlgorithmicMedia " + in_segment
+            data = data[:2] + b"\xff\xeb" + (len(payload) + 2).to_bytes(2, "big") + payload + data[2:]
+        if in_scan:
+            # After SOS, i.e. inside the entropy-coded scan the walk skips.
+            sos = data.index(b"\xff\xda")
+            data = data[: sos + 16] + in_scan + data[sos + 16 :]
+        path.write_bytes(data)
+        return path
+
+    def test_a_token_in_a_marker_segment_is_attributed(self, tmp_path: Path):
+        from remove_ai_watermarks.identify import _issuers_in, _metadata_region
+        from remove_ai_watermarks.metadata import scan_head
+
+        path = self._jpeg(tmp_path / "signed.jpg", in_segment=b"Bria")
+
+        assert _issuers_in(_metadata_region(scan_head(path))) == ["Bria Artificial Intelligence"]
+
+    def test_a_token_in_the_coded_scan_is_not(self, tmp_path: Path):
+        from remove_ai_watermarks.identify import _issuers_in, _metadata_region
+        from remove_ai_watermarks.metadata import scan_head
+
+        path = self._jpeg(tmp_path / "chance.jpg", in_segment=b"OpenAI", in_scan=b"Bria")
+        region = _metadata_region(scan_head(path))
+
+        assert _issuers_in(region) == ["OpenAI"]
+
+    def test_a_container_that_does_not_parse_is_left_whole(self, tmp_path: Path):
+        """Cutting a buffer the walk did not understand would drop real evidence to
+        avoid a chance match, which is the wrong way round."""
+        from remove_ai_watermarks.identify import _metadata_region
+
+        blob = b"\xff\xd8" + b"not really a jpeg, no valid marker chain here" * 4
+
+        assert _metadata_region(blob) == blob

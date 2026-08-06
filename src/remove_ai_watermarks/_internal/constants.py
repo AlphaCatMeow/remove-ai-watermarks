@@ -20,6 +20,9 @@ AI_KEYWORDS = _tokens(
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 C2PA_CHUNK_TYPE = b"caBX"
+PNG_METADATA_CHUNKS = frozenset({b"tEXt", b"iTXt", b"zTXt", b"eXIf", b"iCCP"})
+RIFF_METADATA_CHUNKS = frozenset({b"EXIF", b"XMP ", b"ICCP", b"C2PA"})
+RIFF_CODED_IMAGE_CHUNKS = frozenset({b"VP8 ", b"VP8L", b"ALPH", b"ANMF"})
 C2PA_SIGNATURES = tuple(
     token.encode() for token in _tokens("c2pa|C2PA|jumb|jumd|JUMBF|jumbf|cbor|contentcreds|digid|assertions|manifest")
 )

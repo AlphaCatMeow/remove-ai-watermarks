@@ -64,7 +64,7 @@ _AI_LABEL_MARKERS: tuple[bytes, ...] = AIGC_MARKERS + IPTC_AI_MARKERS + IPTC_AI_
 # blanked in place (see ``blank_ai_xmp_packets``).
 _XMP_PACKET_RE = re.compile(rb"<\?xpacket begin=.*?<\?xpacket end=[^>]*?\?>", re.DOTALL)
 _STREAM_COPY_BYTES = 1024 * 1024
-_STREAM_SCAN_BYTES = 4 * 1024 * 1024
+STREAM_SCAN_BYTES = 4 * 1024 * 1024
 
 
 # TC260-PG-20257A stores an MP4/MOV label as an ``AIGC`` key in
@@ -133,7 +133,7 @@ def _read_box_header(
     return end, box_type, payload_off
 
 
-def _iter_file_boxes(
+def iter_file_boxes(
     stream: BinaryIO,
     start: int,
     end: int,
@@ -193,17 +193,17 @@ def _tc260_aigc_regions(
     Each tuple is ``(key_start, key_end, value_start, value_end, value)``.
     """
     regions: list[tuple[int, int, int, int, bytes]] = []
-    for _moov_start, moov_end, moov_type, moov_payload in _iter_file_boxes(stream, 0, file_size):
+    for _moov_start, moov_end, moov_type, moov_payload in iter_file_boxes(stream, 0, file_size):
         if moov_type != b"moov":
             continue
-        for _udta_start, udta_end, udta_type, udta_payload in _iter_file_boxes(
+        for _udta_start, udta_end, udta_type, udta_payload in iter_file_boxes(
             stream,
             moov_payload,
             moov_end,
         ):
             if udta_type != b"udta":
                 continue
-            for _meta_start, meta_end, meta_type, meta_payload in _iter_file_boxes(
+            for _meta_start, meta_end, meta_type, meta_payload in iter_file_boxes(
                 stream,
                 udta_payload,
                 udta_end,
@@ -212,7 +212,7 @@ def _tc260_aigc_regions(
                     continue
                 keys: dict[int, tuple[int, int]] = {}
                 ilst_boxes: list[tuple[int, int]] = []
-                for _child_start, child_end, child_type, child_payload in _iter_file_boxes(
+                for _child_start, child_end, child_type, child_payload in iter_file_boxes(
                     stream,
                     meta_payload + 4,
                     meta_end,
@@ -224,7 +224,7 @@ def _tc260_aigc_regions(
                 if not keys:
                     continue
                 for ilst_payload, ilst_end in ilst_boxes:
-                    for _item_start, item_end, item_type, item_payload in _iter_file_boxes(
+                    for _item_start, item_end, item_type, item_payload in iter_file_boxes(
                         stream,
                         ilst_payload,
                         ilst_end,
@@ -233,7 +233,7 @@ def _tc260_aigc_regions(
                         key_span = keys.get(index)
                         if key_span is None:
                             continue
-                        for _data_start, data_end, data_type, data_payload in _iter_file_boxes(
+                        for _data_start, data_end, data_type, data_payload in iter_file_boxes(
                             stream,
                             item_payload,
                             item_end,
@@ -425,7 +425,7 @@ def strip_isobmff_media_file(
     source: str | Path,
     output: str | Path,
     *,
-    max_box_scan: int = _STREAM_SCAN_BYTES,
+    max_box_scan: int = STREAM_SCAN_BYTES,
 ) -> tuple[int, int]:
     """Stream-copy an MP4/MOV/M4A while removing supported AI metadata.
 

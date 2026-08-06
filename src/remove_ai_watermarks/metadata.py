@@ -18,6 +18,11 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
     from pathlib import Path
 
+from remove_ai_watermarks._internal.constants import (
+    PNG_METADATA_CHUNKS,
+    RIFF_METADATA_CHUNKS,
+)
+
 logger = logging.getLogger(__name__)
 
 # Smaller scan_head window for the cheap marker checks (has_ai_metadata,
@@ -236,11 +241,6 @@ def _is_ai_value(value: str) -> bool:
     return any(token in value_lower for token in AI_GENERATOR_TOKENS)
 
 
-# PNG ancillary chunks that can carry provenance metadata (XMP, EXIF, text).
-# Never IDAT -- that is the compressed pixel stream.
-_PNG_META_CHUNKS: frozenset[bytes] = frozenset({b"tEXt", b"iTXt", b"zTXt", b"eXIf", b"iCCP"})
-
-
 def _png_late_metadata(image_path: Path, window: int) -> bytes:
     """Payloads of PNG metadata chunks that start *beyond* the first ``window``
     bytes, found by seeking past the (large) ``IDAT`` pixel stream.
@@ -272,7 +272,7 @@ def _png_late_metadata(image_path: Path, window: int) -> bytes:
                 # Clamp the attacker-controlled 32-bit length to the bytes that
                 # actually remain, so a malformed huge length can't allocate GBs.
                 safe_length = max(0, min(length, file_size - data_start))
-                if chunk_type in _PNG_META_CHUNKS and data_start >= window:
+                if chunk_type in PNG_METADATA_CHUNKS and data_start >= window:
                     f.seek(data_start)
                     out += f.read(safe_length)
                 # Advance by the CLAMPED length: a malformed/inflated `length` that
@@ -281,6 +281,55 @@ def _png_late_metadata(image_path: Path, window: int) -> bytes:
                 pos = data_start + safe_length + 4  # data + CRC
     except OSError as exc:
         logger.debug("PNG late-metadata scan failed on %s: %s", image_path, exc)
+        return b""
+    return bytes(out)
+
+
+def _riff_late_metadata(image_path: Path, window: int, *, max_total: int = 4 * 1024 * 1024) -> bytes:
+    """Payloads of RIFF metadata chunks that start *beyond* the first ``window``
+    bytes, found by stepping over the (large) coded-image chunk.
+
+    The WebP layout puts ``XMP ``/``EXIF`` AFTER the pixels, so a fixed read can stop
+    before an IPTC or C2PA AI label. This is the RIFF analogue of
+    :func:`_png_late_metadata`; it returns only chunks past ``window`` so bytes
+    already in the head are not duplicated, and empty when there are none.
+
+    ``max_total`` caps what a metadata scan can pull into memory, the same ceiling
+    ``isobmff.scan_c2pa_region`` applies. Clamping each chunk to the bytes that remain
+    is not enough on its own: a corrupt or crafted file can declare one ``XMP `` chunk
+    spanning most of itself, and this runs on the memoized verdict path for images from
+    arbitrary sources. A label that needs more than 4 MB of XMP does not exist.
+    """
+    out = bytearray()
+    try:
+        with open(image_path, "rb") as f:
+            if f.read(4) != b"RIFF":
+                return b""
+            f.seek(0, 2)
+            file_size = f.tell()
+            f.seek(4)
+            declared_size = f.read(4)
+            if len(declared_size) < 4:
+                return b""
+            container_end = min(file_size, 8 + struct.unpack("<I", declared_size)[0])
+            position = 12  # 'RIFF' + size + form type
+            while position + 8 <= container_end and len(out) < max_total:
+                f.seek(position)
+                header = f.read(8)
+                if len(header) < 8:
+                    break
+                chunk_type = header[:4]
+                (length,) = struct.unpack("<I", header[4:8])
+                start = position + 8
+                # Clamp to what remains: a malformed 32-bit length must not push the
+                # walk past EOF and abandon a genuine label chunk after it.
+                safe_length = max(0, min(length, container_end - start))
+                if chunk_type in RIFF_METADATA_CHUNKS and start >= window:
+                    f.seek(start)
+                    out += f.read(min(safe_length, max_total - len(out)))
+                position = start + safe_length + (safe_length & 1)  # chunks are word-aligned
+    except OSError as exc:
+        logger.debug("RIFF late-metadata scan failed on %s: %s", image_path, exc)
         return b""
     return bytes(out)
 
@@ -306,11 +355,16 @@ def scan_head(image_path: Path, size: int = 1024 * 1024) -> bytes:
     past large boxes like ``mdat``) and PNG ``tEXt`` / ``iTXt`` / ``eXIf`` chunks
     (seeking past ``IDAT``).
 
+    A file at least ``size`` bytes long additionally gets the metadata text its
+    decoder can reach but a raw read cannot (:func:`_decoder_visible_text`): a
+    compressed PNG ``zTXt`` packet, or a chunk past the window in a container with no
+    late-chunk reader here. A file that fits inside ``size`` is exactly
+    ``f.read(size)``, since the raw read already holds every byte.
+
     This is the shared input for every C2PA / AIGC / IPTC byte scan. The
     extensions catch a manifest or XMP packet placed AFTER the media data -- a
     non-faststart MP4 manifest, or a PNG XMP packet appended after the pixels --
-    which a fixed first-MB read would miss. For other inputs, and for files that
-    fit within ``size``, it is exactly ``f.read(size)`` -- behavior-neutral.
+    which a fixed first-MB read would miss.
 
     The result is memoized per (path, size, mtime): one ``identify``/``get_ai_metadata``
     call fans out to ~8 byte-scan detectors that each call this on the same file, so
@@ -347,7 +401,61 @@ def _scan_head_impl(image_path: Path, size: int) -> bytes:
         # len(head) == size means the file is at least `size` bytes, so metadata
         # chunks may lie beyond the window; otherwise the whole PNG is in `head`.
         head += _png_late_metadata(image_path, size)
+    elif head[:4] == b"RIFF" and head[8:12] == b"WEBP" and len(head) == size:
+        head += _riff_late_metadata(image_path, size)
+    if len(head) >= size:
+        head += _decoder_visible_text(image_path, head)
     return head
+
+
+# Text values the image decoder can reach that a raw byte read cannot. Bounded: a
+# packet larger than this is not a provenance label.
+_DECODED_TEXT_LIMIT = 512 * 1024
+# Decoder values that are binary payloads with their own readers, not metadata text.
+# An ICC profile is colour data and can run to hundreds of kilobytes; appending it
+# would bloat the buffer every later detector re-scans, for no signal.
+_DECODER_BINARY_KEYS = frozenset({"icc_profile"})
+
+
+def _decoder_visible_text(image_path: Path, head: bytes) -> bytes:
+    """Metadata text PIL can decode but the raw window does not contain.
+
+    This is the last of two layers, not the first. Metadata placed BEYOND the window
+    is the structural readers' job (``_png_late_metadata``, ``_riff_late_metadata``,
+    the ISOBMFF box walk), and they work on a file no decoder can open. What is left
+    for this one is metadata the bytes do not spell at all:
+
+    * COMPRESSED -- a PNG ``zTXt`` chunk is zlib-deflated, so an XMP packet carrying
+      a TC260 AIGC label is unreadable as bytes while PIL inflates it on open.
+
+    It stays container-agnostic on purpose: it is the net under a placement no
+    structural reader here knows about yet.
+
+    Only text ALREADY MISSING from ``head`` is appended, so the common case adds
+    nothing and no detector sees a value twice. Skipped entirely when the file fits
+    inside the window, since then the raw read already holds every byte.
+    """
+    try:
+        from PIL import Image
+
+        with Image.open(image_path) as img:
+            values = [value for key, value in img.info.items() if key not in _DECODER_BINARY_KEYS]
+    except Exception as exc:  # a container PIL cannot open: the raw scan stands alone
+        logger.debug("decoder-visible text unavailable for %s: %s", image_path, exc)
+        return b""
+
+    out = bytearray()
+    for value in values:
+        if isinstance(value, str):
+            encoded = value.encode("utf-8", "replace")
+        elif isinstance(value, bytes):
+            encoded = value
+        else:
+            continue
+        if len(encoded) > _DECODED_TEXT_LIMIT or not encoded or encoded in head:
+            continue
+        out += b"\x00" + encoded
+    return bytes(out)
 
 
 def has_ai_metadata(image_path: Path) -> bool:
@@ -1485,3 +1593,16 @@ def xai_signature(image_path: Path) -> bool:
     if key is None:
         return _xai_signature_impl(image_path)
     return _xai_signature_cached(*key)
+
+
+# ── Shared with the portable metadata record ────────────────────────
+# `metadata_record` must read exactly the windows and markers the file path reads: a
+# record built from a different window is a record whose verdict can disagree with
+# `identify` on the same image. Aliased rather than renamed because the private names
+# are load-bearing in this module's own tests and in a corpus script.
+QUICK_SCAN_BYTES = _QUICK_SCAN_BYTES
+SAMSUNG_EDITOR_MARKER = _SAMSUNG_EDITOR_MARKER
+read_file_tail = _read_file_tail
+png_late_metadata = _png_late_metadata
+riff_late_metadata = _riff_late_metadata
+exif_text = _exif_text

@@ -71,10 +71,10 @@ The source distribution uses an explicit allowlist for `/src`, `/LICENSE`,
 `[tool.hatch.build.targets.sdist]` in `pyproject.toml`. It also defensively
 excludes `/data`, `/tmp`, and `/.sc`. Keep both controls: calibration captures,
 test corpora, generated research outputs, and local session state do not belong
-in the published package archive. `.gitignore` covers `tmp/` and `.sc/`, so those
-never reach a commit, but ignore rules are not the build boundary -- hatchling may
-include untracked files, and `data/` is deliberately tracked, so the sdist exclude
-is the only control keeping it out of the archive.
+in the published package archive. Hatchling always adds the root `.gitignore` to
+the sdist, so keep its comments generic and free of local operational context.
+Ignore rules are not the build boundary: `data/` is deliberately tracked, while
+the sdist configuration keeps it and the other excluded paths out of the archive.
 
 ## Build backend
 
@@ -96,6 +96,15 @@ fine-grained token limited to the ComfyUI node repository, with Actions read and
 write access.
 
 ## Release verification
+
+Forensic transports are versioned independently from the package. Before publishing
+a change to provenance metadata, provenance reports, broad forensic metadata, or
+pixel evidence, run their schema 1 contract tests. Additive fields are compatible;
+renaming a field, changing its type or meaning, changing a signal name or watermark
+label, or removing a field requires a new output schema. Add the new serializer
+without removing schema 1 so long-lived consumers can update separately. A package
+release must never silently substitute its latest schema when a caller explicitly
+requests an older supported one.
 
 After publication, verify:
 
