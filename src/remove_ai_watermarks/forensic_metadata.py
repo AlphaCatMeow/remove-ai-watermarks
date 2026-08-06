@@ -1,78 +1,51 @@
-"""Collect all raw metadata over a dataset, for later offline analysis.
-Read-only; analysis is NOT this script's job. For every image it writes
-one JSONL record containing:
+"""Collect JSON-safe metadata and container forensics for one media file.
 
-- file basics: name, path, size in bytes, container format (content-sniffed),
-  pixel dimensions, dpi, color mode, sha256, mtime/birthtime
-- raw metadata, so nothing has to be re-scanned later:
-  full EXIF (all IFDs, decoded tag names, MakerNote in full hex), all XMP
-  packets, all PNG chunks (text chunks decoded and inflated, binary chunks
-  as base64), all JPEG APP segments (marker + full base64), WebP RIFF
-  chunks, ISOBMFF box/item inventory for HEIC/AVIF/MOV, IPTC-IIM dataset,
-  ICC profile (full base64), C2PA manifest store JSON, post-EOI/IEND
-  trailers, EXIF thumbnail (bytes + its own JPEG structure), JPEG encoder
-  structure (quant tables, progressive scan script, Huffman tables,
-  subsampling, JFIF/Adobe markers), file hashes and timestamps, macOS
-  download provenance xattrs, Live Photo content identifier. Embedded
-  binary blobs are base64'd in full with a 1 MB ceiling per blob.
-
-By default everything collected is raw bytes or a mechanical container
-decode; no verdicts, no estimates, no edit-trail interpretation. The
-optional pixel modes add a clearly-separated derived layer (aggregate
-statistics only, still no verdicts).
-
-Usage:
-    python scan_dataset.py /path/to/dataset out_prefix [--pixels|--pixels-full]
-
-Writes out_prefix.jsonl (one record per file) and out_prefix.csv (flat
-summary for quick sorting). If the prefix ends with .gz, the JSONL is
-gzip-compressed on the fly (3-5x smaller, still streamable line by line).
-
---pixels adds aggregate pixel forensics to each record (DCT histograms,
-noise/FFT/ELA/gradient/color statistics) from which the image CANNOT be
-reconstructed, plus per-section timing_ms for pipeline latency planning.
---pixels-full additionally stores the privacy-lifting artifacts (phash,
-128px thumbnail, coarse ELA/noise/FFT-phase maps). Pixel modes require
-numpy; the metadata-only mode needs no numpy.
-
-For a large dataset, parallelize by sharding the input into folders and
-running one process per shard (a multiprocessing pool hangs on macOS once
-cv2/PIL are loaded; independent processes do not):
-
-    for d in /dataset/*/; do
-        python scan_dataset.py "$d" "out_$(basename "$d")" &
-    done
-    wait
-    cat out_*.jsonl > dataset.jsonl   # or just read the shards lazily
-
-Rerunning with the same prefix resumes: files already present in the
-output are skipped, new files are appended.
-
-Reading big results: never load the JSONL whole. Stream it:
-polars.scan_ndjson (lazy), pandas.read_json(lines=True, chunksize=...),
-or a plain line loop. One line = one self-contained JSON record.
-
-Dependencies: pip install pillow piexif c2pa-python pillow-heif
-(pillow-heif is only needed for HEIC/AVIF inputs).
+The collector is deliberately evidence-only: it preserves raw EXIF, IPTC, C2PA,
+container metadata, encoder structure, hashes, timestamps, and bounded binary
+payloads without deciding whether the content is AI-generated. Provenance verdicts
+and pixel statistics are separate library stages.
 """
-
-from __future__ import annotations
 
 import base64
 import contextlib
-import csv
+import hashlib
 import io
 import json
+import os
+import plistlib
+import re
 import struct
-import sys
-import time
+import zlib
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
+import piexif
 from PIL import Image
 from PIL.IptcImagePlugin import getiptcinfo
 
-SUPPORTED = {
+from remove_ai_watermarks import image_io
+from remove_ai_watermarks._internal.constants import (
+    PNG_METADATA_CHUNKS,
+    RIFF_CODED_IMAGE_CHUNKS,
+    RIFF_METADATA_CHUNKS,
+)
+from remove_ai_watermarks._internal.isobmff import (
+    C2PA_BOX_TYPES,
+    STREAM_SCAN_BYTES,
+    iter_file_boxes,
+)
+from remove_ai_watermarks._internal.schema import require_schema_version
+from remove_ai_watermarks.metadata import QUICK_SCAN_BYTES
+from remove_ai_watermarks.metadata_record import HEAD_WINDOW
+
+__all__ = [
+    "FORENSIC_METADATA_RECORD_TYPE",
+    "FORENSIC_METADATA_SCHEMA_VERSION",
+    "SUPPORTED_EXTENSIONS",
+    "collect_forensic_metadata",
+]
+
+SUPPORTED_EXTENSIONS = {
     ".png",
     ".jpg",
     ".jpeg",
@@ -92,7 +65,16 @@ SUPPORTED = {
     ".jxl",
 }
 
+FORENSIC_METADATA_SCHEMA_VERSION = 1
+FORENSIC_METADATA_RECORD_TYPE = "forensic_metadata"
+
 _B64_CAP = 1 << 20  # 1 MB safety ceiling per embedded blob
+_TEXT_CAP = 1 << 20  # decoded PNG text ceiling per chunk
+# Preserve enough top-level ISOBMFF uuid/jumb payload data for downstream
+# provenance algorithms without requiring them to reopen the source file.
+_PROVENANCE_B64_CAP = STREAM_SCAN_BYTES
+_RAW_SCAN_HEAD = HEAD_WINDOW
+_RAW_SCAN_TAIL = QUICK_SCAN_BYTES
 
 
 def _safe_str(v: Any) -> str:
@@ -102,11 +84,10 @@ def _safe_str(v: Any) -> str:
         return repr(v)
 
 
-def _b64(b: bytes) -> str:
-    """Full base64 of a binary blob, with a 1 MB safety ceiling."""
-    if len(b) > _B64_CAP:
-        return base64.b64encode(b[:_B64_CAP]).decode("ascii") + f"...TRUNCATED({len(b)} bytes total)"
-    return base64.b64encode(b).decode("ascii")
+def _b64(b: bytes, *, cap: int = _B64_CAP) -> str:
+    """Legacy base64 value, with an explicit marker when the payload is capped."""
+    encoded = base64.b64encode(b[:cap]).decode("ascii")
+    return encoded + f"...TRUNCATED({len(b)} bytes total)" if len(b) > cap else encoded
 
 
 def _decode_exif_value(v: Any) -> Any:
@@ -118,8 +99,9 @@ def _decode_exif_value(v: Any) -> Any:
             except (UnicodeDecodeError, ValueError):
                 return f"hex:{v.hex()}"
         return f"hex:{v.hex()}"
-    if isinstance(v, (tuple, list)):
-        return [_decode_exif_value(x) for x in v]
+    if isinstance(v, tuple | list):
+        sequence = cast("list[Any] | tuple[Any, ...]", v)
+        return [_decode_exif_value(item) for item in sequence]
     return v
 
 
@@ -132,10 +114,8 @@ def read_full_exif(
     ``exif_blob`` is the PIL-exposed EXIF blob (PNG/WebP/HEIC path) so the
     caller's single Image.open is not repeated here. ``data`` is the
     already-read file bytes so piexif does not re-read the file."""
-    import piexif
-
     try:
-        exif = piexif.load(data) if data is not None else piexif.load(str(path))
+        exif: dict[str, Any] = piexif.load(data) if data is not None else piexif.load(str(path))
     except Exception:
         if not exif_blob:
             return {}, None
@@ -152,18 +132,19 @@ def read_full_exif(
             continue
         if not isinstance(tags, dict):
             continue
-        tag_names = piexif.TAGS.get(ifd, {})
-        decoded = {}
-        for t, v in tags.items():
-            name = tag_names.get(t, {}).get("name", f"tag_{t}")
-            if name == "MakerNote" and isinstance(v, bytes):
-                # Full hex, no cap: some Apple manifests are several kilobytes.
+        all_tag_names = cast("dict[str, dict[int, dict[str, Any]]]", getattr(piexif, "TAGS", {}))
+        tag_names = all_tag_names.get(ifd, {})
+        decoded: dict[str, Any] = {}
+        for tag, value in cast("dict[int, Any]", tags).items():
+            name = str(tag_names.get(tag, {}).get("name", f"tag_{tag}"))
+            if name == "MakerNote" and isinstance(value, bytes):
+                # full hex, no cap: measured on real uploads, Apple is ~2 KB
                 # but Canon reaches 28 KB and Sony 38 KB (AF data, serials,
                 # embedded previews) -- a cap would silently drop exactly the
                 # camera-original evidence this scan exists to preserve
-                decoded[name] = f"hex:{v.hex()}"
+                decoded[name] = f"hex:{value.hex()}"
             else:
-                decoded[name] = _decode_exif_value(v)
+                decoded[name] = _decode_exif_value(value)
         out[ifd] = decoded
     return out, thumbnail
 
@@ -174,47 +155,52 @@ def _png_text_decode(ctype: str, body: bytes) -> str:
     The compressed forms are where ComfyUI / Automatic1111 hide the
     generation workflow and prompt, so skipping the inflate would drop
     the strongest AI-provenance text a PNG can carry."""
-    import zlib
-
     if ctype == "tEXt":
-        return body.decode("utf-8", "replace")
+        suffix = b"...TRUNCATED" if len(body) > _TEXT_CAP else b""
+        return (body[:_TEXT_CAP] + suffix).decode("utf-8", "replace")
     if ctype == "zTXt":
         nul = body.find(b"\x00")
         if nul == -1:
-            return body.decode("utf-8", "replace")
+            return body[:_TEXT_CAP].decode("utf-8", "replace")
         keyword = body[:nul].decode("latin-1", "replace")
         # body[nul+1] = compression method (0 = zlib)
         try:
-            text = zlib.decompress(body[nul + 2 :]).decode("utf-8", "replace")
+            inflater = zlib.decompressobj()
+            decoded = inflater.decompress(body[nul + 2 :], _TEXT_CAP + 1)
+            suffix = "...TRUNCATED" if len(decoded) > _TEXT_CAP else ""
+            text = decoded[:_TEXT_CAP].decode("utf-8", "replace") + suffix
         except zlib.error:
-            text = body.decode("utf-8", "replace")
+            text = body[:_TEXT_CAP].decode("utf-8", "replace")
         return f"{keyword}\x00{text}"
     # iTXt: keyword\0 compflag(1) compmethod(1) lang\0 translated\0 text
     parts = body.split(b"\x00", 1)
     if len(parts) < 2:
-        return body.decode("utf-8", "replace")
+        return body[:_TEXT_CAP].decode("utf-8", "replace")
     keyword = parts[0].decode("latin-1", "replace")
     rest = parts[1]
     if len(rest) < 2:
-        return body.decode("utf-8", "replace")
+        return body[:_TEXT_CAP].decode("utf-8", "replace")
     compflag = rest[0]
     tail = rest[2:]
     for _ in range(2):  # skip language tag and translated keyword
         nul = tail.find(b"\x00")
         if nul == -1:
-            return body.decode("utf-8", "replace")
+            return body[:_TEXT_CAP].decode("utf-8", "replace")
         tail = tail[nul + 1 :]
     if compflag:
         with contextlib.suppress(zlib.error):
-            tail = zlib.decompress(tail)
+            inflater = zlib.decompressobj()
+            tail = inflater.decompress(tail, _TEXT_CAP + 1)
+    if len(tail) > _TEXT_CAP:
+        tail = tail[:_TEXT_CAP] + b"...TRUNCATED"
     return f"{keyword}\x00{tail.decode('utf-8', 'replace')}"
 
 
-def read_png_chunks(data: bytes) -> tuple[list[dict[str, Any]], int]:
+def read_png_chunks(data: bytes) -> tuple[list[dict[str, Any]], bytes]:
     """Every PNG chunk in order (type, length; text chunks decoded and
-    inflated, binary chunks as base64) plus the post-IEND trailer size."""
+    inflated, binary chunks as base64) plus the post-IEND trailer bytes."""
     chunks: list[dict[str, Any]] = []
-    post_iend = 0
+    post_iend = b""
     try:
         pos = 8
         while pos + 12 <= len(data):
@@ -248,11 +234,19 @@ def read_png_chunks(data: bytes) -> tuple[list[dict[str, Any]], int]:
             chunks.append(entry)
             pos += 12 + length
             if ctype == "IEND":
-                post_iend = len(data) - pos
+                post_iend = data[pos:]
                 break
     except Exception as exc:
         chunks.append({"error": _safe_str(exc)})
     return chunks, post_iend
+
+
+def _set_jpeg_trailer(result: dict[str, Any], data: bytes, eoi: int) -> None:
+    """Preserve bytes after JPEG EOI for Samsung Galaxy AI detection."""
+    trailer = data[eoi + 2 :]
+    result["post_eoi_bytes"] = len(trailer)
+    if trailer:
+        result["post_eoi_base64"] = _b64(trailer)
 
 
 def read_jpeg_segments(data: bytes) -> dict[str, Any]:
@@ -269,12 +263,12 @@ def read_jpeg_segments(data: bytes) -> dict[str, Any]:
                 break
             marker = data[pos + 1]
             if marker == 0xD9:  # EOI
-                result["post_eoi_bytes"] = len(data) - (pos + 2)
+                _set_jpeg_trailer(result, data, pos)
                 break
             if marker == 0xDA:  # SOS: entropy-coded data follows
                 eoi = data.rfind(b"\xff\xd9")
                 if eoi != -1:
-                    result["post_eoi_bytes"] = len(data) - (eoi + 2)
+                    _set_jpeg_trailer(result, data, eoi)
                 break
             if not (0xE0 <= marker <= 0xEF):
                 length = struct.unpack(">H", data[pos + 2 : pos + 4])[0]
@@ -284,7 +278,8 @@ def read_jpeg_segments(data: bytes) -> dict[str, Any]:
             body = data[pos + 4 : pos + 2 + length]
             name = f"APP{marker - 0xE0}"
             entry: dict[str, Any] = {"marker": name, "length": length}
-            if body.startswith(b"http://ns.adobe.com/xap/1.0/\x00"):
+            # Adobe JPEG XMP APP1 magic (namespace URI in the packet, not a request).
+            if body.startswith(b"http://ns.adobe.com/xap/1.0/\x00"):  # NOSONAR
                 entry["kind"] = "xmp"
                 entry["text"] = body[29:].decode("utf-8", "replace")
             elif name == "APP2" and body.startswith(b"MPF\x00"):
@@ -366,13 +361,20 @@ def read_pil_info(path: Path) -> tuple[dict[str, Any], dict[str, Any], bytes | N
 
 
 def read_c2pa_store(path: Path) -> dict[str, Any]:
-    """Full C2PA manifest store JSON via the official c2pa-python Reader."""
-    try:
-        from c2pa import Reader
+    """Full C2PA manifest store through the package's cached reader."""
+    from remove_ai_watermarks._internal.c2pa import read_manifest_store_json
 
-        with Reader(str(path)) as reader:
-            return json.loads(reader.json())
-    except Exception as exc:
+    raw = read_manifest_store_json(path)
+    if raw is None:
+        return {}
+    try:
+        value: Any = json.loads(raw)
+        return (
+            cast("dict[str, Any]", value)
+            if isinstance(value, dict)
+            else {"error": "C2PA manifest store is not an object"}
+        )
+    except (TypeError, ValueError) as exc:
         return {"error": _safe_str(exc)}
 
 
@@ -394,7 +396,7 @@ def sniff_format(head: bytes) -> str:
     return f"unknown:{head[:16].hex()}"
 
 
-# --- forensic helpers: signals that a file is not an untouched original ---
+# --- JPEG encoder structure (metadata layer) ---
 
 
 def _jpeg_forensics_bytes(data: bytes) -> dict[str, Any]:
@@ -451,7 +453,7 @@ def _jpeg_forensics_bytes(data: bytes) -> dict[str, Any]:
                 out["precision_bits"] = body[0]
                 out["sof_height"] = struct.unpack(">H", body[1:3])[0]
                 out["sof_width"] = struct.unpack(">H", body[3:5])[0]
-                comps = []
+                comps: list[dict[str, int]] = []
                 for i in range(body[5]):
                     c = body[6 + i * 3 : 9 + i * 3]
                     if len(c) == 3:
@@ -499,15 +501,18 @@ def read_webp_chunks(data: bytes) -> list[dict[str, Any]]:
     chunks: list[dict[str, Any]] = []
     try:
         pos = 12
-        while pos + 8 <= len(data):
-            ctype = data[pos : pos + 4].decode("latin-1")
+        declared_end = 8 + struct.unpack("<I", data[4:8])[0] if len(data) >= 12 else len(data)
+        container_end = min(len(data), declared_end)
+        while pos + 8 <= container_end:
+            chunk_type = data[pos : pos + 4]
+            ctype = chunk_type.decode("latin-1")
             length = struct.unpack("<I", data[pos + 4 : pos + 8])[0]
-            body = data[pos + 8 : pos + 8 + length]
+            body = data[pos + 8 : min(pos + 8 + length, container_end)]
             entry: dict[str, Any] = {"type": ctype, "length": length}
             if ctype == "XMP ":
                 entry["kind"] = "xmp"
                 entry["text"] = body.decode("utf-8", "replace")
-            elif ctype in ("VP8 ", "VP8L", "ALPH", "ANMF"):
+            elif chunk_type in RIFF_CODED_IMAGE_CHUNKS:
                 pass  # pixel-data chunks: length is signal enough
             elif length:
                 entry["base64"] = _b64(body)
@@ -518,21 +523,55 @@ def read_webp_chunks(data: bytes) -> list[dict[str, Any]]:
     return chunks
 
 
-def sha256_of(data: bytes) -> str:
-    import hashlib
+def read_webp_late_metadata_path(path: Path, window: int = _RAW_SCAN_HEAD) -> list[dict[str, Any]]:
+    """Stream metadata chunks after ``window`` while seeking over coded frames."""
+    chunks: list[dict[str, Any]] = []
+    try:
+        file_size = path.stat().st_size
+        with open(path, "rb") as handle:
+            header = handle.read(12)
+            if len(header) < 12 or not header.startswith(b"RIFF") or header[8:12] != b"WEBP":
+                return chunks
+            container_end = min(file_size, 8 + struct.unpack("<I", header[4:8])[0])
+            position = 12
+            while position + 8 <= container_end:
+                handle.seek(position)
+                chunk_header = handle.read(8)
+                if len(chunk_header) < 8:
+                    break
+                chunk_type = chunk_header[:4]
+                (length,) = struct.unpack("<I", chunk_header[4:8])
+                start = position + 8
+                safe_length = max(0, min(length, container_end - start))
+                if chunk_type in RIFF_METADATA_CHUNKS and start >= window:
+                    handle.seek(start)
+                    body = handle.read(min(safe_length, _B64_CAP))
+                    entry: dict[str, Any] = {
+                        "type": chunk_type.decode("latin-1"),
+                        "length": length,
+                        "base64": _b64(body),
+                    }
+                    if len(body) < safe_length:
+                        entry["truncated"] = True
+                    chunks.append(entry)
+                position = start + safe_length + (safe_length & 1)
+    except (OSError, struct.error) as exc:
+        chunks.append({"error": _safe_str(exc)})
+    return chunks
 
+
+def sha256_of(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
 def xattr_where_from(path: Path) -> list[str]:
     """macOS download-source URLs (kMDItemWhereFroms), empty elsewhere."""
-    import os
-    import plistlib
-
     try:
-        raw = os.getxattr(path, "com.apple.metadata:kMDItemWhereFroms")
+        getter = cast("Any", os.getxattr)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+        raw = cast("bytes", getter(path, "com.apple.metadata:kMDItemWhereFroms"))
         value = plistlib.loads(raw)
-        return [str(v) for v in value] if isinstance(value, list) else [str(value)]
+        values = cast("list[Any]", value) if isinstance(value, list) else [value]
+        return [str(item) for item in values]
     except (AttributeError, OSError, ValueError):
         return []
 
@@ -540,10 +579,10 @@ def xattr_where_from(path: Path) -> list[str]:
 def xattr_quarantine(path: Path) -> str | None:
     """macOS quarantine string: flags; timestamp; downloading agent (Safari,
     Telegram, Chrome...). Presence alone means 'came from the internet'."""
-    import os
-
     try:
-        return os.getxattr(path, "com.apple.quarantine").decode("utf-8", "replace")[:500]
+        getter = cast("Any", os.getxattr)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+        raw = cast("bytes", getter(path, "com.apple.quarantine"))
+        return raw.decode("utf-8", "replace")[:500]
     except (AttributeError, OSError):
         return None
 
@@ -554,28 +593,22 @@ def read_isobmff_inventory(data: bytes) -> dict[str, Any]:
     irot derived images). Strong phone-provenance signal."""
     out: dict[str, Any] = {}
     try:
+        stream = io.BytesIO(data)
 
         def boxes(start: int, end: int) -> list[tuple[str, int, int]]:
-            result = []
-            pos = start
-            while pos + 8 <= end:
-                size, btype = struct.unpack(">I4s", data[pos : pos + 8])
-                t = btype.decode("latin-1")
-                header = 8
-                if size == 1:
-                    size = struct.unpack(">Q", data[pos + 8 : pos + 16])[0]
-                    header = 16
-                elif size == 0:
-                    size = end - pos
-                if size < header or pos + size > end:
-                    break
-                result.append((t, pos + header, pos + size))
-                pos += size
-            return result
+            return [
+                (box_type.decode("latin-1"), payload_offset, box_end)
+                for _, box_end, box_type, payload_offset in iter_file_boxes(stream, start, end)
+            ]
 
         top = boxes(0, len(data))
         out["boxes"] = [t for t, _, _ in top]
+        provenance_boxes: list[dict[str, Any]] = []
         for t, s, e in top:
+            if t.encode("latin-1") in C2PA_BOX_TYPES:
+                provenance_boxes.append(
+                    {"type": t, "length": e - s, "base64": _b64(data[s:e], cap=_PROVENANCE_B64_CAP)}
+                )
             if t == "moov":
                 for ct, cs, ce in boxes(s, e):
                     if ct == "mvhd" and ce - cs >= 24:
@@ -592,7 +625,7 @@ def read_isobmff_inventory(data: bytes) -> dict[str, Any]:
                         # full box + entry count, then infe entries
                         count = struct.unpack(">H", data[cs + 4 : cs + 6])[0]
                         out["meta_item_count"] = count
-                        item_types = []
+                        item_types: list[str] = []
                         for it, is_, ie in boxes(cs + 6, ce):
                             if it == "infe" and ie - is_ >= 8:
                                 # infe full box: version(1)+flags(3), then
@@ -611,17 +644,17 @@ def read_isobmff_inventory(data: bytes) -> dict[str, Any]:
                                 props = [t for t, _, _ in boxes(ps, pe)]
                                 out["ipco_properties"] = props
                                 # auxC holds the auxiliary image type URN
-                                for qt, qs, qe in boxes(ps, pe):
-                                    if qt == "auxC":
+                                for box_type, qs, qe in boxes(ps, pe):
+                                    if box_type == "auxC":
                                         out["auxc_types"] = (
                                             data[qs + 4 : qe].split(b"\x00")[0].decode("latin-1", "replace")
                                         )
                     elif ct == "iref":
                         out["has_iref"] = True
+        if provenance_boxes:
+            out["provenance_boxes"] = provenance_boxes
         # QuickTime metadata keys (©mak/©mod/©swr) for the MOV side of
         # Live Photos: tolerant printable-string grab after each atom
-        import re
-
         qt: dict[str, str] = {}
         for atom, key in ((b"\xa9mak", "make"), (b"\xa9mod", "model"), (b"\xa9swr", "software")):
             idx = data.find(atom)
@@ -636,22 +669,88 @@ def read_isobmff_inventory(data: bytes) -> dict[str, Any]:
     return out
 
 
+def read_isobmff_provenance_path(path: Path) -> dict[str, Any]:
+    """Stream top-level ISOBMFF boxes and preserve provenance payloads.
+
+    This is the large-file counterpart to :func:`read_isobmff_inventory`.
+    It seeks over media payloads instead of loading them into memory.
+    """
+    out: dict[str, Any] = {"boxes": []}
+    provenance_boxes: list[dict[str, Any]] = []
+    collected = 0
+    try:
+        file_size = path.stat().st_size
+        with open(path, "rb") as f:
+            for _, box_end, box_type_raw, payload_offset in iter_file_boxes(f, 0, file_size):
+                box_type = box_type_raw.decode("latin-1")
+                out["boxes"].append(box_type)
+                payload_length = box_end - payload_offset
+                if box_type_raw in C2PA_BOX_TYPES and collected < _PROVENANCE_B64_CAP:
+                    to_read = min(payload_length, _PROVENANCE_B64_CAP - collected)
+                    f.seek(payload_offset)
+                    payload = f.read(to_read)
+                    entry: dict[str, Any] = {
+                        "type": box_type,
+                        "length": payload_length,
+                        "base64": _b64(payload, cap=_PROVENANCE_B64_CAP),
+                    }
+                    if to_read < payload_length:
+                        entry["truncated"] = True
+                    provenance_boxes.append(entry)
+                    collected += len(payload)
+    except (OSError, struct.error) as exc:
+        out["error"] = _safe_str(exc)
+    if provenance_boxes:
+        out["provenance_boxes"] = provenance_boxes
+    return out
+
+
+def read_png_late_metadata_path(path: Path, window: int = _RAW_SCAN_HEAD) -> list[dict[str, Any]]:
+    """Stream PNG metadata chunks whose payload starts after ``window``."""
+    chunks: list[dict[str, Any]] = []
+    try:
+        file_size = path.stat().st_size
+        with open(path, "rb") as f:
+            if f.read(8) != b"\x89PNG\r\n\x1a\n":
+                return chunks
+            pos = 8
+            while pos + 12 <= file_size:
+                f.seek(pos)
+                header = f.read(8)
+                if len(header) < 8:
+                    break
+                length, chunk_type = struct.unpack(">I4s", header)
+                data_start = pos + 8
+                safe_length = max(0, min(length, file_size - data_start))
+                if chunk_type in PNG_METADATA_CHUNKS and data_start >= window:
+                    body = f.read(min(safe_length, _B64_CAP))
+                    entry: dict[str, Any] = {
+                        "type": chunk_type.decode("latin-1"),
+                        "length": length,
+                        "base64": _b64(body),
+                    }
+                    if len(body) < safe_length:
+                        entry["truncated"] = True
+                    chunks.append(entry)
+                pos = data_start + safe_length + 4
+                if chunk_type == b"IEND":
+                    break
+    except (OSError, struct.error) as exc:
+        chunks.append({"error": _safe_str(exc)})
+    return chunks
+
+
 def apple_live_photo_id(head: bytes) -> str | None:
     """Apple Live Photo content identifier (links the still to its MOV).
 
     The UUID sits in the Apple MakerNote (tag 17) of the still and in the
     MOV metadata; a raw head scan finds it in either container."""
-    import re
-
     # the UUID string sits next to "content.identifier" in the MOV, but in
     # the STILL it is a bare UUID inside the Apple MakerNote (whose header
     # is "Apple iOS"), so gate on either marker
     if b"content.identifier" not in head and b"com.apple.quicktime" not in head and b"Apple iOS" not in head:
         return None
-    m = re.search(
-        rb"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}",
-        head,
-    )
+    m = re.search(rb"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}", head)
     return m.group(0).decode("ascii") if m else None
 
 
@@ -660,8 +759,6 @@ _HEAD_READ = 4 << 20
 
 
 def _sha256_stream(path: Path) -> str:
-    import hashlib
-
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for block in iter(lambda: f.read(1 << 20), b""):
@@ -669,7 +766,25 @@ def _sha256_stream(path: Path) -> str:
     return h.hexdigest()
 
 
-def scan_file(path: Path, *, pixel_mode: str | None = None) -> dict[str, Any]:
+def collect_forensic_metadata(
+    path: Path,
+    *,
+    schema_version: int = FORENSIC_METADATA_SCHEMA_VERSION,
+) -> dict[str, Any]:
+    """Collect the versioned, metadata-only forensic record for ``path``.
+
+    This broad inspection record is not provenance-detector input. Use
+    :func:`remove_ai_watermarks.metadata_record.collect_metadata_record` for the
+    strict record accepted by ``identify_metadata_record``. Long-lived consumers
+    should request the schema they implement; unsupported versions raise before the
+    source is read.
+    """
+    schema_version = require_schema_version(
+        schema_version,
+        contract="forensic metadata",
+        supported=(1,),
+    )
+    image_io._register_heif()  # pyright: ignore[reportPrivateUsage]
     stat = path.stat()
     oversized = stat.st_size > _MAX_FULL_READ
     if oversized:
@@ -680,6 +795,8 @@ def scan_file(path: Path, *, pixel_mode: str | None = None) -> dict[str, Any]:
         data = path.read_bytes()
         head = data
     record: dict[str, Any] = {
+        "schema_version": schema_version,
+        "record_type": FORENSIC_METADATA_RECORD_TYPE,
         "file": str(path),
         "name": path.name,
         "extension": path.suffix.lower(),
@@ -690,9 +807,14 @@ def scan_file(path: Path, *, pixel_mode: str | None = None) -> dict[str, Any]:
         "content_format": sniff_format(head),
     }
     if oversized:
-        # too big to hold in memory: path-based readers (PIL, piexif,
-        # c2pa) still run; byte-level walkers are skipped
+        # Preserve the same bounded byte windows used by downstream provenance
+        # algorithms while path-based readers (PIL, piexif, C2PA) run normally.
         record["oversized"] = {"head_scanned_bytes": len(head)}
+        record["raw_metadata_windows"] = {"head_base64": _b64(head[:_RAW_SCAN_HEAD])}
+        if stat.st_size > _RAW_SCAN_TAIL:
+            with open(path, "rb") as f:
+                f.seek(-_RAW_SCAN_TAIL, 2)
+                record["raw_metadata_windows"]["tail_base64"] = _b64(f.read())
     where_from = xattr_where_from(path)
     if where_from:
         record["download_source_urls"] = where_from
@@ -710,7 +832,8 @@ def scan_file(path: Path, *, pixel_mode: str | None = None) -> dict[str, Any]:
         if fmt == "png":
             record["png_chunks"], post_iend = read_png_chunks(data)
             if post_iend:
-                record["png_post_iend_bytes"] = post_iend
+                record["png_post_iend_bytes"] = len(post_iend)
+                record["png_post_iend_base64"] = _b64(post_iend)
         elif fmt == "jpeg":
             record["jpeg"] = read_jpeg_segments(data)
             record["jpeg_forensics"] = _jpeg_forensics_bytes(data)
@@ -718,6 +841,16 @@ def scan_file(path: Path, *, pixel_mode: str | None = None) -> dict[str, Any]:
             record["webp_chunks"] = read_webp_chunks(data)
         elif fmt.startswith("isobmff"):
             record["isobmff"] = read_isobmff_inventory(data)
+    elif record["content_format"] == "png":
+        late_chunks = read_png_late_metadata_path(path)
+        if late_chunks:
+            record["png_late_metadata_chunks"] = late_chunks
+    elif record["content_format"] == "webp":
+        late_chunks = read_webp_late_metadata_path(path)
+        if late_chunks:
+            record["webp_late_metadata_chunks"] = late_chunks
+    elif record["content_format"].startswith("isobmff"):
+        record["isobmff"] = read_isobmff_provenance_path(path)
     if thumbnail:
         record["has_exif_thumbnail"] = True
         # the embedded thumbnail is its own JPEG; after an edit its encoder
@@ -725,375 +858,4 @@ def scan_file(path: Path, *, pixel_mode: str | None = None) -> dict[str, Any]:
         thumb_forensics = _jpeg_forensics_bytes(thumbnail)
         thumb_forensics["base64"] = _b64(thumbnail)
         record["exif_thumbnail_forensics"] = thumb_forensics
-    if pixel_mode is not None:
-        if oversized:
-            # symmetric with the metadata oversized marker: distinguish
-            # "skipped because oversized" from "decode failed" downstream
-            record["pixel"] = {"skipped": "oversized"}
-        else:
-            record.update(scan_pixels_of(path, full=pixel_mode == "full"))
     return record
-
-
-def scan_pixels_of(path: Path, *, full: bool) -> dict[str, Any]:
-    """The optional pixel layer for one file (see the pixel-layer section
-    below). Returns {"pixel_error": ...} when numpy is unavailable."""
-    if np is None:
-        return {"pixel_error": "numpy not installed"}
-    t0 = time.perf_counter()
-    timing: dict[str, float] = {}
-    record: dict[str, Any] = {}
-
-    t = time.perf_counter()
-    gray, rgb, info = read_gray(path)
-    record["pixel"] = info
-    timing["decode"] = time.perf_counter() - t
-    if gray is not None:
-        # maps shared between the scalar features and the --pixels-full
-        # artifacts, computed once (the JPEG re-save and the sliding-window
-        # conv are the two most expensive features in the scan)
-        t = time.perf_counter()
-        residual = noise_residual_map(gray)
-        timing["noise"] = time.perf_counter() - t
-        if residual is not None:
-            record["noise"] = noise_features(residual)
-
-        t = time.perf_counter()
-        spectrum = fft_decompose(gray)
-        timing["fft"] = time.perf_counter() - t
-        mag = phase = None
-        if spectrum is not None:
-            mag, phase = spectrum
-            record["fft"] = fft_features(mag)
-
-        t = time.perf_counter()
-        ela = ela_map(rgb)
-        timing["ela"] = time.perf_counter() - t
-        if ela is not None:
-            record["ela"] = ela_features(ela)
-
-        for name, fn, arg in (
-            ("dct", dct_features, gray),
-            ("gradient", gradient_features, gray),
-            ("color", color_features, rgb),
-        ):
-            t = time.perf_counter()
-            try:
-                result = fn(arg)
-            except Exception as exc:
-                result = {"error": _safe_str(exc)}
-            timing[name] = time.perf_counter() - t
-            if result:
-                record[name] = result
-        if full:
-            t = time.perf_counter()
-            try:
-                record["full"] = full_artifacts(gray, rgb, ela=ela, residual=residual, phase=phase)
-            except Exception as exc:
-                record["full"] = {"error": _safe_str(exc)}
-            timing["full_artifacts"] = time.perf_counter() - t
-    timing["total"] = time.perf_counter() - t0
-    record["timing_ms"] = {k: round(v * 1000, 1) for k, v in timing.items()}
-    return record
-
-
-def summary_row(record: dict[str, Any]) -> dict[str, Any]:
-    pil = record.get("pil", {})
-    return {
-        "file": record.get("file"),
-        "name": record.get("name"),
-        "size_bytes": record.get("size_bytes"),
-        "sha256": record.get("sha256"),
-        "content_format": record.get("content_format"),
-        "width": pil.get("width"),
-        "height": pil.get("height"),
-        "dpi": json.dumps(pil.get("dpi")),
-    }
-
-
-def main() -> None:
-    flags, positional = set(), []
-    for arg in sys.argv[1:]:
-        (flags.add if arg.startswith("--") else positional.append)(arg)
-    if len(positional) != 2 or flags - {"--pixels", "--pixels-full"}:
-        print(__doc__)
-        sys.exit(2)
-    pixel_mode = "full" if "--pixels-full" in flags else ("basic" if "--pixels" in flags else None)
-    if pixel_mode is not None and np is None:
-        print("pixel modes require numpy: pip install numpy")
-        sys.exit(2)
-    root, prefix = Path(positional[0]), positional[1]
-    files = sorted(str(p) for p in root.rglob("*") if p.is_file() and p.suffix.lower() in SUPPORTED)
-    # resume: skip files already present in the output of a previous
-    # (interrupted) run with the same prefix
-    gz = prefix.endswith(".gz")
-    jsonl_name = prefix if gz else f"{prefix}.jsonl"
-    csv_name = f"{prefix[:-3] if gz else prefix}.csv"
-    import gzip
-
-    jsonl_path = Path(jsonl_name)
-    done: set[str] = set()
-    if jsonl_path.exists():
-        opener = gzip.open if gz else open
-        with opener(jsonl_path, "rt") as existing:  # type: ignore[arg-type]
-            for line in existing:
-                with contextlib.suppress(Exception):
-                    done.add(json.loads(line).get("file", ""))
-        files = [f for f in files if f not in done]
-    print(f"scanning {len(files)} files under {root} ({len(done)} already done)")
-    n_done = 0
-    text_opener = gzip.open if gz else open
-    csv_exists = Path(csv_name).exists()
-    with (
-        text_opener(jsonl_path, "at") as jsonl,  # type: ignore[arg-type]
-        open(csv_name, "a", newline="") as csvf,
-    ):
-        writer = csv.DictWriter(csvf, fieldnames=list(summary_row({})))
-        if not csv_exists:
-            writer.writeheader()
-        for path_str in files:
-            try:
-                record = scan_file(Path(path_str), pixel_mode=pixel_mode)
-            except Exception as exc:  # one corrupt file must not kill the scan
-                record = {"file": path_str, "error": _safe_str(exc)}
-            jsonl.write(json.dumps(record, default=str) + "\n")
-            writer.writerow(summary_row(record))
-            n_done += 1
-            if n_done % 500 == 0:
-                print(f"  {n_done}/{len(files)}", flush=True)
-    print(f"done: {jsonl_name}, {csv_name}")
-
-
-# --- optional pixel layer (--pixels / --pixels-full), requires numpy ---
-
-try:
-    import numpy as np
-    from numpy.lib.stride_tricks import sliding_window_view
-except ImportError:
-    np = None  # type: ignore[assignment]
-
-_MAX_SIDE = 2048  # downscale before analysis; stats are scale-robust
-_DCT_BINS = np.linspace(-20.5, 20.5, 22) if np is not None else None
-_AC_POSITIONS = [(0, 1), (1, 0), (1, 1), (0, 2), (2, 0), (2, 1), (1, 2), (0, 3)]
-_FFT_BANDS = 8
-_BAYER_OFFSETS = [(1, 1), (1, -1)]  # CFA diagonal periodicity candidates
-
-
-def _arr_b64(arr: np.ndarray) -> dict[str, Any]:
-    """Compact array payload for the --full spatial maps."""
-    return {
-        "shape": list(arr.shape),
-        "dtype": str(arr.dtype),
-        "base64": _b64(arr.tobytes()),
-    }
-
-
-def _coarse(arr: np.ndarray, side: int = 64) -> np.ndarray:
-    """Downscale a 2D map to at most `side` on the long edge."""
-    h, w = arr.shape
-    if max(h, w) <= side:
-        return arr
-    img = Image.fromarray(arr.astype(np.float32), mode="F")
-    img.thumbnail((side, side), Image.BILINEAR)
-    return np.asarray(img)
-
-
-def phash(gray: np.ndarray) -> str:
-    """64-bit DCT perceptual hash (invertible to a rough layout; --full only)."""
-    img = Image.fromarray(gray.astype(np.float32), mode="F").resize((32, 32), Image.LANCZOS)
-    small = np.asarray(img)
-    m = _dct_matrix(32)
-    coeff = m @ small @ m.T
-    low = coeff[:8, :8].ravel()[1:]  # drop DC
-    bits = low > np.median(low)
-    return f"{int(''.join('1' if b else '0' for b in bits), 2):016x}"
-
-
-def full_artifacts(
-    gray: np.ndarray,
-    rgb: np.ndarray,
-    *,
-    ela: np.ndarray | None,
-    residual: np.ndarray | None,
-    phase: np.ndarray | None,
-) -> dict[str, Any]:
-    """The privacy-lifting set: phash, thumbnail, ELA map, noise residual,
-    FFT phase. Maps are computed once by the caller and shared with the
-    scalar feature paths."""
-    out: dict[str, Any] = {}
-    out["phash"] = phash(gray)
-    img = Image.fromarray(rgb.astype(np.uint8))
-    img.thumbnail((128, 128), Image.LANCZOS)
-    buf = io.BytesIO()
-    img.save(buf, "JPEG", quality=70)
-    out["thumbnail_jpeg_b64"] = _b64(buf.getvalue())
-
-    if ela is not None:
-        out["ela_map"] = _arr_b64(_coarse(ela))
-    if residual is not None:
-        clipped = np.clip(residual / 4.0, -1, 1)
-        out["noise_residual"] = _arr_b64(_coarse((clipped * 127).astype(np.int8)))
-    if phase is not None:
-        out["fft_phase"] = _arr_b64(_coarse(phase.astype(np.float32), 32))
-    return out
-
-
-def read_gray(path: Path) -> tuple[np.ndarray | None, np.ndarray | None, dict[str, Any]]:
-    """Decode to float32 grayscale (and RGB for color stats), downscaled."""
-    try:
-        with Image.open(path) as img:
-            info: dict[str, Any] = {"width": img.width, "height": img.height}
-            if max(img.size) > _MAX_SIDE:
-                img.thumbnail((_MAX_SIDE, _MAX_SIDE), Image.LANCZOS)
-            rgb = np.asarray(img.convert("RGB"), dtype=np.float32)
-            gray = np.asarray(img.convert("L"), dtype=np.float32)
-        return gray, rgb, info
-    except Exception as exc:
-        return None, None, {"error": _safe_str(exc)}
-
-
-def _dct_matrix(n: int = 8) -> np.ndarray:
-    """Orthonormal n x n DCT-II basis: M[i, j] = cos(pi (2j + 1) i / 2n)."""
-    i = np.arange(n)[:, None]
-    j = np.arange(n)[None, :]
-    m = np.cos(np.pi * (2 * j + 1) * i / (2 * n))
-    m[0, :] *= 1 / np.sqrt(2)
-    return m * np.sqrt(2 / n)
-
-
-_DCT_M = _dct_matrix() if np is not None else None
-
-
-def dct_features(gray: np.ndarray) -> dict[str, Any]:
-    """AC coefficient histograms over 8x8 block DCT + Benford deviation."""
-    h, w = gray.shape
-    h8, w8 = h // 8 * 8, w // 8 * 8
-    if h8 < 8 or w8 < 8:
-        return {}
-    blocks = gray[:h8, :w8].reshape(h8 // 8, 8, w8 // 8, 8).swapaxes(1, 2)
-    coeff = np.einsum("ij,abjk,lk->abil", _DCT_M, blocks, _DCT_M)
-    hists = []
-    lead_vals: list[np.ndarray] = []
-    for dy, dx in _AC_POSITIONS:
-        vals = coeff[:, :, dy, dx].ravel()
-        hists.append(np.histogram(vals, bins=_DCT_BINS)[0].tolist())
-        lead_vals.append(np.abs(vals))
-    out: dict[str, Any] = {"dct_ac_hist": hists}
-    flat = np.abs(np.concatenate(lead_vals))
-    flat = flat[flat >= 1]
-    if flat.size > 100:
-        leading = (flat / 10 ** np.floor(np.log10(flat))).astype(int)
-        leading = leading[(leading >= 1) & (leading <= 9)]
-        if leading.size > 100:
-            obs = np.bincount(leading, minlength=10)[1:10] / leading.size
-            ben = np.log10(1 + 1 / np.arange(1, 10))
-            out["benford_mad"] = float(np.abs(obs - ben).mean())
-    return out
-
-
-def noise_residual_map(gray: np.ndarray) -> np.ndarray | None:
-    """High-pass residual. The map itself is spatial (shows edges), so it
-    is only stored under --full; the default mode keeps scalar stats."""
-    if gray.shape[0] < 3 or gray.shape[1] < 3:
-        return None
-    k = np.array([[-1.0, -1.0, -1.0], [-1.0, 8.0, -1.0], [-1.0, -1.0, -1.0]])
-    h, w = gray.shape
-    # k is float64, so the residual is float64 like the unchunked form
-    out = np.empty((h - 2, w - 2), dtype=np.float64)
-    # row-chunked: the (win * k) temp is ~150 MB at 2048px if materialized
-    # whole; per-element 9-tap sums are computed in the same order, so the
-    # result is bit-identical to the unchunked form
-    for y0 in range(0, h - 2, 256):
-        y1 = min(y0 + 256, h - 2)
-        win = sliding_window_view(gray[y0 : y1 + 2], (3, 3))
-        out[y0:y1] = (win * k).sum(axis=(-1, -2))
-    return out
-
-
-def noise_features(residual: np.ndarray) -> dict[str, Any]:
-    """High-pass residual std/kurtosis; the residual map is NOT stored."""
-    flat = residual.ravel()
-    std = float(flat.std())
-    if std < 1e-9:
-        return {"noise_std": 0.0, "noise_kurtosis": 0.0}
-    z = (flat - flat.mean()) / std
-    return {"noise_std": std, "noise_kurtosis": float((z**4).mean() - 3.0)}
-
-
-def fft_decompose(gray: np.ndarray) -> tuple[np.ndarray, np.ndarray] | None:
-    """Log-magnitude (fftshifted) and phase of the image spectrum."""
-    if min(gray.shape) < 32:
-        return None
-    spectrum = np.fft.fftshift(np.fft.fft2(gray - gray.mean()))
-    return np.log1p(np.abs(spectrum)), np.angle(spectrum)
-
-
-def fft_features(mag: np.ndarray) -> dict[str, Any]:
-    """Radial magnitude band energies (no phase) + CFA periodicity peaks."""
-    h, w = mag.shape
-    cy, cx = h // 2, w // 2
-    # 1D broadcast instead of an mgrid: saves ~160 MB of int64 temporaries
-    # at 2048px; the squares are exact in float64 (values < 2^53), so band
-    # means are identical to the mgrid form
-    r2y = (np.arange(h, dtype=np.float64) - cy) ** 2
-    r2x = (np.arange(w, dtype=np.float64) - cx) ** 2
-    r = np.sqrt(r2y[:, None] + r2x[None, :])
-    r_max = r.max()
-    bands = []
-    for i in range(_FFT_BANDS):
-        mask = (r >= r_max * i / _FFT_BANDS) & (r < r_max * (i + 1) / _FFT_BANDS)
-        bands.append(float(mag[mask].mean()) if mask.any() else 0.0)
-    # Bayer CFA shows as symmetric peaks at half the Nyquist on diagonals
-    peaks = []
-    for dy, dx in _BAYER_OFFSETS:
-        y, x = cy + dy * (h // 4), cx + dx * (w // 4)
-        neighborhood = mag[y - 2 : y + 3, x - 2 : x + 3]
-        peaks.append(float(neighborhood.max() - mag.mean()))
-    return {"fft_band_energy": bands, "cfa_peaks": peaks, "cfa_peak": max(peaks)}
-
-
-def ela_map(rgb: np.ndarray) -> np.ndarray | None:
-    """Absolute per-pixel error after a q90 JPEG re-save."""
-    try:
-        img = Image.fromarray(rgb.astype(np.uint8))
-        buf = io.BytesIO()
-        img.save(buf, "JPEG", quality=90)
-        buf.seek(0)
-        resaved = np.asarray(Image.open(buf).convert("RGB"), dtype=np.float32)
-    except Exception:
-        return None
-    if resaved.shape != rgb.shape:
-        return None
-    return np.abs(rgb - resaved).mean(axis=-1)
-
-
-def ela_features(err: np.ndarray) -> dict[str, Any]:
-    """Error-level stats after a q90 JPEG re-save; global only, no map."""
-    return {"ela_mean": float(err.mean()), "ela_p95": float(np.percentile(err, 95))}
-
-
-def gradient_features(gray: np.ndarray) -> dict[str, Any]:
-    gy, gx = np.gradient(gray)
-    mag = np.sqrt(gx**2 + gy**2)
-    hist = np.histogram(mag, bins=10, range=(0, 255))[0].tolist()
-    lap = np.gradient(gy, axis=0) + np.gradient(gx, axis=1)
-    return {"gradient_hist": hist, "laplacian_var": float(lap.var())}
-
-
-def color_features(rgb: np.ndarray) -> dict[str, Any]:
-    small = rgb[::4, ::4]  # decimate; histogram is position-blind anyway
-    bins = (small / 256 * 4).astype(int).clip(0, 3)
-    idx = bins[..., 0] * 16 + bins[..., 1] * 4 + bins[..., 2]
-    hist = np.bincount(idx.ravel(), minlength=64).tolist()
-    mx = small.max(axis=-1)
-    mn = small.min(axis=-1)
-    sat = np.where(mx > 0, (mx - mn) / np.maximum(mx, 1e-6), 0)
-    return {
-        "color_hist_4x4x4": hist,
-        "saturation_mean": float(sat.mean()),
-        "value_mean": float(mx.mean() / 255),
-    }
-
-
-if __name__ == "__main__":
-    main()

@@ -3,10 +3,12 @@ consolidated metadata strip (formerly legacy metadata helper)."""
 
 from __future__ import annotations
 
+import logging
 import struct
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from remove_ai_watermarks._internal.c2pa import (
     _parse_c2pa_chunk,
@@ -835,3 +837,38 @@ class TestTc260ContainerRouting:
 
         readers = _tc260_container_readers()
         assert [r.__module__.rsplit(".", 1)[-1] for r in readers] == ["isobmff", "ebml", "riff", "flv"]
+
+
+class TestC2paReaderFailureIsVisible:
+    """A reader failure and a file with no manifest both return None, so the caller
+    cannot tell them apart -- and the consequence is not symmetric. A file with no
+    manifest is a normal verdict; a reader that could not read a file it was handed
+    can silently downgrade one, so the log level must make the failure observable."""
+
+    def _records(self, caplog, path: str) -> list[str]:
+        from remove_ai_watermarks._internal import c2pa
+
+        with caplog.at_level(logging.DEBUG, logger="remove_ai_watermarks._internal.c2pa"):
+            assert c2pa._manifest_json_uncached(path) is None
+        return [f"{r.levelname} {r.getMessage()}" for r in caplog.records]
+
+    def test_an_unreadable_file_warns(self, caplog):
+        records = self._records(caplog, "/nonexistent/definitely-not-here.png")
+
+        assert any(r.startswith("WARNING") for r in records), records
+
+    def test_an_unsupported_container_stays_quiet(self, caplog, tmp_path: Path):
+        target = tmp_path / "notes.txt"
+        target.write_text("plain text, not a container the reader handles")
+
+        records = self._records(caplog, str(target))
+
+        assert not any(r.startswith("WARNING") for r in records), records
+
+    def test_a_plain_image_without_a_manifest_logs_nothing(self, caplog, tmp_path: Path):
+        target = tmp_path / "plain.png"
+        Image.new("RGB", (8, 8)).save(target)
+
+        records = self._records(caplog, str(target))
+
+        assert records == []

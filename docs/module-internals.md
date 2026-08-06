@@ -368,7 +368,16 @@ metadata scanners and `remove_ai_metadata`.
 
 Key contracts:
 
-- `scan_head` is the shared cached input for bounded byte scans.
+- `scan_head` is the shared cached input for bounded byte scans. It fills the buffer
+  in two layers. Structural readers first, one per container, each seeking past the
+  pixel payload to reach metadata placed beyond the window: `isobmff.scan_c2pa_region`,
+  `_png_late_metadata`, `_riff_late_metadata`. A decoder-backed fallback last,
+  `_decoder_visible_text`, for metadata the raw bytes do not spell at all — a
+  zlib-compressed PNG `zTXt` packet is readable only after inflation. The layers are
+  ordered that way because the structural readers work on files no decoder can open.
+- A C2PA reader failure is logged at warning, not debug. It returns the same `None` as
+  a file with no manifest, so nothing downstream can distinguish "no credentials" from
+  "the credentials could not be read", and the second silently downgrades a verdict.
 - JPEG stripping walks metadata segments and preserves the entropy-coded image
   scan.
 - ISOBMFF containers use
@@ -407,12 +416,89 @@ metadata extraction from verdict logic:
 - `extract_provenance_evidence` reads the supported metadata signals into
   `ProvenanceEvidence`.
 - `evidence_from_metadata_record` normalizes an externally collected nested
-  metadata record into the same evidence type without file access. Diagnostic
-  values under `error` and `kind` are excluded from evidence while nested raw
-  bytes remain available through encoded binary fields.
-- `identify_from_evidence` evaluates that evidence without reopening the source.
+  metadata record into the same evidence type without file access. Versioned native
+  records accept only source-derived fields; filenames, hashes, timings, errors,
+  prior verdicts, and pixel results cannot become evidence. Unknown native schema
+  versions and other record types are rejected.
+- The vendor registries are matched over `_metadata_region(head)`, not the whole scan
+  buffer: they see the container's metadata and not its coded pixels. The tokens are
+  raw substrings and the shortest are four and five bytes, so over a megabyte of
+  compressed data one turns up by chance, and the entry it hits may assert AI. The
+  trim happens only when the container parses -- a malformed or unknown one is left
+  whole, because dropping real evidence to avoid a chance match is the wrong trade.
+- `identify_from_evidence` evaluates that evidence without reopening the source. Rules
+  that decide a verdict live here, not in extraction: extraction has two
+  implementations, and a rule in only one of them is a rule the other lacks. The
+  SynthID proxy is the worked example — its structured form comes from the manifest,
+  and the byte-scan fallback for containers no parser reaches runs in the verdict, so
+  both extractors reach the same answer. It did not, and the record path silently
+  reported no SynthID for images the file path flagged.
 - `identify` preserves the path-based API and adds the optional registered
   visible-mark and open invisible-watermark decoders after extraction.
+
+### Portable metadata record
+
+[`metadata_record.py`](../src/remove_ai_watermarks/metadata_record.py) produces the
+record `evidence_from_metadata_record` consumes, so collection and verdict can run
+on different machines. Its contract is equality with the file path, and the three
+defects found while establishing that equality are the reason each rule exists:
+
+- It walks the file's RAW head, never the `scan_head` buffer. That buffer is the
+  head concatenated with late metadata payloads, so a structural walk runs off the
+  end of the real head and parses appended bytes as chunks, inflating the record and
+  creating false signals.
+- Samsung Galaxy AI splits its evidence: the `PhotoEditor_Re_Edit_Data` marker sits
+  in the post-EOI trailer while the `genAIType` value it is gated on can sit inside
+  the entropy-coded scan. A marked file therefore keeps the whole tail window, not
+  just the trailer.
+- PIL's info keys are emitted in the file path's own candidate order
+  (`Software`, `Source`, `Title`, `Description`, then EXIF). `generator_from_metadata`
+  returns the FIRST candidate carrying a known token, so preserving candidate order
+  is part of verdict equivalence.
+
+The transport is independently versioned as `provenance_metadata` schema 1. Native
+records require the exact integer schema version and a `complete` status. Source
+read failures are explicit error records and cannot be judged. WebP walks the full
+declared RIFF container by seeking over `VP8`, `VP8L`, `ALPH`, and `ANMF`, so late
+XMP/C2PA remains visible without shipping coded frames or parsing appended trailer
+bytes as chunks.
+
+Pixel forensics are deliberately absent: the provenance path does not read them.
+Verdict equivalence is checked over tracked fixtures and a separate local evaluation
+corpus.
+
+### Broad forensic metadata
+
+[`forensic_metadata.py`](../src/remove_ai_watermarks/forensic_metadata.py) owns the
+wide metadata-only inspection record: hashes and timestamps, full EXIF/IPTC, C2PA,
+container inventories, bounded binary metadata, and embedded-thumbnail forensics.
+It is a separate `forensic_metadata` record type and is deliberately rejected by the
+provenance normalizer. Integration code publishes the strict
+`ProvenanceReport.to_dict()` alongside it rather than letting operational fields or
+derived results influence detection.
+
+### Pixel forensics
+
+[`pixel_evidence.py`](../src/remove_ai_watermarks/pixel_evidence.py) measures six
+families of scale-robust pixel statistics (block-DCT histograms and Benford
+deviation, FFT band energies and CFA peaks, high-pass residual, error level,
+gradient, color) in a single decode, sharing the intermediate maps between them.
+
+It remains independent of verdict and removal. `PixelEvidence.to_dict()` is the
+versioned service boundary: it omits the local path, exposes complete/partial/error
+status, keeps exception details in logs, and can include opt-in per-stage timings.
+
+The provenance metadata collector, broad forensic collector, provenance report,
+and pixel report all accept an explicit output `schema_version`. Package releases
+may add an output schema while retaining older serializers, so a rolling consumer
+can keep requesting the version it already understands. Within one schema, changes
+are additive; existing fields, types, meanings, signal names, and watermark labels
+remain stable. Unsupported selections raise before a different shape is returned.
+
+`artifacts=True` additionally returns the spatial layer: a perceptual hash, a 128px
+JPEG thumbnail, and coarse ELA, residual and phase maps. Those identify the source
+image rather than describe it, which is why they are opt-in and a separate field: a
+caller storing them is handling image content, not statistics about it.
 
 The DWT-DCT detector and the visible-mark stage share a single decode of the
 source, held by

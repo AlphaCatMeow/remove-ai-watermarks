@@ -23,6 +23,8 @@ Run `bash maintain.sh` from the repository root. The authoritative type gate is 
 
 Boundary modules for cv2, Torch, and Diffusers may carry narrow per-file relaxations for unknown third-party types. Keep pure-logic files strict, preserve the local piexif stub, and fix real errors before widening a pragma.
 
+From a worktree, `uv run` imports the package from the MAIN checkout -- that is where the editable install points. A script measuring a worktree's edit must insert that worktree's `src` at `sys.path[0]` and assert `module.__file__` resolves inside it, or it silently compares unmodified code against itself.
+
 ## Model-adjacent tests
 
 Do not classify an entire module as untestable because its main path downloads a model. Keep pure behavior covered without downloads, including:
@@ -78,9 +80,23 @@ rules follow, and both were broken in practice before they were written down:
   `TextMarkDetection.match_box` and the registry threads the detection into the mask
   builder; a mask path that re-runs its own sweep is how the two drift apart.
 
+The C2PA manifest-store JSON is NOT stable across reads: the reader regenerates manifest
+URNs and instance ids. Compare the derived `c2pa_info`, never the raw store.
+
+A third seam reaches the same verdict: `collect_metadata_record` ->
+`evidence_from_metadata_record` -> `identify_from_evidence`, the path a caller uses when
+collection and verdict run on different machines. Its contract is equality with
+`identify(path, check_visible=False, check_invisible=False)` on the same image, and it
+can break from EITHER side -- a region the collector stops walking, or a placement the
+file path learns to read and the record does not. `tests/test_metadata_record.py` pins
+it over the tracked fixtures; a separate local evaluation corpus catches placements the
+fixtures do not cover. Change either side and re-run both.
+
 Before changing anything in the detection path, record the detectors' exact verdicts
 over a local sample first and diff them after. A refactor here is only correct if that
-record is byte-identical, and a green test suite does not establish that on its own.
+record is byte-identical, and a green test suite does not establish that on its own. A
+change that is meant to FIX detection is the exception that proves the rule: the diff
+must then be exactly the files you intended to change, named in advance.
 
 ## A certified operating point is data, not a constant
 
