@@ -39,17 +39,17 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import click
-import cv2
 import numpy as np
 
 from remove_ai_watermarks.video_invisible import (
     _decode_frame_latents,
     _encode_frame_latents,
     _fit_size,
-    _pick_device,
+    _probe_video,
     _shared_latent_noise,
     build_temporal_reference,
     encode_video_frames,
+    load_video_vae_runtime,
     paired_psnr,
     read_sampled_frames,
     temporal_residual_ratio,
@@ -87,9 +87,22 @@ def _sha256(path: Path) -> str:
 
 def _write_manifest(output_dir: Path, rows: Sequence[dict[str, str]]) -> Path:
     path = output_dir / "sweep.csv"
+    # Mirrors the tracked manifest's run-configuration fields (data/README.md) so a
+    # row carries into data/evaluations/video-synthid-oracle.csv without hand
+    # reconstruction. The two 2026-07-31 rows show the cost of not doing this: their
+    # geometry was never recorded and cannot be recovered from the row.
     fieldnames = [
         "variant",
+        "source_sha256",
+        "source_width",
+        "source_height",
+        "source_fps",
+        "duration_seconds",
+        "vae",
         "noise_std",
+        "long_side",
+        "fps",
+        "seed",
         "psnr_db",
         "temporal_residual_ratio",
         "file",
@@ -133,23 +146,27 @@ def main(
 ) -> None:
     """Generate VAE video candidates from the prefix of SOURCE."""
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    import torch
-    from diffusers import AutoencoderKL
-
     levels = _parse_noise_levels(noise_levels)
-    capture = cv2.VideoCapture(str(source))
-    if not capture.isOpened():
-        raise click.ClickException(f"Could not open video: {source}")
-    width = round(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = round(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    capture.release()
+    width, height, source_fps = _probe_video(source)
     size = _fit_size(width, height, long_side)
     frames, effective_fps = read_sampled_frames(source, duration=duration, output_fps=fps, size=size)
+    run = {
+        "source_sha256": _sha256(source),
+        "source_width": str(width),
+        "source_height": str(height),
+        "source_fps": f"{source_fps:.4f}",
+        "duration_seconds": f"{duration:.4f}",
+        "vae": model,
+        "long_side": str(long_side),
+        "fps": f"{effective_fps:.4f}",
+        "seed": str(seed),
+    }
     output_dir.mkdir(parents=True, exist_ok=True)
     control_path = output_dir / "control.mp4"
     encode_video_frames(frames, source, control_path, fps=effective_fps)
     rows: list[dict[str, str]] = [
         {
+            **run,
             "variant": "control",
             "noise_std": "",
             "psnr_db": "inf",
@@ -160,12 +177,11 @@ def main(
         }
     ]
 
-    resolved_device = _pick_device(device)
-    dtype = torch.float16 if resolved_device == "cuda" else torch.float32
-    log.info("Loading %s on %s", model, resolved_device)
-    vae = AutoencoderKL.from_pretrained(model, torch_dtype=dtype).to(resolved_device)
-    vae.eval()
-    vae.enable_slicing()
+    # Load through the engine's own loader rather than repeating it here: the
+    # scaling-factor gate lives there, and the harness that produces the certified
+    # rows is the last place that should be exempt from it.
+    runtime = load_video_vae_runtime(model=model, device=device)
+    vae, resolved_device = runtime.vae, runtime.resolved_device
 
     log.info("Encoding source frames")
     latent_batches = _encode_frame_latents(
@@ -173,6 +189,7 @@ def main(
         vae=vae,
         device=resolved_device,
         batch_size=batch_size,
+        scaling_factor=runtime.scaling_factor,
     )
     first_latents = latent_batches[0]
     shared_noise = _shared_latent_noise(
@@ -190,6 +207,7 @@ def main(
             vae=vae,
             noise_std=level,
             shared_noise=shared_noise,
+            scaling_factor=runtime.scaling_factor,
         )
         output_path = output_dir / f"vae-noise-{level:.4f}.mp4"
         encode_video_frames(
@@ -202,6 +220,7 @@ def main(
         temporal_ratio = temporal_residual_ratio(regenerated, temporal_maps, temporal_baseline)
         rows.append(
             {
+                **run,
                 "variant": "vae",
                 "noise_std": f"{level:.4f}",
                 "psnr_db": f"{psnr:.4f}",

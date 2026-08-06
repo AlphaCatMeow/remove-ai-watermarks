@@ -1,6 +1,10 @@
 """Shared configuration for oracle-certified video SynthID removal."""
 
 DEFAULT_VIDEO_SYNTHID_VAE = "stabilityai/sd-vae-ft-mse"
+# The certified profile is a perturbation-to-signal ratio, so it is pinned against
+# this latent scaling factor as much as against noise_std. Rationale and the drift
+# it guards against: docs/module-internals.md.
+VIDEO_SYNTHID_VAE_SCALING_FACTOR = 0.18215
 DEFAULT_VIDEO_SYNTHID_NOISE_STD = 0.15
 DEFAULT_VIDEO_SYNTHID_LONG_SIDE = 512
 DEFAULT_VIDEO_SYNTHID_FPS = 12.0

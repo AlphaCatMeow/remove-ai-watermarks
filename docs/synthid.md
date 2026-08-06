@@ -372,6 +372,11 @@ itself. `0.15` is therefore the shipped default. The tracked manifest
 `data/evaluations/video-synthid-oracle.csv` records the public source URL,
 hashes, fidelity metrics, and verdicts without committing generated videos.
 
+What that calibration does and does not constrain, the ranked experiment program
+for trading less quality for the same removal, and the change candidates that were
+refuted along the way are recorded in
+[`video-synthid-quality-research.md`](video-synthid-quality-research.md).
+
 The VAE perturbation follows the general regeneration-attack construction from
 Zhao et al. The video-specific control and temporal metric are local additions.
 VideoMarkBench motivates testing frame aggregation and matched perturbations,

@@ -98,4 +98,33 @@ record is byte-identical, and a green test suite does not establish that on its 
 change that is meant to FIX detection is the exception that proves the rule: the diff
 must then be exactly the files you intended to change, named in advance.
 
+## A certified operating point is data, not a constant
+
+The video SynthID default is only meaningful as a row in
+`data/evaluations/video-synthid-oracle.csv`, so
+`test_shipped_defaults_match_a_certified_manifest_row` derives the pin from that
+manifest instead of restating literals. Pinning `noise_std` alone had let `long_side`
+and `fps` -- two thirds of what the oracle was actually shown -- move with a green
+suite.
+
+The certified profile is a perturbation-to-signal ratio, not a bare `noise_std`, so
+the latent scaling factor is gated in `load_video_vae_runtime`, carried on
+`VideoVaeRuntime`, and passed into encode and decode: the validated value and the
+applied value are one measurement. Anything that produces oracle evidence loads
+through that function. `video_synthid_sweep.py` hand-rolled the load and was the one
+path exempt from the gate it exists to feed, which is exactly backwards.
+
+Prove a video-path refactor the same way the detection path is proven, and without
+needing an oracle carrier: build a clip from a tracked fixture with ffmpeg, run the
+engine before and after, and require an identical output sha256. Keep the generated
+media outside the repository.
+
+Frame sampling is compared as `timestamp + 1e-9 >= next_sample_time`, so mutating
+that `>=` to `>` changes nothing and a green suite proves nothing. Mutate the phase
+or the period instead -- starting the accumulator half a period late shifts the
+selection by one frame while keeping the count identical, which is the drift a
+frame-count check cannot see and what
+`test_pairing_follows_the_engine_sampling_rule_not_just_the_frame_count` exists to
+catch.
+
 Environment setup, dependency recovery, CI behavior, and fixture policy: [`../../docs/development.md`](../../docs/development.md).
