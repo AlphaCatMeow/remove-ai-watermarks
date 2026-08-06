@@ -45,7 +45,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from pathlib import Path
 
-from remove_ai_watermarks._internal.constants import PNG_SIGNATURE
+from remove_ai_watermarks._internal.constants import PNG_SIGNATURE, RIFF_CODED_IMAGE_CHUNKS
+from remove_ai_watermarks._internal.schema import require_schema_version
 from remove_ai_watermarks.metadata import (
     QUICK_SCAN_BYTES,
     SAMSUNG_EDITOR_MARKER,
@@ -73,8 +74,11 @@ UNKNOWN_TRAILER_WINDOW = 64 * 1024
 # PNG text keys the file path reads for a generator tag, in ITS order. NovelAI stamps
 # Software/Source/Title rather than EXIF, and the first match wins, so order matters.
 _GENERATOR_TEXT_KEYS = ("Software", "Source", "Title", "Description")
-# RIFF chunks holding coded pixels rather than metadata.
-_RIFF_IMAGE_CHUNKS = frozenset({b"VP8 ", b"VP8L", b"ALPH"})
+# Stable transport contract for records produced by this module. The version is
+# deliberately separate from the verdict version: collection and interpretation can
+# evolve independently as long as old records remain readable.
+METADATA_RECORD_SCHEMA_VERSION = 1
+METADATA_RECORD_TYPE = "provenance_metadata"
 
 
 def _jpeg_regions(data: bytes) -> bytes:
@@ -145,14 +149,15 @@ def _riff_regions(data: bytes) -> bytes:
     input models.
     """
     out = bytearray(data[:12])  # 'RIFF' + size + 'WEBP'
-    size = len(data)
+    declared_end = 8 + struct.unpack("<I", data[4:8])[0] if len(data) >= 12 else len(data)
+    size = min(len(data), declared_end)
     position = 12
     while position + 8 <= size:
         chunk_type = data[position : position + 4]
         (length,) = struct.unpack("<I", data[position + 4 : position + 8])
         start = position + 8
         safe_length = max(0, min(length, size - start))
-        if chunk_type not in _RIFF_IMAGE_CHUNKS:
+        if chunk_type not in RIFF_CODED_IMAGE_CHUNKS:
             out += chunk_type + data[start : start + safe_length]
         position = start + safe_length + (safe_length & 1)  # chunks are word-aligned
     return bytes(out)
@@ -189,7 +194,7 @@ def _container_regions(image_path: Path, head: bytes) -> tuple[str, bytes]:
     appended bytes as chunks, inflating the record and creating false signals.
     """
     from remove_ai_watermarks._internal.isobmff import is_isobmff
-    from remove_ai_watermarks.metadata import png_late_metadata
+    from remove_ai_watermarks.metadata import png_late_metadata, riff_late_metadata
 
     if head.startswith(b"\xff\xd8"):
         return "jpeg", _jpeg_regions(head)
@@ -198,7 +203,7 @@ def _container_regions(image_path: Path, head: bytes) -> tuple[str, bytes]:
         # past the window; the same seek-past-IDAT reader the file path uses gets them.
         return "png", _png_regions(head) + png_late_metadata(image_path, HEAD_WINDOW)
     if head.startswith(b"RIFF") and head[8:12] == b"WEBP":
-        return "webp", _riff_regions(head)
+        return "webp", _riff_regions(head) + riff_late_metadata(image_path, HEAD_WINDOW)
     if is_isobmff(head):
         return "isobmff", _isobmff_regions(image_path, head)
     return "unknown", head
@@ -223,6 +228,31 @@ def _trailer(image_path: Path, container: str) -> bytes:
     or one whose end lies before the window) the window is kept as-is, bounded --
     that is what a byte scan of the same file would have seen anyway.
     """
+    if container == "webp":
+        # RIFF declares its structural end in bytes 4..8. A fixed tail window is
+        # normally the last animation/frame payload, not a trailer, so preserve
+        # only bytes appended after the declared RIFF container.
+        try:
+            with open(image_path, "rb") as handle:
+                header = handle.read(12)
+                if len(header) < 12 or not header.startswith(b"RIFF"):
+                    return b""
+                declared_end = 8 + struct.unpack("<I", header[4:8])[0]
+                handle.seek(0, 2)
+                file_size = handle.tell()
+                if declared_end < 12 or declared_end >= file_size:
+                    return b""
+                handle.seek(declared_end)
+                return handle.read(min(file_size - declared_end, UNKNOWN_TRAILER_WINDOW))
+        except OSError as exc:
+            logger.debug("RIFF trailer read failed for %s: %s", image_path, exc)
+            return b""
+    if container == "isobmff":
+        # ISOBMFF has no out-of-container trailer convention. Its bounded box
+        # walkers already collect late provenance while skipping ``mdat``; keeping
+        # a blind tail here would carry coded media bytes.
+        return b""
+
     tail = read_file_tail(image_path, TAIL_WINDOW)
     if SAMSUNG_EDITOR_MARKER in tail:
         # Galaxy AI splits its evidence: the marker sits in the post-EOI trailer, but
@@ -311,27 +341,52 @@ def _pil_info(info: dict[str, Any]) -> dict[str, str]:
     return out
 
 
-def collect_metadata_record(image_path: Path) -> dict[str, Any]:
+def collect_metadata_record(
+    image_path: Path,
+    *,
+    schema_version: int = METADATA_RECORD_SCHEMA_VERSION,
+) -> dict[str, Any]:
     """Collect everything the provenance verdict reads, as a JSON-safe record.
 
     The record is the transport format for
     :func:`identify.evidence_from_metadata_record`: it carries the metadata regions
-    (base64), the C2PA manifest store, and PIL's info mapping, and it never carries
-    pixel data.
+    (base64), the C2PA manifest store, and PIL's info mapping without carrying the
+    primary coded-pixel stream. Schema and collection status are explicit so a
+    consumer cannot mistake a failed read for an unknown provenance verdict.
 
     Args:
         image_path: Path to the image.
+        schema_version: Output schema implemented by the consumer.
 
     Returns:
-        A JSON-serializable dict. ``metadata_base64`` holds the concatenated
-        container regions, ``tail_base64`` the file trailer.
+        A versioned JSON-serializable dict. ``metadata_base64`` holds the
+        concatenated container regions, ``tail_base64`` the file trailer.
     """
+    schema_version = require_schema_version(
+        schema_version,
+        contract="provenance metadata",
+        supported=(1,),
+    )
+
     from remove_ai_watermarks._internal.c2pa import read_manifest_store_json
+
+    try:
+        image_path.stat()
+        status = "complete"
+        issues: list[dict[str, str]] = []
+    except OSError as exc:
+        logger.debug("metadata source unavailable for %s: %s", image_path, exc)
+        status = "error"
+        issues = [{"stage": "source", "code": "unavailable"}]
 
     container, regions = _container_regions(image_path, _raw_head(image_path))
 
     info = _decoder_info(image_path)
     record: dict[str, Any] = {
+        "schema_version": schema_version,
+        "record_type": METADATA_RECORD_TYPE,
+        "status": status,
+        "issues": issues,
         "container": container,
         "name": image_path.name,
         "metadata_base64": base64.b64encode(regions).decode("ascii"),

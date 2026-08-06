@@ -18,6 +18,11 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
     from pathlib import Path
 
+from remove_ai_watermarks._internal.constants import (
+    PNG_METADATA_CHUNKS,
+    RIFF_METADATA_CHUNKS,
+)
+
 logger = logging.getLogger(__name__)
 
 # Smaller scan_head window for the cheap marker checks (has_ai_metadata,
@@ -236,11 +241,6 @@ def _is_ai_value(value: str) -> bool:
     return any(token in value_lower for token in AI_GENERATOR_TOKENS)
 
 
-# PNG ancillary chunks that can carry provenance metadata (XMP, EXIF, text).
-# Never IDAT -- that is the compressed pixel stream.
-_PNG_META_CHUNKS: frozenset[bytes] = frozenset({b"tEXt", b"iTXt", b"zTXt", b"eXIf", b"iCCP"})
-
-
 def _png_late_metadata(image_path: Path, window: int) -> bytes:
     """Payloads of PNG metadata chunks that start *beyond* the first ``window``
     bytes, found by seeking past the (large) ``IDAT`` pixel stream.
@@ -272,7 +272,7 @@ def _png_late_metadata(image_path: Path, window: int) -> bytes:
                 # Clamp the attacker-controlled 32-bit length to the bytes that
                 # actually remain, so a malformed huge length can't allocate GBs.
                 safe_length = max(0, min(length, file_size - data_start))
-                if chunk_type in _PNG_META_CHUNKS and data_start >= window:
+                if chunk_type in PNG_METADATA_CHUNKS and data_start >= window:
                     f.seek(data_start)
                     out += f.read(safe_length)
                 # Advance by the CLAMPED length: a malformed/inflated `length` that
@@ -283,10 +283,6 @@ def _png_late_metadata(image_path: Path, window: int) -> bytes:
         logger.debug("PNG late-metadata scan failed on %s: %s", image_path, exc)
         return b""
     return bytes(out)
-
-
-# RIFF/WebP chunks that carry metadata rather than coded pixels.
-_RIFF_META_CHUNKS: frozenset[bytes] = frozenset({b"EXIF", b"XMP ", b"ICCP", b"C2PA"})
 
 
 def _riff_late_metadata(image_path: Path, window: int, *, max_total: int = 4 * 1024 * 1024) -> bytes:
@@ -311,8 +307,13 @@ def _riff_late_metadata(image_path: Path, window: int, *, max_total: int = 4 * 1
                 return b""
             f.seek(0, 2)
             file_size = f.tell()
+            f.seek(4)
+            declared_size = f.read(4)
+            if len(declared_size) < 4:
+                return b""
+            container_end = min(file_size, 8 + struct.unpack("<I", declared_size)[0])
             position = 12  # 'RIFF' + size + form type
-            while position + 8 <= file_size and len(out) < max_total:
+            while position + 8 <= container_end and len(out) < max_total:
                 f.seek(position)
                 header = f.read(8)
                 if len(header) < 8:
@@ -322,8 +323,8 @@ def _riff_late_metadata(image_path: Path, window: int, *, max_total: int = 4 * 1
                 start = position + 8
                 # Clamp to what remains: a malformed 32-bit length must not push the
                 # walk past EOF and abandon a genuine label chunk after it.
-                safe_length = max(0, min(length, file_size - start))
-                if chunk_type in _RIFF_META_CHUNKS and start >= window:
+                safe_length = max(0, min(length, container_end - start))
+                if chunk_type in RIFF_METADATA_CHUNKS and start >= window:
                     f.seek(start)
                     out += f.read(min(safe_length, max_total - len(out)))
                 position = start + safe_length + (safe_length & 1)  # chunks are word-aligned
@@ -1603,4 +1604,5 @@ QUICK_SCAN_BYTES = _QUICK_SCAN_BYTES
 SAMSUNG_EDITOR_MARKER = _SAMSUNG_EDITOR_MARKER
 read_file_tail = _read_file_tail
 png_late_metadata = _png_late_metadata
+riff_late_metadata = _riff_late_metadata
 exif_text = _exif_text

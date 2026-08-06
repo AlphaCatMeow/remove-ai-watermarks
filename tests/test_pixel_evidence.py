@@ -1,10 +1,9 @@
-"""Tests for the experimental pixel-forensics collector.
+"""Tests for the pixel-forensics collector.
 
-It has no consumer, so there is no downstream behavior to pin. What these guard is
-the part a future consumer would rely on and could not discover from the code: that
-a family is empty rather than wrong when the image is too small for it, that one
-failing family does not lose the other five, and that the artifacts which identify
-the source image stay behind their opt-in.
+These pin the service contract and the edge cases a consumer cannot infer safely:
+a family is empty rather than wrong when the image is too small for it, one failing
+family does not lose the other five, and artifacts that identify the source image
+stay behind their opt-in.
 """
 
 from __future__ import annotations
@@ -16,7 +15,16 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from remove_ai_watermarks.pixel_evidence import PixelEvidence, extract_pixel_evidence, is_available
+from remove_ai_watermarks.pixel_evidence import (
+    AC_POSITIONS,
+    PIXEL_EVIDENCE_SCHEMA_VERSION,
+    PixelEvidence,
+    _dct_matrix,
+    dct_features,
+    extract_pixel_evidence,
+    is_available,
+    perceptual_hash,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -25,7 +33,7 @@ FAMILIES = ("dct", "fft", "noise", "ela", "gradient", "color")
 
 
 def _textured(path: Path, size: tuple[int, int] = (192, 160), *, seed: int = 0) -> Path:
-    """A textured image. Flat colour would make several families degenerate (zero
+    """A textured image. Flat color would make several families degenerate (zero
     residual, empty gradient histogram) and hide a real break."""
     rng = np.random.default_rng(seed)
     base = rng.integers(0, 255, (size[1], size[0], 3), dtype=np.uint8)
@@ -61,6 +69,28 @@ class TestFamilies:
 
         assert extract_pixel_evidence(path).decode == {"width": 3000, "height": 80}
 
+    def test_selected_dct_coefficients_match_the_full_transform(self):
+        gray = np.random.default_rng(7).uniform(0, 255, (24, 32)).astype(np.float32)
+        basis = _dct_matrix(np)
+        blocks = gray.reshape(3, 8, 4, 8).swapaxes(1, 2)
+        full = np.einsum("ij,abjk,lk->abil", basis, blocks, basis)
+        bins = np.linspace(-20.5, 20.5, 22)
+        expected = [
+            np.histogram(full[:, :, row, column].ravel(), bins=bins)[0].tolist() for row, column in AC_POSITIONS
+        ]
+
+        assert dct_features(gray)["dct_ac_hist"] == expected
+
+    def test_perceptual_hash_matches_the_full_transform(self):
+        gray = np.random.default_rng(8).uniform(0, 255, (32, 32)).astype(np.float32)
+        basis = _dct_matrix(np, 32)
+        coefficients = basis @ gray @ basis.T
+        low = coefficients[:8, :8].ravel()[1:]
+        bits = low > np.median(low)
+        expected = f"{int(''.join('1' if bit else '0' for bit in bits), 2):016x}"
+
+        assert perceptual_hash(gray) == expected
+
 
 class TestDegenerateInputs:
     def test_undecodable_file_reports_the_error_and_stays_empty(self, tmp_path: Path):
@@ -90,12 +120,14 @@ class TestDegenerateInputs:
         path = _textured(tmp_path / "textured.png")
 
         def boom(*args, **kwargs):
-            raise ValueError("family exploded")
+            raise ValueError(f"family failed for {path}")
 
         monkeypatch.setattr("remove_ai_watermarks.pixel_evidence.color_features", boom)
         evidence = extract_pixel_evidence(path)
 
-        assert "error" in evidence.color
+        assert evidence.color == {"error": "ValueError"}
+        assert evidence.status == "partial"
+        assert evidence.to_dict()["status"] == "partial"
         assert evidence.dct != {}
         assert evidence.gradient != {}
 
@@ -154,3 +186,68 @@ def test_evidence_is_frozen(tmp_path: Path):
     assert isinstance(evidence, PixelEvidence)
     with pytest.raises(dataclasses.FrozenInstanceError):
         evidence.decode = {}  # type: ignore[misc]
+
+
+def test_transport_contract_is_versioned_json_and_omits_path(tmp_path: Path):
+    import json
+
+    evidence = extract_pixel_evidence(_textured(tmp_path / "textured.png"), timings=True)
+    payload = evidence.to_dict()
+
+    assert payload["schema_version"] == PIXEL_EVIDENCE_SCHEMA_VERSION == 1
+    assert payload["status"] == "complete"
+    assert "path" not in payload
+    assert payload["timing_ms"]["total"] >= 0
+    assert json.loads(json.dumps(payload, allow_nan=False)) == payload
+
+
+@pytest.mark.parametrize("schema_version", [2, True, 1.0])
+def test_transport_rejects_unsupported_output_schema(tmp_path: Path, schema_version: object):
+    evidence = extract_pixel_evidence(_textured(tmp_path / "textured.png"))
+
+    with pytest.raises(ValueError, match="Unsupported pixel evidence schema"):
+        evidence.to_dict(schema_version=schema_version)  # type: ignore[arg-type]
+
+
+def test_decode_error_transport_does_not_leak_the_local_path(tmp_path: Path):
+    import json
+
+    path = tmp_path / "broken.png"
+    path.write_bytes(b"not an image")
+
+    payload = extract_pixel_evidence(path).to_dict()
+
+    assert payload["status"] == "error"
+    assert payload["decode"]["error"] == "UnidentifiedImageError"
+    assert str(path) not in json.dumps(payload)
+
+
+def test_timings_are_opt_in(tmp_path: Path):
+    path = _textured(tmp_path / "textured.png")
+
+    assert extract_pixel_evidence(path).timing_ms == {}
+    assert set(extract_pixel_evidence(path, artifacts=True, timings=True).timing_ms) == {
+        "decode",
+        "noise",
+        "fft",
+        "ela",
+        "dct",
+        "gradient",
+        "color",
+        "full_artifacts",
+        "total",
+    }
+
+
+def test_pixel_decode_registers_optional_heif_opener(tmp_path: Path, monkeypatch):
+    registered = False
+
+    def mark_registered():
+        nonlocal registered
+        registered = True
+
+    monkeypatch.setattr("remove_ai_watermarks.image_io._register_heif", mark_registered)
+
+    extract_pixel_evidence(_textured(tmp_path / "textured.png"))
+
+    assert registered is True

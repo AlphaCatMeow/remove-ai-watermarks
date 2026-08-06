@@ -24,7 +24,12 @@ from remove_ai_watermarks.identify import (
     identify_from_evidence,
     identify_metadata_record,
 )
-from remove_ai_watermarks.metadata_record import HEAD_WINDOW, collect_metadata_record
+from remove_ai_watermarks.metadata_record import (
+    HEAD_WINDOW,
+    METADATA_RECORD_SCHEMA_VERSION,
+    METADATA_RECORD_TYPE,
+    collect_metadata_record,
+)
 
 FIXTURES = Path(__file__).resolve().parent.parent / "data" / "fixtures" / "provenance"
 COMPARED = ("is_ai_generated", "platform", "confidence", "ai_source_kind", "ai_from_metadata")
@@ -138,7 +143,25 @@ class TestRecordShape:
     def test_the_record_survives_json(self, tmp_path: Path):
         record = collect_metadata_record(_noise_png(tmp_path / "plain.png"))
 
-        assert json.loads(json.dumps(record))["container"] == "png"
+        assert json.loads(json.dumps(record, allow_nan=False))["container"] == "png"
+        assert record["schema_version"] == METADATA_RECORD_SCHEMA_VERSION == 1
+        assert record["record_type"] == METADATA_RECORD_TYPE == "provenance_metadata"
+
+    @pytest.mark.parametrize("keep_version", [True, False])
+    def test_transport_filename_is_not_evidence(self, tmp_path: Path, keep_version: bool):
+        """The path labels a record; detector tokens in it do not describe pixels."""
+        path = tmp_path / "jumb-c2pa-OpenAI-trainedAlgorithmicMedia.jpg"
+        Image.fromarray(np.zeros((64, 64, 3), dtype=np.uint8)).save(path, "JPEG")
+        record = collect_metadata_record(path)
+        if not keep_version:
+            record.pop("schema_version")
+            record.pop("record_type")
+
+        report = identify_metadata_record(record, path=path)
+
+        assert report.is_ai_generated is None
+        assert report.platform is None
+        assert report.confidence == "none"
 
     def test_pixels_are_not_carried(self, tmp_path: Path):
         """The reason the record walks regions instead of shipping the head: a record
@@ -168,6 +191,60 @@ class TestRecordShape:
 
         assert record["container"] == "unknown"
         assert record["metadata_base64"] == ""
+        assert record["status"] == "error"
+        assert record["issues"] == [{"stage": "source", "code": "unavailable"}]
+
+    def test_unknown_record_schema_is_rejected(self, tmp_path: Path):
+        path = _noise_png(tmp_path / "plain.png")
+        record = collect_metadata_record(path)
+        record["schema_version"] = 2
+
+        with pytest.raises(ValueError, match="Unsupported provenance metadata schema"):
+            identify_metadata_record(record, path=path)
+
+    @pytest.mark.parametrize("schema_version", [True, 1.0, "1", None])
+    def test_native_record_schema_requires_the_integer_one(self, tmp_path: Path, schema_version: object):
+        path = _noise_png(tmp_path / "plain.png")
+        record = collect_metadata_record(path)
+        record["schema_version"] = schema_version
+
+        with pytest.raises(ValueError, match="Unsupported provenance metadata schema"):
+            identify_metadata_record(record, path=path)
+
+    @pytest.mark.parametrize("status", [None, "partial", "unknown", True])
+    def test_native_record_requires_complete_collection_status(self, tmp_path: Path, status: object):
+        path = _noise_png(tmp_path / "plain.png")
+        record = collect_metadata_record(path)
+        if status is None:
+            record.pop("status")
+        else:
+            record["status"] = status
+
+        with pytest.raises(ValueError, match="collection status"):
+            identify_metadata_record(record, path=path)
+
+    @pytest.mark.parametrize("schema_version", [2, True, 1.0])
+    def test_collection_rejects_unsupported_output_schema_before_reading(self, tmp_path: Path, schema_version: object):
+        with pytest.raises(ValueError, match="Unsupported provenance metadata schema"):
+            collect_metadata_record(
+                tmp_path / "missing.png",
+                schema_version=schema_version,  # type: ignore[arg-type]
+            )
+
+    def test_broad_forensic_record_is_not_detector_input(self, tmp_path: Path):
+        path = _noise_png(tmp_path / "plain.png")
+
+        with pytest.raises(ValueError, match="Unsupported metadata record type"):
+            identify_metadata_record(
+                {"record_type": "forensic_metadata", "schema_version": 1},
+                path=path,
+            )
+
+    def test_failed_collection_cannot_be_judged_as_an_unknown_image(self, tmp_path: Path):
+        path = tmp_path / "missing.png"
+
+        with pytest.raises(ValueError, match="collection failed"):
+            identify_metadata_record(collect_metadata_record(path), path=path)
 
 
 class TestReportTransport:
@@ -178,7 +255,15 @@ class TestReportTransport:
 
         assert payload["schema_version"] == PROVENANCE_REPORT_SCHEMA_VERSION == 1
         assert "path" not in payload
-        assert json.loads(json.dumps(payload)) == payload
+        assert json.loads(json.dumps(payload, allow_nan=False)) == payload
+
+    @pytest.mark.parametrize("schema_version", [2, True, 1.0])
+    def test_report_rejects_unsupported_output_schema(self, tmp_path: Path, schema_version: object):
+        path = _noise_png(tmp_path / "plain.png")
+        report = identify_metadata_record(collect_metadata_record(path), path=path)
+
+        with pytest.raises(ValueError, match="Unsupported provenance report schema"):
+            report.to_dict(schema_version=schema_version)  # type: ignore[arg-type]
 
     def test_convenience_entry_point_matches_explicit_sequence(self, tmp_path: Path):
         path = _noise_png(tmp_path / "plain.png")
@@ -197,6 +282,38 @@ def test_a_webp_record_matches(tmp_path: Path):
 
     assert collect_metadata_record(path)["container"] == "webp"
     _assert_same_verdict(path)
+
+
+def test_a_webp_record_collects_metadata_after_a_large_frame(tmp_path: Path):
+    """The RIFF walker seeks past coded pixels instead of stopping at the head window."""
+    path = tmp_path / "late.webp"
+    rng = np.random.default_rng(7)
+    pixels = rng.integers(0, 255, (900, 900, 3), dtype=np.uint8)
+    xmp = b"<x:xmpmeta><photoshop:DigitalSourceType>trainedAlgorithmicMedia</photoshop:DigitalSourceType></x:xmpmeta>"
+    Image.fromarray(pixels).save(path, "WEBP", lossless=True, xmp=xmp)
+
+    assert path.stat().st_size > HEAD_WINDOW
+    _assert_same_verdict(path)
+
+
+def test_a_webp_record_does_not_carry_animation_frame_pixels(tmp_path: Path):
+    """ANMF is a coded-frame container, not a metadata chunk."""
+    from remove_ai_watermarks.metadata_record import _riff_regions
+
+    frame = b"jumb c2pa OpenAI trainedAlgorithmicMedia" * 20
+    riff = b"RIFF" + (4 + 8 + len(frame)).to_bytes(4, "little") + b"WEBP"
+    riff += b"ANMF" + len(frame).to_bytes(4, "little") + frame
+
+    assert frame not in _riff_regions(riff)
+
+
+def test_an_invalid_short_riff_size_does_not_turn_the_container_into_a_trailer(tmp_path: Path):
+    from remove_ai_watermarks.metadata_record import _trailer
+
+    path = tmp_path / "invalid.webp"
+    path.write_bytes(b"RIFF\x00\x00\x00\x00WEBPjumb c2pa trainedAlgorithmicMedia")
+
+    assert _trailer(path, "webp") == b""
 
 
 def test_the_record_never_reopens_the_source(tmp_path: Path, monkeypatch):

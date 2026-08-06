@@ -388,9 +388,10 @@ metadata extraction from verdict logic:
 - `extract_provenance_evidence` reads the supported metadata signals into
   `ProvenanceEvidence`.
 - `evidence_from_metadata_record` normalizes an externally collected nested
-  metadata record into the same evidence type without file access. Diagnostic
-  values under `error` and `kind` are excluded from evidence while nested raw
-  bytes remain available through encoded binary fields.
+  metadata record into the same evidence type without file access. Versioned native
+  records accept only source-derived fields; filenames, hashes, timings, errors,
+  prior verdicts, and pixel results cannot become evidence. Unknown native schema
+  versions and other record types are rejected.
 - The vendor registries are matched over `_metadata_region(head)`, not the whole scan
   buffer: they see the container's metadata and not its coded pixels. The tokens are
   raw substrings and the shortest are four and five bytes, so over a megabyte of
@@ -427,19 +428,44 @@ defects found while establishing that equality are the reason each rule exists:
   returns the FIRST candidate carrying a known token, so preserving candidate order
   is part of verdict equivalence.
 
-Pixel forensics are deliberately absent: nothing in the provenance path reads them.
+The transport is independently versioned as `provenance_metadata` schema 1. Native
+records require the exact integer schema version and a `complete` status. Source
+read failures are explicit error records and cannot be judged. WebP walks the full
+declared RIFF container by seeking over `VP8`, `VP8L`, `ALPH`, and `ANMF`, so late
+XMP/C2PA remains visible without shipping coded frames or parsing appended trailer
+bytes as chunks.
+
+Pixel forensics are deliberately absent: the provenance path does not read them.
 Verdict equivalence is checked over tracked fixtures and a separate local evaluation
 corpus.
 
-### Experimental pixel forensics
+### Broad forensic metadata
+
+[`forensic_metadata.py`](../src/remove_ai_watermarks/forensic_metadata.py) owns the
+wide metadata-only inspection record: hashes and timestamps, full EXIF/IPTC, C2PA,
+container inventories, bounded binary metadata, and embedded-thumbnail forensics.
+It is a separate `forensic_metadata` record type and is deliberately rejected by the
+provenance normalizer. Integration code publishes the strict
+`ProvenanceReport.to_dict()` alongside it rather than letting operational fields or
+derived results influence detection.
+
+### Pixel forensics
 
 [`pixel_evidence.py`](../src/remove_ai_watermarks/pixel_evidence.py) measures six
 families of scale-robust pixel statistics (block-DCT histograms and Benford
 deviation, FFT band energies and CFA peaks, high-pass residual, error level,
-gradient, colour) in a single decode, sharing the intermediate maps between them.
+gradient, color) in a single decode, sharing the intermediate maps between them.
 
-It has no consumer. Nothing in the package reads it -- not the verdict, not removal,
-not the CLI -- and the shape is unstable until something does.
+It remains independent of verdict and removal. `PixelEvidence.to_dict()` is the
+versioned service boundary: it omits the local path, exposes complete/partial/error
+status, keeps exception details in logs, and can include opt-in per-stage timings.
+
+The provenance metadata collector, broad forensic collector, provenance report,
+and pixel report all accept an explicit output `schema_version`. Package releases
+may add an output schema while retaining older serializers, so a rolling consumer
+can keep requesting the version it already understands. Within one schema, changes
+are additive; existing fields, types, meanings, signal names, and watermark labels
+remain stable. Unsupported selections raise before a different shape is returned.
 
 `artifacts=True` additionally returns the spatial layer: a perceptual hash, a 128px
 JPEG thumbnail, and coarse ELA, residual and phase maps. Those identify the source

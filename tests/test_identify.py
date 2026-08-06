@@ -113,6 +113,36 @@ class TestProvenanceEvidence:
         assert evidence.exif_generator == "NovelAI"
 
     @pytest.mark.parametrize(
+        "record",
+        [
+            {"name": "trainedAlgorithmicMedia.jpg"},
+            {"sha256": "jumb-c2pa-OpenAI-trainedAlgorithmicMedia"},
+            {"pil": {"trainedAlgorithmicMedia": "plain"}},
+            {"signals": {"provenance": {"is_ai_generated": True}}},
+            {"pixel": {"error": "trainedAlgorithmicMedia"}},
+        ],
+    )
+    def test_external_diagnostics_and_arbitrary_keys_are_not_evidence(self, tmp_path: Path, record: dict):
+        report = identify_from_evidence(evidence_from_metadata_record(record, path=tmp_path / "plain.jpg"))
+
+        assert report.is_ai_generated is None
+        assert report.signals == []
+
+    def test_external_metadata_value_is_evidence(self, tmp_path: Path):
+        record = {
+            "exif": {
+                "0th": {
+                    "ImageDescription": "digitalSourceType=trainedAlgorithmicMedia",
+                }
+            }
+        }
+
+        report = identify_from_evidence(evidence_from_metadata_record(record, path=tmp_path / "generated.jpg"))
+
+        assert report.is_ai_generated is True
+        assert report.ai_source_kind == "generated"
+
+    @pytest.mark.parametrize(
         "filename",
         [
             "chatgpt-1.png",
@@ -443,6 +473,18 @@ class TestIdentifyRealSamples:
         r = identify(p, check_visible=False, check_invisible=False)
         assert r.is_ai_generated is True
         assert r.platform == "Apple Photos (Clean Up AI edit)"
+        assert r.ai_source_kind == "enhanced"
+
+    def test_standalone_iptc_composite_synthetic_is_enhanced(self, tmp_path: Path):
+        p = tmp_path / "composite.jpg"
+        p.write_bytes(
+            b'\xff\xd8\xff\xe1<x:xmpmeta Iptc4xmpExt:DigitalSourceType="compositeSynthetic"></x:xmpmeta>\xff\xd9'
+        )
+
+        r = identify(p, check_visible=False, check_invisible=False)
+
+        assert r.is_ai_generated is True
+        assert r.ai_source_kind == "enhanced"
 
     def test_flux_bfl_c2pa_png(self):
         # flux-1.png: real Black Forest Labs FLUX.2 Playground output (signed C2PA).

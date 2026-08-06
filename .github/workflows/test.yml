@@ -45,6 +45,27 @@ jobs:
       - name: Run tests
         run: uv run pytest -q
 
+  transport-contract-python-314:
+    name: versioned transport contracts py3.14
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.14"
+      - name: Create clean runtime contract environment
+        run: uv venv --python 3.14 .venv-contract
+      - name: Install runtime contract dependencies
+        run: >-
+          uv pip install --python .venv-contract/bin/python
+          ".[pixels,heif]" "numpy>=2,<3" "pytest>=8"
+      - name: Run versioned transport contract tests
+        run: >-
+          .venv-contract/bin/python -m pytest -q
+          tests/test_forensic_metadata.py
+          tests/test_metadata_record.py
+          tests/test_pixel_evidence.py
+
   video-e2e:
     name: video full-clip end-to-end
     runs-on: ubuntu-latest

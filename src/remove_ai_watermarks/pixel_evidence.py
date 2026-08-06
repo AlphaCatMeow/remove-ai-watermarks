@@ -1,13 +1,11 @@
 # pyright: reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportMissingTypeStubs=false
-"""Experimental: the complete pixel-forensics layer for one image.
+"""The complete pixel-forensics layer for one image.
 
 STATUS
 
-Experimental and unused. Nothing in this package reads it -- not the provenance
-verdict, not removal, not the CLI. It is here because the research scanner that
-produced these measurements is gone, and the capability was worth keeping: whatever
-asks for pixel forensics next starts from a tested implementation instead of
-rebuilding one. Treat the shape as unstable until a caller exists.
+Independent from provenance verdicts, removal, and the CLI. Consumers use the
+versioned :meth:`PixelEvidence.to_dict` boundary; feature extraction failures are
+reported per family without discarding successful measurements.
 
 WHAT IS MEASURED
 
@@ -16,7 +14,7 @@ One decode, then six families of scale-robust statistics over it:
 * ``dct`` -- AC coefficient histograms over the 8x8 block DCT, plus the deviation of
   leading digits from Benford's law.
 * ``fft`` -- radial band energies of the log-magnitude spectrum, plus the
-  colour-filter-array periodicity peaks a demosaiced camera capture leaves.
+  color-filter-array periodicity peaks a demosaiced camera capture leaves.
 * ``noise`` -- standard deviation and kurtosis of a high-pass residual.
 * ``ela`` -- error level after a quality-90 JPEG re-save.
 * ``gradient`` -- gradient-magnitude histogram and Laplacian variance.
@@ -46,8 +44,11 @@ from __future__ import annotations
 import base64
 import io
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+
+from remove_ai_watermarks._internal.schema import require_schema_version
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -63,6 +64,7 @@ FFT_BANDS = 8
 # A Bayer CFA shows as symmetric peaks at half the Nyquist on the diagonals.
 BAYER_OFFSETS = ((1, 1), (1, -1))
 INSTALL_HINT = "install the pixel extra: uv add 'remove-ai-watermarks[pixels]'"
+PIXEL_EVIDENCE_SCHEMA_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -86,11 +88,47 @@ class PixelEvidence:
     color: dict[str, Any] = field(default_factory=dict[str, Any])
     # Identifies the source image; see the module note. Empty unless asked for.
     artifacts: dict[str, Any] = field(default_factory=dict[str, Any])
+    # Opt-in timings for callers measuring pipeline latency. Empty by default so
+    # repeated evidence collection remains value-deterministic.
+    timing_ms: dict[str, float] = field(default_factory=dict[str, float])
 
     @property
     def decoded(self) -> bool:
         """False when the source could not be decoded at all."""
         return "error" not in self.decode
+
+    @property
+    def status(self) -> str:
+        """``complete``, ``partial`` for a failed family, or ``error`` on decode."""
+        if not self.decoded:
+            return "error"
+        sections = (self.dct, self.fft, self.noise, self.ela, self.gradient, self.color, self.artifacts)
+        return "partial" if any("error" in section for section in sections) else "complete"
+
+    def to_dict(
+        self,
+        *,
+        schema_version: int = PIXEL_EVIDENCE_SCHEMA_VERSION,
+    ) -> dict[str, Any]:
+        """Return the selected JSON-safe transport schema without a local path."""
+        schema_version = require_schema_version(
+            schema_version,
+            contract="pixel evidence",
+            supported=(1,),
+        )
+        return {
+            "schema_version": schema_version,
+            "status": self.status,
+            "decode": dict(self.decode),
+            "dct": dict(self.dct),
+            "fft": dict(self.fft),
+            "noise": dict(self.noise),
+            "ela": dict(self.ela),
+            "gradient": dict(self.gradient),
+            "color": dict(self.color),
+            "artifacts": dict(self.artifacts),
+            "timing_ms": dict(self.timing_ms),
+        }
 
 
 def is_available() -> bool:
@@ -120,14 +158,17 @@ def _dct_matrix(np: Any, n: int = 8) -> Any:
 
 
 def read_gray(image_path: Path) -> tuple[Any, Any, dict[str, Any]]:
-    """Decode to float32 grayscale (and RGB for colour stats), downscaled.
+    """Decode to float32 grayscale (and RGB for color stats), downscaled.
 
     Pillow, not cv2, and the source dimensions are recorded BEFORE the downscale.
     """
     np = _numpy()
     from PIL import Image
 
+    from remove_ai_watermarks import image_io
+
     try:
+        image_io._register_heif()  # pyright: ignore[reportPrivateUsage]
         with Image.open(image_path) as img:
             info: dict[str, Any] = {"width": img.width, "height": img.height}
             if max(img.size) > MAX_SIDE:
@@ -136,7 +177,9 @@ def read_gray(image_path: Path) -> tuple[Any, Any, dict[str, Any]]:
             gray = np.asarray(img.convert("L"), dtype=np.float32)
     except Exception as exc:
         logger.debug("pixel decode failed for %s: %s", image_path, exc)
-        return None, None, {"error": f"{type(exc).__name__}: {exc}"}
+        # Exception text from Pillow commonly embeds the absolute source path.
+        # Keep that detail in the log, not in the pathless transport contract.
+        return None, None, {"error": type(exc).__name__}
     return gray, rgb, info
 
 
@@ -150,11 +193,13 @@ def dct_features(gray: Any) -> dict[str, Any]:
     basis = _dct_matrix(np)
     bins = np.linspace(-20.5, 20.5, 22)
     blocks = gray[:h8, :w8].reshape(h8 // 8, 8, w8 // 8, 8).swapaxes(1, 2)
-    coeff = np.einsum("ij,abjk,lk->abil", basis, blocks, basis)
+    rows = basis[[row for row, _ in AC_POSITIONS]]
+    columns = basis[[column for _, column in AC_POSITIONS]]
+    coeff = np.einsum("ki,abij,kj->abk", rows, blocks, columns)
     hists = []
     lead_vals: list[Any] = []
-    for dy, dx in AC_POSITIONS:
-        values = coeff[:, :, dy, dx].ravel()
+    for index in range(len(AC_POSITIONS)):
+        values = coeff[:, :, index].ravel()
         hists.append(np.histogram(values, bins=bins)[0].tolist())
         lead_vals.append(np.abs(values))
     out: dict[str, Any] = {"dct_ac_hist": hists}
@@ -290,8 +335,8 @@ def perceptual_hash(gray: Any) -> str:
 
     small = np.asarray(Image.fromarray(gray.astype(np.float32), mode="F").resize((32, 32), Image.Resampling.LANCZOS))
     basis = _dct_matrix(np, 32)
-    coeff = basis @ small @ basis.T
-    low = coeff[:8, :8].ravel()[1:]  # drop DC
+    low_basis = basis[:8]
+    low = (low_basis @ small @ low_basis.T).ravel()[1:]  # drop DC
     bits = low > np.median(low)
     return f"{int(''.join('1' if bit else '0' for bit in bits), 2):016x}"
 
@@ -343,7 +388,7 @@ def spatial_artifacts(gray: Any, rgb: Any, *, ela: Any, residual: Any, phase: An
     return out
 
 
-def extract_pixel_evidence(image_path: Path, *, artifacts: bool = False) -> PixelEvidence:
+def extract_pixel_evidence(image_path: Path, *, artifacts: bool = False, timings: bool = False) -> PixelEvidence:
     """Measure every pixel-statistic family for one image in a single decode.
 
     The image is decoded ONCE and the intermediate maps (high-pass residual, ELA
@@ -361,40 +406,79 @@ def extract_pixel_evidence(image_path: Path, *, artifacts: bool = False) -> Pixe
         artifacts: Also return the spatial layer -- perceptual hash, thumbnail and
             coarse maps. Off by default: those identify the source image, so asking
             for them is a decision the caller makes explicitly.
+        timings: Measure each stage and include rounded milliseconds in
+            :attr:`PixelEvidence.timing_ms`.
 
     Returns:
         A :class:`PixelEvidence`.
     """
-    gray, rgb, info = read_gray(image_path)
-    if gray is None or rgb is None:
-        return PixelEvidence(path=image_path, decode=info)
+    started = time.perf_counter()
+    stage_started = started
+    measured: dict[str, float] = {}
 
-    residual = noise_residual_map(gray)
-    spectrum = fft_decompose(gray)
-    error = ela_map(rgb)
+    gray, rgb, info = read_gray(image_path)
+    measured["decode"] = time.perf_counter() - stage_started
+    if gray is None or rgb is None:
+        measured["total"] = time.perf_counter() - started
+        timing_ms = {name: round(seconds * 1000, 1) for name, seconds in measured.items()} if timings else {}
+        return PixelEvidence(path=image_path, decode=info, timing_ms=timing_ms)
 
     families: dict[str, dict[str, Any]] = {}
+
+    residual = None
+    stage_started = time.perf_counter()
+    try:
+        residual = noise_residual_map(gray)
+        families["noise"] = noise_features(residual) if residual is not None else {}
+    except Exception as exc:
+        logger.debug("pixel family noise failed for %s: %s", image_path, exc)
+        families["noise"] = {"error": type(exc).__name__}
+    measured["noise"] = time.perf_counter() - stage_started
+
+    spectrum = None
+    stage_started = time.perf_counter()
+    try:
+        spectrum = fft_decompose(gray)
+        families["fft"] = fft_features(spectrum[0]) if spectrum is not None else {}
+    except Exception as exc:
+        logger.debug("pixel family fft failed for %s: %s", image_path, exc)
+        families["fft"] = {"error": type(exc).__name__}
+    measured["fft"] = time.perf_counter() - stage_started
+
+    error = None
+    stage_started = time.perf_counter()
+    try:
+        error = ela_map(rgb)
+        families["ela"] = ela_features(error) if error is not None else {}
+    except Exception as exc:
+        logger.debug("pixel family ela failed for %s: %s", image_path, exc)
+        families["ela"] = {"error": type(exc).__name__}
+    measured["ela"] = time.perf_counter() - stage_started
+
     for name, compute in (
-        ("noise", lambda: noise_features(residual) if residual is not None else {}),
-        ("fft", lambda: fft_features(spectrum[0]) if spectrum is not None else {}),
-        ("ela", lambda: ela_features(error) if error is not None else {}),
         ("dct", lambda: dct_features(gray)),
         ("gradient", lambda: gradient_features(gray)),
         ("color", lambda: color_features(rgb)),
     ):
+        stage_started = time.perf_counter()
         try:
             families[name] = compute()
         except Exception as exc:  # one bad family must not lose the other five
             logger.debug("pixel family %s failed for %s: %s", name, image_path, exc)
-            families[name] = {"error": f"{type(exc).__name__}: {exc}"}
+            families[name] = {"error": type(exc).__name__}
+        measured[name] = time.perf_counter() - stage_started
 
     if artifacts:
+        stage_started = time.perf_counter()
         try:
             families["artifacts"] = spatial_artifacts(
                 gray, rgb, ela=error, residual=residual, phase=spectrum[1] if spectrum is not None else None
             )
         except Exception as exc:
             logger.debug("pixel artifacts failed for %s: %s", image_path, exc)
-            families["artifacts"] = {"error": f"{type(exc).__name__}: {exc}"}
+            families["artifacts"] = {"error": type(exc).__name__}
+        measured["full_artifacts"] = time.perf_counter() - stage_started
 
-    return PixelEvidence(path=image_path, decode=info, **families)
+    measured["total"] = time.perf_counter() - started
+    timing_ms = {name: round(seconds * 1000, 1) for name, seconds in measured.items()} if timings else {}
+    return PixelEvidence(path=image_path, decode=info, timing_ms=timing_ms, **families)

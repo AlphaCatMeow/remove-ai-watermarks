@@ -40,6 +40,7 @@ from remove_ai_watermarks._internal.constants import (
     C2PA_IDENTITY_AI_ORGS,
     C2PA_ISSUERS,
 )
+from remove_ai_watermarks._internal.schema import require_schema_version
 from remove_ai_watermarks.metadata import (
     AI_METADATA_KEYS,
     AIGC_MARKERS,
@@ -176,7 +177,32 @@ def _external_metadata(value: Any) -> tuple[list[tuple[str, Any]], bytes]:
     """Index nested metadata and recover common encoded binary values in one pass."""
     pairs: list[tuple[str, Any]] = []
     parts: list[bytes] = []
-    diagnostic_keys = {"error", "kind"}
+    diagnostic_keys = {
+        "artifacts",
+        "birthtime",
+        "color",
+        "content_format",
+        "dct",
+        "ela",
+        "error",
+        "extension",
+        "fft",
+        "file",
+        "filename",
+        "full",
+        "gradient",
+        "kind",
+        "mtime",
+        "name",
+        "noise",
+        "path",
+        "pixel",
+        "provenance",
+        "sha256",
+        "signals",
+        "size_bytes",
+        "timing_ms",
+    }
 
     def visit(item: Any) -> None:
         if isinstance(item, dict):
@@ -184,7 +210,6 @@ def _external_metadata(value: Any) -> tuple[list[tuple[str, Any]], bytes]:
             for key, nested in mapping.items():
                 key_text = str(key)
                 pairs.append((key_text, nested))
-                parts.append(key_text.encode("utf-8", "replace"))
                 if key_text.lower() in diagnostic_keys:
                     continue
                 if isinstance(nested, str) and (key_text == "base64" or key_text.endswith("_base64")):
@@ -248,17 +273,69 @@ def _external_exif_generator(pairs: list[tuple[str, Any]], scan: bytes) -> str |
     return generator_from_metadata(candidates, scan)
 
 
+def _metadata_source_kind(info: dict[str, Any], scan: bytes) -> str | None:
+    """Normalize the source type wherever it is carried: C2PA or IPTC/XMP.
+
+    A composite marker contains ``TrainedAlgorithmicMedia`` as a substring, so it
+    is removed before looking for a standalone full-generation marker. When a file
+    genuinely carries both kinds, full generation wins.
+    """
+    structured = info.get("ai_source_kind")
+    without_composites = scan.replace(b"compositeWithTrainedAlgorithmicMedia", b"").replace(b"compositeSynthetic", b"")
+    generated = structured == "generated" or any(
+        marker in without_composites for marker in (b"trainedAlgorithmicMedia", b"TrainedAlgorithmicMedia")
+    )
+    if generated:
+        return "generated"
+    if structured == "enhanced" or any(
+        marker in scan for marker in (b"compositeWithTrainedAlgorithmicMedia", b"compositeSynthetic")
+    ):
+        return "enhanced"
+    return None
+
+
 def evidence_from_metadata_record(
     record: dict[str, Any], *, path: Path, c2pa_manifest_store: str | dict[str, Any] | None = None
 ) -> ProvenanceEvidence:
     """Normalize an externally collected metadata record into provenance evidence.
 
-    The record may contain arbitrary nested dictionaries and lists. Text, bytes,
-    hexadecimal values prefixed with ``hex:``, and fields named ``base64`` or
-    ending in ``_base64`` are included in the shared byte scan. No source file is
-    opened.
+    Unversioned external records may contain arbitrary nested dictionaries and
+    lists. Versioned native records accept only the source-derived fields emitted by
+    ``collect_metadata_record``; other native record types and unknown schema
+    versions are rejected. No source file is opened.
     """
-    pairs, scan = _external_metadata(record)
+    from remove_ai_watermarks.metadata_record import METADATA_RECORD_SCHEMA_VERSION, METADATA_RECORD_TYPE
+
+    # Records produced by ``collect_metadata_record`` are a versioned transport
+    # contract. Only their source-derived fields are evidence: the filename,
+    # container label and schema bookkeeping describe the collector and must never
+    # become detector input. Shape-detect the pre-versioned form as well so records
+    # emitted by 0.26 remain safe and readable.
+    record_type = record.get("record_type")
+    if record_type not in (None, METADATA_RECORD_TYPE):
+        raise ValueError(f"Unsupported metadata record type: {record_type!r}")
+    if record_type == METADATA_RECORD_TYPE:
+        require_schema_version(
+            record.get("schema_version"),
+            contract="provenance metadata",
+            supported=(METADATA_RECORD_SCHEMA_VERSION,),
+        )
+        status = record.get("status")
+        if status == "error":
+            raise ValueError("Provenance metadata collection failed")
+        if status != "complete":
+            raise ValueError(f"Unsupported provenance metadata collection status: {status!r}")
+    is_portable_record = record_type == METADATA_RECORD_TYPE or {
+        "container",
+        "metadata_base64",
+        "tail_base64",
+    }.issubset(record)
+    evidence_record = (
+        {key: record[key] for key in ("metadata_base64", "tail_base64", "pil", "exif") if key in record}
+        if is_portable_record
+        else record
+    )
+    pairs, scan = _external_metadata(evidence_record)
     store = c2pa_manifest_store
     if store is None:
         candidate = record.get("c2pa_store")
@@ -365,13 +442,13 @@ class ProvenanceReport:
     is_ai_generated: bool | None  # True / False is never asserted; None = unknown
     platform: str | None
     confidence: str  # "high" | "medium" | "none"
-    # Coarse AI-origin kind from the C2PA digital-source-type, so a caller can
-    # branch on full generation vs an AI-touched real photo:
+    # Coarse AI-origin kind from a C2PA or standalone IPTC/XMP digital-source-type,
+    # so a caller can branch on full generation vs an AI-touched real photo:
     #   "generated" -- digitalSourceType trainedAlgorithmicMedia (fully AI).
     #   "enhanced"  -- compositeWithTrainedAlgorithmicMedia (real content with an
     #                  AI-composited region; scrub the AI region, keep the photo).
-    #   None        -- no C2PA AI source-type (verdict, if AI, came from another
-    #                  signal: IPTC, AIGC, local gen params, xAI, ...).
+    #   None        -- no AI digital-source-type (verdict, if AI, came from another
+    #                  signal: AIGC, local gen params, xAI, ...).
     ai_source_kind: str | None = None
     # True when the AI verdict rests on a metadata or embedded-invisible signal
     # (C2PA AI issuer / SynthID proxy, IPTC, AIGC, local gen params, EXIF/xAI, or
@@ -390,14 +467,24 @@ class ProvenanceReport:
     # inconsistent -- a strong tell of spoofed, transplanted, or laundered metadata.
     integrity_clashes: list[str] = field(default_factory=list[str])
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(
+        self,
+        *,
+        schema_version: int = PROVENANCE_REPORT_SCHEMA_VERSION,
+    ) -> dict[str, Any]:
         """Return the versioned, JSON-safe verdict contract.
 
         ``path`` is deliberately omitted. It is extraction context, not part of the
         verdict, and local filesystem paths should not cross a service boundary.
+        Request an explicit schema for a long-lived transport consumer.
         """
+        schema_version = require_schema_version(
+            schema_version,
+            contract="provenance report",
+            supported=(1,),
+        )
         return {
-            "schema_version": PROVENANCE_REPORT_SCHEMA_VERSION,
+            "schema_version": schema_version,
             "is_ai_generated": self.is_ai_generated,
             "platform": self.platform,
             "confidence": self.confidence,
@@ -997,12 +1084,7 @@ def _identify_from_evidence(
     # _internal.c2pa._populate_registry_fields (covers PNG + any container the c2pa-python
     # reader handles); fall back to a raw head scan for the non-PNG raw-blob path
     # where extract_c2pa_info returns {}. Full generation wins when both appear.
-    c2pa_source_kind = info.get("ai_source_kind")
-    if c2pa_source_kind is None:
-        if b"trainedAlgorithmicMedia" in head:
-            c2pa_source_kind = "generated"
-        elif b"compositeWithTrainedAlgorithmicMedia" in head:
-            c2pa_source_kind = "enhanced"
+    source_kind = _metadata_source_kind(info, head)
     # An identity-AI issuer (a pure-generator brand like Dreamina) asserts AI even
     # without a digitalSourceType -- some ByteDance/Dreamina manifests ship no
     # trainedAlgorithmicMedia, so the registered generator name is the only signal.
@@ -1010,7 +1092,7 @@ def _identify_from_evidence(
     # does not reopen the incidental-mention problem the common-word issuers have.
     issuer_blob = " ".join(issuers)
     c2pa_identity_ai = has_c2pa and any(org in issuer_blob for org in C2PA_IDENTITY_AI_ORGS)
-    c2pa_is_ai = c2pa_source_kind is not None or c2pa_identity_ai
+    c2pa_is_ai = source_kind is not None or c2pa_identity_ai
     # Generator string (for the signal detail): structured for PNG, CBOR-scanned
     # for other containers. Best-effort -- some manifests key it as
     # `claim_generator_info` (Pixel), so this can be None even when a device is
@@ -1066,7 +1148,7 @@ def _identify_from_evidence(
     # for its own callers; the verdict no longer depends on which extractor ran.
     synthid = meta.get("synthid_watermark")
     # The literal byte checks mirror `metadata.synthid_source` exactly rather than
-    # reusing the derived `has_c2pa` / `c2pa_source_kind` above, which are broader:
+    # reusing the derived `has_c2pa` / `source_kind` above, which are broader:
     # the file path's answer must not move.
     trained_source = b"trainedAlgorithmicMedia" in head or b"TrainedAlgorithmicMedia" in head
     if not synthid and trained_source and c2pa_marker_in(head) and (vendors := synthid_vendors_in(region)):
@@ -1254,9 +1336,9 @@ def _identify_from_evidence(
         is_ai_generated=is_ai,
         platform=platform,
         confidence=confidence,
-        # Only meaningful when the AI verdict actually came from the C2PA source
-        # type; a non-C2PA AI signal (IPTC/AIGC/local gen) leaves it None.
-        ai_source_kind=c2pa_source_kind if (is_ai and has_c2pa) else None,
+        # Meaningful for the same digitalSourceType whether carried by C2PA or a
+        # standalone IPTC/XMP label. Other AI signals leave it None.
+        ai_source_kind=source_kind if (is_ai and (has_c2pa or iptc)) else None,
         ai_from_metadata=ai_from_metadata,
         watermarks=watermarks,
         signals=signals,
