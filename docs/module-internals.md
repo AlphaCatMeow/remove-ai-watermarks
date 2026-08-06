@@ -425,6 +425,21 @@ Pixel forensics are deliberately absent: nothing in the provenance path reads th
 Verdict equivalence is checked over tracked fixtures and a separate local evaluation
 corpus.
 
+### Experimental pixel forensics
+
+[`pixel_evidence.py`](../src/remove_ai_watermarks/pixel_evidence.py) measures six
+families of scale-robust pixel statistics (block-DCT histograms and Benford
+deviation, FFT band energies and CFA peaks, high-pass residual, error level,
+gradient, colour) in a single decode, sharing the intermediate maps between them.
+
+It has no consumer. Nothing in the package reads it -- not the verdict, not removal,
+not the CLI -- and the shape is unstable until something does.
+
+`artifacts=True` additionally returns the spatial layer: a perceptual hash, a 128px
+JPEG thumbnail, and coarse ELA, residual and phase maps. Those identify the source
+image rather than describe it, which is why they are opt-in and a separate field: a
+caller storing them is handling image content, not statistics about it.
+
 The DWT-DCT detector and the visible-mark stage share a single decode of the
 source, held by
 a per-call `_SharedDecode`. It exposes two accessors because the two arms need
