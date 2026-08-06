@@ -162,18 +162,26 @@ def _summarize(rows: list[dict[str, Any]], baseline: Path | None) -> None:
         was = previous.get(Path(row["path"]).name)
         if was is None:
             continue
-        before = was.get("file") or {"confidence": was.get("confidence"), "signals": was.get("signals")}
-        if before.get("confidence") != row["file"]["confidence"] or before.get("signals") != row["file"]["signals"]:
+        # The WHOLE verdict, not a chosen subset. A first version compared confidence
+        # and signals only and reported "0 changed" for a run whose single intended
+        # correction was a watermark line -- the change it existed to show.
+        before = was.get("file") or {}
+        if before and before != row["file"]:
             changed.append((row["path"], before, row["file"]))
     print(f"\nverdicts changed against the baseline: {len(changed)}")
-    gained: collections.Counter[str] = collections.Counter()
+    moved: collections.Counter[str] = collections.Counter()
     for _, before, after in changed:
         for name in set(after["signals"]) - set(before.get("signals") or []):
-            gained[f"gained {name}"] += 1
+            moved[f"gained signal {name}"] += 1
         for name in set(before.get("signals") or []) - set(after["signals"]):
-            gained[f"LOST {name}"] += 1
-    for label, count in gained.most_common():
+            moved[f"LOST signal {name}"] += 1
+        for field in (*COMPARED, "watermarks"):
+            if before.get(field) != after.get(field):
+                moved[f"{field} changed"] += 1
+    for label, count in moved.most_common():
         print(f"   {label}: {count}")
+    for path, before, after in changed[:10]:
+        print(f"   {Path(path).name}\n      before: {before}\n      after:  {after}")
 
 
 def main() -> int:

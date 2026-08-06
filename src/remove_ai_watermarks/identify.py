@@ -22,6 +22,7 @@ from __future__ import annotations
 import base64
 import itertools
 import logging
+import struct
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
@@ -479,6 +480,72 @@ _DEVICE_C2PA_PLATFORM: tuple[tuple[bytes, str], ...] = (
 )
 
 
+def _metadata_region(head: bytes) -> bytes:
+    """The part of the scan buffer that can hold metadata, with the coded pixels cut out.
+
+    The vendor registries are matched as raw substrings, and the shortest tokens are
+    four and five bytes (``Bria``, ``Adobe``, ``Canva``). Over a megabyte of compressed
+    pixel data a four-byte sequence appears by chance about once in three thousand
+    images -- measured: ``Bria`` matched inside the entropy-coded scan of 4 of 14,707
+    corpus JPEGs, in none of which the manifest names Bria. That is not a cosmetic
+    mislabel, because the Bria entry carries ``asserts_ai``: a chance match can declare
+    an image AI-generated.
+
+    ``c2pa_marker_in`` already refuses a bare ``c2pa`` substring for the same reason.
+    This is the same defence for the registries: they see the container's metadata and
+    not its pixels.
+
+    JPEG keeps the marker segments before the entropy-coded scan, PNG every chunk but
+    ``IDAT``, and both keep the trailer past the end marker. Anything ``scan_head``
+    APPENDED past the window is metadata by construction (late chunks, boxes, decoder
+    text), so it is always kept and never walked -- walking it is what produced 11 MB
+    records and a phantom AIGC signal in the record collector.
+
+    Trimming happens only when the container actually parses: a JPEG whose marker walk
+    reaches the coded scan, a PNG whose chunk walk reaches ``IDAT``. Anything else --
+    a malformed container, a synthetic blob, a format with no walker here -- is
+    returned whole. Cutting a buffer this function did not understand would drop real
+    evidence to avoid a chance match, which is the wrong way round.
+    """
+    raw, appended = head[:_SCAN_BYTES], head[_SCAN_BYTES:]
+    if raw[:2] == b"\xff\xd8":
+        index, size = 2, len(raw)
+        while index + 1 < size:
+            if raw[index] != 0xFF:
+                return head  # not a marker boundary: the walk is lost, keep everything
+            marker = raw[index + 1]
+            if marker in (0xDA, 0xD9):  # SOS / EOI: the coded scan follows
+                end = raw.rfind(b"\xff\xd9")
+                return raw[:index] + (raw[end + 2 :] if end >= index else b"") + appended
+            if 0xD0 <= marker <= 0xD7 or marker == 0x01:
+                index += 2
+                continue
+            if index + 4 > size:
+                break
+            length = int.from_bytes(raw[index + 2 : index + 4], "big")
+            if length < 2 or index + 2 + length > size:
+                break
+            index += 2 + length
+        return head  # ran out of buffer before the scan: nothing was skipped anyway
+    if raw[:8] == b"\x89PNG\r\n\x1a\n":
+        out = bytearray()
+        position, size, saw_idat = 8, len(raw), False
+        while position + 8 <= size:
+            (length,) = struct.unpack(">I", raw[position : position + 4])
+            chunk_type = raw[position + 4 : position + 8]
+            start = position + 8
+            if chunk_type == b"IDAT":
+                saw_idat = True
+            else:
+                out += chunk_type + raw[start : start + min(length, size - start)]
+            position = start + length + 4
+            if chunk_type == b"IEND":
+                out += raw[position:]
+                break
+        return bytes(out) + appended if saw_idat else head
+    return head
+
+
 def _first_token_match(head: bytes, table: tuple[tuple[bytes, str], ...]) -> str | None:
     """First platform in ``table`` whose token appears in ``head``, else None.
 
@@ -915,12 +982,16 @@ def _identify_from_evidence(
     # score, the latter can be a by-product of our own SDXL removal pass, so
     # neither is a trustworthy "the generator stamped its identity" claim.
     ai_vendor_claims: dict[str, str] = {}
-    camera_label = _device_platform(head)
-    signer_label = _signer_platform(head)
+    # The vendor registries match short raw substrings, so they read the container's
+    # metadata rather than its pixels -- see `_metadata_region`. Every other check
+    # below keeps the full buffer: their markers are long and distinctive.
+    region = _metadata_region(head)
+    camera_label = _device_platform(region)
+    signer_label = _signer_platform(region)
 
     # ── C2PA Content Credentials ────────────────────────────────────
     has_c2pa = bool(info) or c2pa_marker_in(head)
-    issuers = [info["issuer"]] if info.get("issuer") else _issuers_in(head)
+    issuers = [info["issuer"]] if info.get("issuer") else _issuers_in(region)
     # Full AI generation (trainedAlgorithmicMedia) vs an AI-enhanced real photo
     # (compositeWithTrainedAlgorithmicMedia). The structured kind is parsed once in
     # _internal.c2pa._populate_registry_fields (covers PNG + any container the c2pa-python
@@ -947,7 +1018,7 @@ def _identify_from_evidence(
     generator = (
         info.get("claim_generator")
         or cbor_text_after(head, b"claim_generator")
-        or (", ".join(tools) if (tools := _ai_tools_in(head)) else None)
+        or (", ".join(tools) if (tools := _ai_tools_in(region)) else None)
     )
     # Platform: a distinctive device/camera token in the manifest wins (it is the
     # signer/producer), then an editing-app/AI-device signer (Samsung Galaxy,
@@ -998,7 +1069,7 @@ def _identify_from_evidence(
     # reusing the derived `has_c2pa` / `c2pa_source_kind` above, which are broader:
     # the file path's answer must not move.
     trained_source = b"trainedAlgorithmicMedia" in head or b"TrainedAlgorithmicMedia" in head
-    if not synthid and trained_source and c2pa_marker_in(head) and (vendors := synthid_vendors_in(head)):
+    if not synthid and trained_source and c2pa_marker_in(head) and (vendors := synthid_vendors_in(region)):
         synthid = synthid_verdict(", ".join(vendors))
     if synthid:
         watermarks.append(f"SynthID watermark, inferred from C2PA metadata ({synthid})")
@@ -1011,7 +1082,7 @@ def _identify_from_evidence(
     # ── C2PA soft-binding: a named forensic/third-party watermark vendor ─
     # (Adobe TrustMark, Digimarc, Imatag, ...). Present in the manifest even when
     # the watermark itself can't be decoded; names whose watermark stamped the pixels.
-    soft_binding = meta.get("soft_binding") or (", ".join(v) if (v := soft_binding_vendors_in(head)) else None)
+    soft_binding = meta.get("soft_binding") or (", ".join(v) if (v := soft_binding_vendors_in(region)) else None)
     if soft_binding:
         signals.append(Signal("soft_binding", f"C2PA soft binding: {soft_binding}", "high"))
         watermarks.append(f"Forensic watermark soft binding ({soft_binding})")

@@ -391,6 +391,12 @@ metadata extraction from verdict logic:
   metadata record into the same evidence type without file access. Diagnostic
   values under `error` and `kind` are excluded from evidence while nested raw
   bytes remain available through encoded binary fields.
+- The vendor registries are matched over `_metadata_region(head)`, not the whole scan
+  buffer: they see the container's metadata and not its coded pixels. The tokens are
+  raw substrings and the shortest are four and five bytes, so over a megabyte of
+  compressed data one turns up by chance, and the entry it hits may assert AI. The
+  trim happens only when the container parses -- a malformed or unknown one is left
+  whole, because dropping real evidence to avoid a chance match is the wrong trade.
 - `identify_from_evidence` evaluates that evidence without reopening the source. Rules
   that decide a verdict live here, not in extraction: extraction has two
   implementations, and a rule in only one of them is a rule the other lacks. The

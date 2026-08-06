@@ -1406,3 +1406,53 @@ class TestSynthIdProxyIsDecidedInTheVerdict:
         report = identify(path, check_visible=False, check_invisible=False)
 
         assert not any("SynthID" in mark for mark in report.watermarks)
+
+
+class TestRegistryScansSkipTheCodedPixels:
+    """The vendor registries match short raw substrings -- the shortest are four and
+    five bytes. Over a megabyte of compressed pixel data such a sequence turns up by
+    chance: `Bria` matched inside the entropy-coded scan of 4 of 14,707 corpus JPEGs,
+    and that entry asserts AI, so a chance match can declare an image AI-generated.
+    `c2pa_marker_in` already refuses a bare `c2pa` substring for the same reason."""
+
+    def _jpeg(self, path: Path, *, in_segment: bytes = b"", in_scan: bytes = b"") -> Path:
+        import numpy as np
+        from PIL import Image
+
+        Image.fromarray(np.zeros((32, 32, 3), dtype=np.uint8)).save(path, "JPEG")
+        data = path.read_bytes()
+        if in_segment:
+            payload = b"jumb c2pa trainedAlgorithmicMedia " + in_segment
+            data = data[:2] + b"\xff\xeb" + (len(payload) + 2).to_bytes(2, "big") + payload + data[2:]
+        if in_scan:
+            # After SOS, i.e. inside the entropy-coded scan the walk skips.
+            sos = data.index(b"\xff\xda")
+            data = data[: sos + 16] + in_scan + data[sos + 16 :]
+        path.write_bytes(data)
+        return path
+
+    def test_a_token_in_a_marker_segment_is_attributed(self, tmp_path: Path):
+        from remove_ai_watermarks.identify import _issuers_in, _metadata_region
+        from remove_ai_watermarks.metadata import scan_head
+
+        path = self._jpeg(tmp_path / "signed.jpg", in_segment=b"Bria")
+
+        assert _issuers_in(_metadata_region(scan_head(path))) == ["Bria Artificial Intelligence"]
+
+    def test_a_token_in_the_coded_scan_is_not(self, tmp_path: Path):
+        from remove_ai_watermarks.identify import _issuers_in, _metadata_region
+        from remove_ai_watermarks.metadata import scan_head
+
+        path = self._jpeg(tmp_path / "chance.jpg", in_segment=b"OpenAI", in_scan=b"Bria")
+        region = _metadata_region(scan_head(path))
+
+        assert _issuers_in(region) == ["OpenAI"]
+
+    def test_a_container_that_does_not_parse_is_left_whole(self, tmp_path: Path):
+        """Cutting a buffer the walk did not understand would drop real evidence to
+        avoid a chance match, which is the wrong way round."""
+        from remove_ai_watermarks.identify import _metadata_region
+
+        blob = b"\xff\xd8" + b"not really a jpeg, no valid marker chain here" * 4
+
+        assert _metadata_region(blob) == blob
