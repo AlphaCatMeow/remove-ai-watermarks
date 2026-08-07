@@ -122,9 +122,12 @@ Current pipeline values, both CUDA-only:
 The `controlnet`, `sdxl`, `qwen` and `default` values were removed. A retired name
 is rejected at parse time rather than remapped onto a surviving profile.
 
-SynthID does not have a public local pixel decoder in this project. The tool can
-infer likely presence from supported provenance metadata, but after that
-metadata is removed a local negative result is inconclusive.
+SynthID does not have a public local pixel decoder in this project. The tool
+recognizes presence from supported provenance: Google AI C2PA under Google's
+all-media watermark policy, and current OpenAI C2PA carrying an explicit
+`c2pa.watermarked.*` action. Legacy OpenAI C2PA without that action does not
+assert SynthID. After provenance metadata is removed, a local negative result
+is still inconclusive.
 
 For MP4, MOV, and M4V, `video invisible` or the explicit
 `video all --invisible` option can regenerate the video through a VAE and strip

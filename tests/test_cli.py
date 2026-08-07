@@ -398,7 +398,7 @@ class TestInvisibleCommand:
         """P0#5: when no invisible AI watermark is locally detectable, the diffusion
         scrub must NOT run (it would only degrade a clean image). Mirrors the visible
         no-mark contract: write no output, exit 2, and DO NOT imply the image is
-        clean (a stripped SynthID proxy is not proof of absence)."""
+        clean (stripped SynthID provenance is not proof of absence)."""
         mock_cls, mock_engine = _mock_invisible_engine()
         output = tmp_path / "clean.png"
         with (

@@ -6,8 +6,8 @@ Aggregates every locally-readable signal into a single :class:`ProvenanceReport`
   the signing platform (OpenAI, Google, Adobe, Microsoft).
 - **IPTC ``digitalSourceType``** "Made with AI" marker (Meta, X, others).
 - **PNG text / EXIF generation parameters** (Stable Diffusion, ComfyUI, InvokeAI).
-- **SynthID metadata proxy** -- a C2PA companion from a SynthID-using vendor
-  (Google / OpenAI) implies the invisible pixel watermark.
+- **SynthID provenance evidence** -- Google AI C2PA follows Google's all-media
+  policy; current OpenAI C2PA explicitly declares a watermark action.
 - **Registered visible marks** (optional; needs cv2/numpy, no GPU) through the
   shared watermark registry.
 
@@ -31,7 +31,7 @@ from remove_ai_watermarks._internal.c2pa import (
     cbor_text_after,
     extract_c2pa_info,
     soft_binding_vendors_in,
-    synthid_vendors_in,
+    synthid_evidence_vendors_in,
     synthid_verdict,
 )
 from remove_ai_watermarks._internal.constants import (
@@ -110,12 +110,8 @@ _STRIP_CAVEAT = (
     "text chunks are stripped by re-encoding, screenshots, or social-media upload."
 )
 _SYNTHID_CAVEAT = (
-    "SynthID is a metadata proxy here; the pixel watermark is not locally "
-    "verifiable (proprietary decoder). Confirm via the Gemini app or openai.com/verify."
-)
-_OPENAI_CAVEAT = (
-    "OpenAI began pairing SynthID with C2PA around 2026-05; OpenAI images from "
-    "before the rollout carry C2PA without SynthID, so the SynthID verdict is 'likely'."
+    "SynthID presence comes from supported provenance here; the pixel watermark is not locally "
+    "decoded (proprietary decoder). Confirm via the Gemini app or openai.com/verify."
 )
 _IPTC_ONLY_CAVEAT = "The IPTC 'Made with AI' tag flags AI provenance but does not identify the specific platform."
 _INVISIBLE_WM_CAVEAT = (
@@ -451,7 +447,7 @@ class ProvenanceReport:
     #                  signal: AIGC, local gen params, xAI, ...).
     ai_source_kind: str | None = None
     # True when the AI verdict rests on a metadata or embedded-invisible signal
-    # (C2PA AI issuer / SynthID proxy, IPTC, AIGC, local gen params, EXIF/xAI, or
+    # (C2PA AI issuer / SynthID provenance, IPTC, AIGC, local gen params, EXIF/xAI, or
     # an open DWT-DCT / TrustMark decode) -- as opposed to a visible mark or a
     # weak medium-confidence hint (hf-job, Samsung genAIType). It is exactly the
     # set of signals an invisible/diffusion scrub targets: a visible-only or
@@ -697,7 +693,7 @@ def _attribute_platform(issuers: list[str], *, is_ai: bool = True) -> str | None
 
 # Coarse origin-vendor normalization for integrity-clash detection. Two signals
 # that resolve to the SAME key are consistent (a C2PA "Google (Gemini)" issuer
-# and a SynthID-Google proxy, or Adobe Firefly + its Adobe TrustMark soft
+# and Google SynthID provenance, or Adobe Firefly + its Adobe TrustMark soft
 # binding); two DIFFERENT keys from independent generator stamps are a
 # contradiction (a C2PA OpenAI manifest on an image whose EXIF says "Ideogram
 # AI"). Substring match on the lowercased platform/detail string; first hit wins,
@@ -755,14 +751,14 @@ def _vendor_of(text: str | None) -> str | None:
 
 # Clash-detection provenance sources. Rule 1 (below) flags two AI vendors only
 # when they come from *independent* signals. The C2PA issuer attribution and the
-# SynthID proxy are NOT independent -- the proxy is inferred from the same C2PA
+# SynthID evidence are NOT independent -- both are read from the same C2PA
 # manifest -- so they share one source. A multi-actor manifest (a product wrapping
 # another vendor's engine, e.g. Microsoft+OpenAI or Microsoft+Google; or an edit
 # chain like Adobe over a Gemini original) legitimately names several vendors in
 # one valid chain and must not read as spoofing. Families not listed here are each
 # their own independent source (EXIF/XMP generator, IPTC AISystemUsed, AIGC, ...).
 # The single C2PA-manifest source shared by the issuer attribution and the SynthID
-# proxy (both inferred from the same embedded manifest). Rule 2 keys off it too:
+# evidence (both read from the same embedded manifest). Rule 2 keys off it too:
 # the camera device label is read from this manifest, so an AI marker is a clash
 # only when its source differs from this (i.e. it is genuinely independent).
 _C2PA_MANIFEST_SOURCE = "c2pa_manifest"
@@ -788,7 +784,7 @@ def _integrity_clashes(
     Args:
         ai_vendors: family name -> normalized AI-origin vendor, one entry per
             generator-stamped signal (C2PA issuer when the source is AI, SynthID
-            proxy, EXIF/XMP generator tag, IPTC AISystemUsed, xAI, AIGC label).
+            provenance, EXIF/XMP generator tag, IPTC AISystemUsed, xAI, AIGC label).
         camera_label: a camera/verified-capture C2PA device platform, if one was
             identified (Pixel, Leica, Sony, Nikon, Truepic), else None.
         camera_has_ai_marker: True when an AI-generation stamp coexists with the
@@ -802,7 +798,7 @@ def _integrity_clashes(
     # Rule 1: two genuinely INDEPENDENT signals naming different AI vendors. Two
     # families clash only when they belong to different provenance sources (see
     # _CLASH_SOURCE) AND name different vendors -- so multiple vendors named within
-    # one C2PA manifest (c2pa issuer + synthid proxy) do not flag.
+    # one C2PA manifest (C2PA issuer + SynthID provenance) do not flag.
     # The generic TC260 AIGC label is a Chinese regulatory "this is AI" stamp. When a
     # Chinese TC260-applying vendor (ByteDance) is ALSO attributed, the label is that
     # vendor's own stamp on its own output, so attribute it to that vendor -- a legit
@@ -835,7 +831,7 @@ def _integrity_clashes(
     # a contradiction. A device that both captures and runs on-device generative
     # AI (Google Pixel Magic Editor / Pixel Studio) records the capture and the
     # AI edit in ONE manifest, so the AI vendor is named only from that same
-    # manifest (c2pa issuer + synthid proxy) -- a legitimate edit chain, not a
+    # manifest (C2PA issuer + SynthID provenance) -- a legitimate edit chain, not a
     # spoof. An EXIF/XMP generator, IPTC field, TC260 AIGC label, or second
     # manifest naming AI on a camera capture is the real laundering tell.
     independent_ai_marker = any(grp != _C2PA_MANIFEST_SOURCE for grp in source.values())
@@ -1134,7 +1130,7 @@ def _identify_from_evidence(
         if platform is None:
             platform = f"C2PA signer: {cloud_vendor} (cloud manifest)"
 
-    # ── SynthID metadata proxy ──────────────────────────────────────
+    # ── SynthID provenance evidence ─────────────────────────────────
     # Structured first (the PNG caBX parser and the manifest store both fill
     # `synthid_watermark`), then the byte scan for the containers that keep the
     # manifest where no parser reaches it.
@@ -1151,13 +1147,11 @@ def _identify_from_evidence(
     # reusing the derived `has_c2pa` / `source_kind` above, which are broader:
     # the file path's answer must not move.
     trained_source = b"trainedAlgorithmicMedia" in head or b"TrainedAlgorithmicMedia" in head
-    if not synthid and trained_source and c2pa_marker_in(head) and (vendors := synthid_vendors_in(region)):
+    if not synthid and trained_source and c2pa_marker_in(head) and (vendors := synthid_evidence_vendors_in(region)):
         synthid = synthid_verdict(", ".join(vendors))
     if synthid:
-        watermarks.append(f"SynthID watermark, inferred from C2PA metadata ({synthid})")
+        watermarks.append(f"SynthID watermark ({synthid})")
         caveats.append(_SYNTHID_CAVEAT)
-        if _vendor_of(synthid) == "OpenAI":
-            caveats.append(_OPENAI_CAVEAT)
         if v := _vendor_of(synthid):
             ai_vendor_claims["synthid"] = v
 
@@ -1423,7 +1417,7 @@ def has_invisible_target(image_path: Path) -> bool:
     to remove. Runs :func:`identify` with ``check_visible=False`` -- a visible mark
     is handled by the separate visible pass and is NOT a diffusion target -- and
     ``check_invisible=True`` so an open watermark counts. Returns
-    ``report.ai_from_metadata`` (C2PA AI issuer / SynthID proxy, IPTC, AIGC, local
+    ``report.ai_from_metadata`` (C2PA AI issuer / SynthID provenance, IPTC, AIGC, local
     gen params, EXIF/xAI, open DWT-DCT / TrustMark).
 
     IMPORTANT -- this cannot prove a pixel SynthID is absent: SynthID is detectable

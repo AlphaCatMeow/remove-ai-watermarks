@@ -37,7 +37,7 @@ def _box(box_type: bytes, payload: bytes) -> bytes:
 
 
 def _video_with_c2pa(path: Path) -> Path:
-    manifest = C2PA_UUID + b"OpenAI trainedAlgorithmicMedia"
+    manifest = C2PA_UUID + b"OpenAI trainedAlgorithmicMedia c2pa.watermarked.unbound"
     path.write_bytes(_MP4_FTYP + _box(b"uuid", manifest) + _box(b"mdat", _VIDEO_PAYLOAD))
     return path
 
@@ -277,7 +277,12 @@ def _write_synthetic_sora_clip(
         check=True,
     )
     with path.open("ab") as stream:
-        stream.write(_box(b"uuid", C2PA_UUID + b"OpenAI Sora trainedAlgorithmicMedia"))
+        stream.write(
+            _box(
+                b"uuid",
+                C2PA_UUID + b"OpenAI Sora trainedAlgorithmicMedia c2pa.watermarked.unbound",
+            )
+        )
 
 
 def _write_vfr_sora_clip(
@@ -345,7 +350,12 @@ def _write_vfr_sora_clip(
     command.append(str(path))
     subprocess.run(command, capture_output=True, check=True)  # noqa: S603
     with path.open("ab") as stream:
-        stream.write(_box(b"uuid", C2PA_UUID + b"OpenAI Sora trainedAlgorithmicMedia"))
+        stream.write(
+            _box(
+                b"uuid",
+                C2PA_UUID + b"OpenAI Sora trainedAlgorithmicMedia c2pa.watermarked.unbound",
+            )
+        )
 
 
 def _decode_video(path: Path) -> tuple[list[np.ndarray], float]:
@@ -612,7 +622,12 @@ class TestVideoMetadataApi:
         media_payload = b"x" * (8 * 1024 * 1024)
         source = _video_with_tc260(tmp_path / "source.mp4", media_payload=media_payload)
         with source.open("ab") as stream:
-            stream.write(_box(b"uuid", C2PA_UUID + b"OpenAI trainedAlgorithmicMedia"))
+            stream.write(
+                _box(
+                    b"uuid",
+                    C2PA_UUID + b"OpenAI trainedAlgorithmicMedia c2pa.watermarked.unbound",
+                )
+            )
         output = tmp_path / "clean.mp4"
         source_size = source.stat().st_size
         source_media_digest = hashlib.sha256(media_payload).digest()

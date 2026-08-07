@@ -284,7 +284,10 @@ class TestIdentifyNonPng:
         assert "Imagen" in c2pa_signal.detail
 
     def test_openai_jpeg_has_synthid(self, tmp_path: Path):
-        path = self._c2pa_jpeg(tmp_path, b"OpenAI DALL-E ... trainedAlgorithmicMedia")
+        path = self._c2pa_jpeg(
+            tmp_path,
+            b"OpenAI DALL-E ... trainedAlgorithmicMedia ... c2pa.watermarked.unbound",
+        )
         r = identify(path, check_visible=False)
         assert any("SynthID" in w for w in r.watermarks)
 
@@ -446,7 +449,7 @@ class TestIdentifyRealSamples:
         assert r.platform
         assert "OpenAI" in r.platform
         assert any("C2PA" in w for w in r.watermarks)
-        assert any("SynthID" in w for w in r.watermarks)
+        assert not any("SynthID" in w for w in r.watermarks)
 
     def test_adobe_firefly_has_no_synthid(self):
         r = identify(SAMPLES_DIR / "firefly-1.png", check_visible=False)
@@ -853,24 +856,25 @@ class TestIdentifyVisibleTextMarks:
 
 @pytest.mark.skipif(not SAMPLES_DIR.exists(), reason="data/fixtures/provenance not present")
 class TestIdentifyCaveats:
-    def test_openai_hedge_caveat_present(self):
+    def test_legacy_openai_has_no_synthid_claim(self):
         r = identify(SAMPLES_DIR / "chatgpt-1.png", check_visible=False)
-        assert any("before the rollout" in c for c in r.caveats)
+        assert not any("SynthID" in watermark for watermark in r.watermarks)
+        assert not any("before the rollout" in c for c in r.caveats)
 
-    def test_synthid_proxy_caveat_present(self):
+    def test_legacy_openai_has_no_synthid_proxy_caveat(self):
         r = identify(SAMPLES_DIR / "chatgpt-1.png", check_visible=False)
-        assert any("not locally" in c for c in r.caveats)
+        assert not any("not locally" in c for c in r.caveats)
 
     def test_caveats_are_deduplicated(self):
         r = identify(SAMPLES_DIR / "chatgpt-1.png", check_visible=False)
         assert len(r.caveats) == len(set(r.caveats))
 
 
-class TestOpenAiCaveatVendorScoped:
-    """The OpenAI rollout caveat keys on the normalized SynthID vendor, not a raw
-    "OpenAI" substring over the issuer + verdict blob -- so a Google-SynthID
-    manifest with an incidental "OpenAI" byte elsewhere is not mislabeled, while
-    a genuine OpenAI manifest still gets the hedge.
+class TestSynthIDProvenanceEvidence:
+    """Google's provider policy and OpenAI's explicit watermark action are evidence.
+
+    A bare legacy OpenAI C2PA manifest is not: those credentials existed before
+    OpenAI adopted SynthID.
     """
 
     @staticmethod
@@ -906,14 +910,28 @@ class TestOpenAiCaveatVendorScoped:
             self._png_chunk(b"tEXt", b"note\x00signed via OpenAI trust chain"),
         )
         r = identify(png, check_visible=False, check_invisible=False)
-        assert any("SynthID watermark, inferred from C2PA metadata (likely present (Google" in w for w in r.watermarks)
+        assert any("SynthID watermark (present according to Google" in w for w in r.watermarks)
         assert not any("before the rollout" in c for c in r.caveats)
 
-    def test_openai_synthid_still_gets_caveat(self, tmp_path: Path):
-        png = self._png(tmp_path, "oa.png", self._png_chunk(b"caBX", b"jumbc2pa OpenAI ... trainedAlgorithmicMedia"))
+    def test_openai_watermark_action_asserts_synthid(self, tmp_path: Path):
+        png = self._png(
+            tmp_path,
+            "oa.png",
+            self._png_chunk(
+                b"caBX",
+                b"jumbc2pa OpenAI ... trainedAlgorithmicMedia ... c2pa.watermarked.unbound",
+            ),
+        )
         r = identify(png, check_visible=False, check_invisible=False)
-        assert any("SynthID watermark, inferred from C2PA metadata (likely present (OpenAI" in w for w in r.watermarks)
-        assert any("before the rollout" in c for c in r.caveats)
+        assert any("SynthID watermark (present according to OpenAI" in w for w in r.watermarks)
+        assert not any("before the rollout" in c for c in r.caveats)
+
+    def test_legacy_openai_without_watermark_action_does_not_assert_synthid(self, tmp_path: Path):
+        png = self._png(
+            tmp_path, "oa-old.png", self._png_chunk(b"caBX", b"jumbc2pa OpenAI ... trainedAlgorithmicMedia")
+        )
+        r = identify(png, check_visible=False, check_invisible=False)
+        assert not any("SynthID" in watermark for watermark in r.watermarks)
 
     def test_dreamina_png_cabx_without_source_type(self, tmp_path: Path):
         # Real Dreamina PNGs carry the "Dreamina/x.y" generator in an ingredient
@@ -1160,13 +1178,13 @@ class TestIntegrityClashesHelper:
         assert "Ideogram" in clashes[0]
 
     def test_same_vendor_two_signals_no_clash(self):
-        # C2PA Google + SynthID-Google proxy is consistent, not a contradiction.
+        # C2PA Google + Google SynthID provenance is consistent, not a contradiction.
         assert _integrity_clashes({"c2pa": "Google", "synthid": "Google"}, None, camera_has_ai_marker=True) == []
 
     def test_multi_actor_manifest_no_clash(self):
         # A multi-actor C2PA manifest names a product + the engine it wraps in ONE
         # valid chain (Microsoft Designer on OpenAI, Microsoft on Google, Adobe over
-        # a Gemini original). The c2pa issuer attribution and the SynthID proxy share
+        # a Gemini original). The C2PA issuer attribution and SynthID provenance share
         # the same manifest source, so the differing vendors must NOT read as a clash.
         for c2pa_vendor, synthid_vendor in (("Microsoft", "OpenAI"), ("Microsoft", "Google"), ("Adobe", "Google")):
             assert (

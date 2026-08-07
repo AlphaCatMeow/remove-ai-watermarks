@@ -247,7 +247,7 @@ class TestResolveStrength:
 
 
 class TestVendorForStrength:
-    """vendor_for_strength normalizes the C2PA SynthID proxy to openai/google/None."""
+    """vendor_for_strength normalizes SynthID provenance to openai/google/None."""
 
     @staticmethod
     def _patch(value):

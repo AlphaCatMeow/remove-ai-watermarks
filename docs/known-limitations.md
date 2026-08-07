@@ -66,9 +66,10 @@ still alter small text or difficult faces.
 
 ### Removal cannot be verified locally for proprietary SynthID
 
-The project has no public local SynthID pixel decoder. It can infer likely
-presence from supported provenance metadata, but a missing metadata proxy is
-not a negative pixel verdict.
+The project has no public local SynthID pixel decoder. It recognizes presence
+from supported provenance metadata: Google AI C2PA under Google's all-media
+policy, or current OpenAI C2PA with an explicit watermark action. A missing
+provenance signal is not a negative pixel verdict.
 
 For important outputs:
 

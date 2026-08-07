@@ -497,7 +497,7 @@ class TestGetAiMetadataRealSample:
         meta = get_ai_metadata(SAMPLES_DIR / "chatgpt-1.png")
         assert "claim_generator" in meta
         assert "OpenAI" in meta["issuer"]
-        assert "OpenAI" in meta["synthid_watermark"]
+        assert "synthid_watermark" not in meta
         assert "trainedAlgorithmicMedia" in meta["source_type"]
 
 
@@ -538,20 +538,18 @@ def test_bare_algorithmic_media_not_flagged_ai(tmp_path: Path):
 class TestSynthIDSource:
     """SynthID detection via the C2PA companion manifest.
 
-    Google (Imagen/Gemini) and OpenAI (ChatGPT/DALL-E/gpt-image) pair an
-    invisible SynthID pixel watermark with a C2PA manifest. Adobe Firefly and
-    Microsoft Designer sign C2PA Content Credentials but do NOT use SynthID,
-    so the discriminating signal is the C2PA *issuer*, not the mere presence
-    of a manifest. These tests run against real, committed sample images.
+    Google provenance implies SynthID under Google's all-media policy. OpenAI
+    provenance requires the explicit C2PA watermark action: older ChatGPT
+    Content Credentials predate SynthID and must not be upgraded into a pixel
+    watermark claim merely because the issuer is OpenAI.
     """
 
-    def test_openai_chatgpt_is_synthid_source(self):
-        assert synthid_source(SAMPLES_DIR / "chatgpt-1.png") == "OpenAI"
+    def test_legacy_openai_chatgpt_is_not_synthid_source(self):
+        assert synthid_source(SAMPLES_DIR / "chatgpt-1.png") is None
 
-    def test_openai_verdict_in_get_ai_metadata(self):
+    def test_legacy_openai_verdict_absent_from_get_ai_metadata(self):
         meta = get_ai_metadata(SAMPLES_DIR / "chatgpt-1.png")
-        assert "synthid_watermark" in meta
-        assert "OpenAI" in meta["synthid_watermark"]
+        assert "synthid_watermark" not in meta
 
     def test_adobe_firefly_is_not_synthid_source(self):
         # Adobe signs C2PA (trainedAlgorithmicMedia) but embeds no SynthID.
@@ -570,16 +568,32 @@ class TestSynthIDSourceNonPng:
     misses them. These use synthetic byte blobs (real fixtures aren't shipped).
     """
 
-    def _c2pa_jpeg(self, tmp_path: Path, name: str, issuer: bytes, marker: bytes = b"trainedAlgorithmicMedia") -> Path:
+    def _c2pa_jpeg(
+        self,
+        tmp_path: Path,
+        name: str,
+        issuer: bytes,
+        marker: bytes = b"trainedAlgorithmicMedia",
+        action: bytes = b"",
+    ) -> Path:
         path = tmp_path / name
         # Minimal JPEG shell with an embedded C2PA-ish blob.
-        blob = b"jumbc2pa" + issuer + b"..." + marker
+        blob = b"jumbc2pa" + issuer + b"..." + marker + b"..." + action
         path.write_bytes(b"\xff\xd8\xff\xe1" + blob + b"\xff\xd9")
         return path
 
-    def test_openai_c2pa_in_jpeg(self, tmp_path: Path):
-        path = self._c2pa_jpeg(tmp_path, "chatgpt.jpg", b"OpenAI")
+    def test_openai_watermark_action_in_jpeg(self, tmp_path: Path):
+        path = self._c2pa_jpeg(
+            tmp_path,
+            "chatgpt.jpg",
+            b"OpenAI",
+            action=b"c2pa.watermarked.unbound",
+        )
         assert synthid_source(path) == "OpenAI"
+
+    def test_legacy_openai_c2pa_without_watermark_action_is_none(self, tmp_path: Path):
+        path = self._c2pa_jpeg(tmp_path, "legacy-chatgpt.jpg", b"OpenAI")
+        assert synthid_source(path) is None
 
     def test_google_c2pa_in_jpeg(self, tmp_path: Path):
         path = self._c2pa_jpeg(tmp_path, "gemini.jpg", b"Google")

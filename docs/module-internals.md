@@ -436,7 +436,7 @@ metadata extraction from verdict logic:
 - `identify_from_evidence` evaluates that evidence without reopening the source. Rules
   that decide a verdict live here, not in extraction: extraction has two
   implementations, and a rule in only one of them is a rule the other lacks. The
-  SynthID proxy is the worked example — its structured form comes from the manifest,
+  SynthID provenance evidence is the worked example — its structured form comes from the manifest,
   and the byte-scan fallback for containers no parser reaches runs in the verdict, so
   both extractors reach the same answer. It did not, and the record path silently
   reported no SynthID for images the file path flagged.

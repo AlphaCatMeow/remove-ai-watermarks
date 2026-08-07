@@ -135,7 +135,7 @@ def resolve_strength(
 
 
 def vendor_for_strength(image_path: Path) -> Literal["openai", "google"] | None:
-    """Select the strength cohort using the input's SynthID provenance proxy."""
+    """Select the strength cohort using the input's SynthID provenance evidence."""
     try:
         from remove_ai_watermarks.metadata import synthid_source
 

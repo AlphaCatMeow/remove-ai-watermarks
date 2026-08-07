@@ -38,6 +38,7 @@ class C2paAiVendor:
     needle: str | None
     synthid: bool = False
     asserts_ai: bool = False
+    synthid_requires_watermark_action: bool = False
 
 
 def _vendor(
@@ -48,16 +49,32 @@ def _vendor(
     *,
     synthid: bool = False,
     asserts_ai: bool = False,
+    synthid_requires_watermark_action: bool = False,
 ) -> C2paAiVendor:
     token = issuer.encode() if isinstance(issuer, str) else issuer
-    return C2paAiVendor(token, org, platform, needle, synthid, asserts_ai)
+    return C2paAiVendor(
+        token,
+        org,
+        platform,
+        needle,
+        synthid=synthid,
+        asserts_ai=asserts_ai,
+        synthid_requires_watermark_action=synthid_requires_watermark_action,
+    )
 
 
 # Order is product priority when a manifest mentions more than one organization.
 C2PA_AI_VENDORS: tuple[C2paAiVendor, ...] = (
     _vendor(b"Microsoft", "Microsoft", "Microsoft (Bing Image Creator / Designer)", "Microsoft"),
     _vendor(b"Adobe", "Adobe", "Adobe Firefly", "Adobe"),
-    _vendor(b"OpenAI", "OpenAI", "OpenAI (ChatGPT / gpt-image / DALL-E / Sora)", "OpenAI", synthid=True),
+    _vendor(
+        b"OpenAI",
+        "OpenAI",
+        "OpenAI (ChatGPT / gpt-image / DALL-E / Sora)",
+        "OpenAI",
+        synthid=True,
+        synthid_requires_watermark_action=True,
+    ),
     _vendor(b"Google", "Google LLC", "Google (Gemini / Imagen)", "Google", synthid=True),
     _vendor(b"Stability AI", "Stability AI", "Stability AI (Stable Image / DreamStudio)", "Stability AI"),
     _vendor(b"Black Forest Labs", "Black Forest Labs", "Black Forest Labs (FLUX)", "Black Forest Labs"),
@@ -85,7 +102,6 @@ C2PA_AI_VENDORS: tuple[C2paAiVendor, ...] = (
 
 C2PA_ISSUERS = {vendor.issuer: vendor.org for vendor in C2PA_AI_VENDORS}
 C2PA_IDENTITY_AI_ORGS = frozenset(vendor.org for vendor in C2PA_AI_VENDORS if vendor.asserts_ai)
-SYNTHID_C2PA_ISSUERS = frozenset(vendor.issuer for vendor in C2PA_AI_VENDORS if vendor.synthid)
 
 C2PA_AI_TOOLS = {
     token.encode(): label
@@ -148,7 +164,7 @@ AI_GENERATOR_TOKENS = frozenset(
     }
 )
 
-_C2PA_ACTION_NAMES = _tokens("created|converted|edited|filtered|cropped|resized|opened|placed")
+_C2PA_ACTION_NAMES = _tokens("created|converted|edited|filtered|cropped|resized|opened|placed|watermarked.unbound")
 C2PA_ACTIONS = {f"c2pa.{action}".encode(): action for action in _C2PA_ACTION_NAMES}
 
 

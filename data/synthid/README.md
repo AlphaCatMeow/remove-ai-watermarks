@@ -56,7 +56,9 @@ Ground-truth quality, strongest first:
 - `gemini-app` — checked via the Gemini app "Verify with SynthID" feature. Gold standard for the pixel watermark (Google models).
 - `openai-verify` — checked via openai.com/verify (gold standard for OpenAI ChatGPT/Codex/API images).
 - `synthid-portal` — checked via Google's SynthID Detector portal.
-- `c2pa-metadata` — issuer-only proxy (Google/OpenAI C2PA manifest present). Weaker: the C2PA can be stripped while the pixel watermark remains.
+- `c2pa-metadata` — supported provenance evidence (Google AI C2PA, or OpenAI
+  C2PA with an explicit `c2pa.watermarked.*` action). Weaker than a provider
+  oracle: C2PA can be stripped while the pixel watermark remains.
 - `third-party` — label asserted by an external dataset, not independently verified.
 - `none` — unverified.
 

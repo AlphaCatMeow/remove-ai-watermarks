@@ -155,6 +155,13 @@ class TestC2PA:
 
 
 SAMPLES_DIR = Path(__file__).resolve().parent.parent / "data" / "fixtures" / "provenance"
+CURRENT_OPENAI_SAMPLE = (
+    Path(__file__).resolve().parent.parent
+    / "data"
+    / "synthid"
+    / "originals"
+    / "ChatGPT Image May 30, 2026, 10_31_08 AM.png"
+)
 
 
 @pytest.mark.skipif(not SAMPLES_DIR.exists(), reason="data/fixtures/provenance not present")
@@ -173,7 +180,14 @@ class TestC2PARealSamples:
         # CBOR-clean claim generator, no regex artifacts (e.g. "fGPT-4o").
         assert info["claim_generator"]
         assert not info["claim_generator"].startswith("f")
-        assert "synthid_watermark" in info
+        assert "synthid_watermark" not in info
+
+    @pytest.mark.skipif(not CURRENT_OPENAI_SAMPLE.exists(), reason="current OpenAI SynthID fixture not present")
+    def test_current_openai_watermark_action_asserts_synthid(self):
+        info = extract_c2pa_info(CURRENT_OPENAI_SAMPLE)
+        assert info["watermarked"] is True
+        assert "watermarked.unbound" in info["actions"]
+        assert "OpenAI" in info["synthid_watermark"]
 
     def test_extract_info_adobe_has_no_synthid(self):
         info = extract_c2pa_info(SAMPLES_DIR / "firefly-1.png")
@@ -222,7 +236,7 @@ class TestC2PARealSamples:
         assert info["c2pa_manifest"].startswith("C2PA manifest (")  # chunk path
         assert "OpenAI" in info["issuer"]
         assert "trainedAlgorithmicMedia" in info["source_type"]
-        assert "synthid_watermark" in info
+        assert "synthid_watermark" not in info
 
 
 class TestC2PAInjectValidation:
@@ -269,7 +283,7 @@ class TestCborTextAfter:
 
 class TestSynthIDVerdict:
     def test_format(self):
-        assert synthid_verdict("OpenAI") == "likely present (OpenAI embeds SynthID with C2PA)"
+        assert synthid_verdict("OpenAI") == "present according to OpenAI provenance"
 
     def test_multiple_vendors(self):
         assert "Google LLC, OpenAI" in synthid_verdict("Google LLC, OpenAI")
@@ -285,7 +299,7 @@ class TestParseChunkGuards:
 
     def test_clean_generator_kept(self):
         # "name" + CBOR text-string (head 0x69 = 0x60+9) "gpt-image"
-        chunk = b"...name" + bytes([0x69]) + b"gpt-image" + b"OpenAI trainedAlgorithmicMedia"
+        chunk = b"...name" + bytes([0x69]) + b"gpt-image" + b"OpenAI trainedAlgorithmicMedia c2pa.watermarked.unbound"
         info: dict = {}
         _parse_c2pa_chunk(chunk, info)
         assert info["claim_generator"] == "gpt-image"
@@ -305,7 +319,7 @@ class TestC2PADigitalSourceType:
     """The three IPTC digitalSourceType variants drive the AI verdict.
 
     Only *trained* and *composite-with-trained* mean AI-generated (and so imply
-    a SynthID proxy for a SynthID vendor); plain ``algorithmicMedia`` is
+    SynthID provenance for a supported vendor); plain ``algorithmicMedia`` is
     procedural (not trained) and must NOT be flagged as AI.
     """
 
@@ -317,7 +331,12 @@ class TestC2PADigitalSourceType:
         assert "synthid_watermark" not in info  # procedural, not AI-generated
 
     def test_composite_with_trained_is_ai_and_synthid(self):
-        chunk = b"...name" + bytes([0x69]) + b"some-tool" + b" OpenAI compositeWithTrainedAlgorithmicMedia"
+        chunk = (
+            b"...name"
+            + bytes([0x69])
+            + b"some-tool"
+            + b" OpenAI compositeWithTrainedAlgorithmicMedia c2pa.watermarked.unbound"
+        )
         info: dict = {}
         _parse_c2pa_chunk(chunk, info)
         assert "compositeWithTrainedAlgorithmicMedia" in info["source_type"]
@@ -577,19 +596,19 @@ class TestC2paBufferScans:
         assert soft_binding_vendors_in(b"") == []
         assert soft_binding_vendors_in(b"no soft-binding assertion here") == []
 
-    def test_synthid_vendors_in_requires_synthid_issuer(self):
-        from remove_ai_watermarks._internal.c2pa import C2PA_ISSUERS, SYNTHID_C2PA_ISSUERS, synthid_vendors_in
+    def test_synthid_evidence_requires_openai_watermark_action_but_not_google_action(self):
+        from remove_ai_watermarks._internal.c2pa import synthid_evidence_vendors_in
 
-        syn_sig = next(s for s in C2PA_ISSUERS if s in SYNTHID_C2PA_ISSUERS)
-        non_sig = next(s for s in C2PA_ISSUERS if s not in SYNTHID_C2PA_ISSUERS)
-        assert C2PA_ISSUERS[syn_sig] in synthid_vendors_in(b"x" + syn_sig + b"x")
-        # an issuer that does NOT pair SynthID with C2PA must not be reported as one
-        assert C2PA_ISSUERS[non_sig] not in synthid_vendors_in(b"x" + non_sig + b"x")
+        assert synthid_evidence_vendors_in(b"c2pa OpenAI trainedAlgorithmicMedia") == []
+        assert synthid_evidence_vendors_in(b"c2pa OpenAI trainedAlgorithmicMedia c2pa.watermarked.unbound") == [
+            "OpenAI"
+        ]
+        assert synthid_evidence_vendors_in(b"c2pa Google trainedAlgorithmicMedia") == ["Google LLC"]
 
     def test_synthid_verdict_format(self):
         from remove_ai_watermarks._internal.c2pa import synthid_verdict
 
-        assert synthid_verdict("Google LLC") == "likely present (Google LLC embeds SynthID with C2PA)"
+        assert synthid_verdict("Google LLC") == "present according to Google LLC provenance"
 
 
 def _amf0_str(value: bytes, *, long: bool = False) -> bytes:

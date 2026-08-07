@@ -460,7 +460,7 @@ def _no_invisible_signal_exit(source: Path) -> NoReturn:
     the scrub regardless.
     """
     console.print(
-        "  No invisible AI watermark detected (no C2PA/SynthID proxy, no open\n"
+        "  No invisible AI watermark detected (no C2PA/SynthID provenance, no open\n"
         "  watermark). Skipped the diffusion scrub -- regenerating the pixels would\n"
         "  only degrade the image with nothing to remove, so no output was written.\n"
         "  This does NOT prove the image is clean: a pixel watermark such as SynthID\n"
@@ -882,7 +882,7 @@ def _print_metadata_report(source: Path, has_ai: bool, metadata: dict[str, str])
 
     console.print(f"  Warning: AI metadata detected in {source.name}:")
     if synthid := metadata.get("synthid_watermark"):
-        console.print(f"  Warning: SynthID watermark (inferred from C2PA metadata) {synthid}")
+        console.print(f"  Warning: SynthID watermark {synthid}")
     table = Table(show_header=True, header_style="bold")
     table.add_column("Key", style="cyan")
     table.add_column("Value")

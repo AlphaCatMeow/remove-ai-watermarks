@@ -18,6 +18,7 @@ import synthid_corpus
 SAMPLES_DIR = Path(__file__).resolve().parent.parent / "data" / "fixtures" / "provenance"
 CORPUS_DIR = Path(__file__).resolve().parent.parent / "data" / "synthid"
 QUALITY_SET = CORPUS_DIR / "full-pipeline-quality.csv"
+CURRENT_OPENAI_SAMPLE = CORPUS_DIR / "originals" / "ChatGPT Image May 30, 2026, 10_31_08 AM.png"
 
 EXPECTED_QUALITY_SOURCE_FILENAMES = {
     "ChatGPT Image May 30, 2026, 10_31_08 AM.png",
@@ -57,11 +58,12 @@ def test_manifest_matches_canonical_originals() -> None:
 
 @pytest.mark.skipif(not SAMPLES_DIR.exists(), reason="data/fixtures/provenance not present")
 class TestIngest:
-    def test_ingest_openai_flags_synthid_metadata(self, tmp_path: Path):
+    @pytest.mark.skipif(not CURRENT_OPENAI_SAMPLE.exists(), reason="current OpenAI SynthID fixture not present")
+    def test_ingest_current_openai_flags_synthid_metadata(self, tmp_path: Path):
         runner = CliRunner()
         result = runner.invoke(
             synthid_corpus.cli,
-            ["ingest", str(SAMPLES_DIR / "chatgpt-1.png"), "--label", "pos", "--root", str(tmp_path)],
+            ["ingest", str(CURRENT_OPENAI_SAMPLE), "--label", "pos", "--root", str(tmp_path)],
         )
         assert result.exit_code == 0, result.output
 
@@ -72,7 +74,7 @@ class TestIngest:
         assert row["synthid_metadata"] == "yes"
         assert int(row["width"]) > 0
         assert int(row["height"]) > 0
-        assert row["filename"] == "chatgpt-1.png"
+        assert row["filename"] == CURRENT_OPENAI_SAMPLE.name
         # Every label shares one canonical originals/ directory.
         assert (tmp_path / "originals" / row["filename"]).exists()
 
