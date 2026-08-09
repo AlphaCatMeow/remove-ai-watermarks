@@ -89,6 +89,25 @@ class TestRecordReproducesTheFileVerdict:
 
 
 class TestPlacementsTheRecordCouldDrop:
+    def test_app_aigc_user_comment_survives(self, tmp_path: Path):
+        """The file and record paths must both inspect EXIF UserComment."""
+        import piexif
+
+        path = tmp_path / "app-aigc.jpg"
+        payload = json.dumps({"data": {"aigc_info": {"aigc_label_type": 1}}}, separators=(",", ":"))
+        exif = piexif.dump(
+            {
+                "0th": {piexif.ImageIFD.Make: b"Canon"},
+                "Exif": {piexif.ExifIFD.UserComment: payload.encode()},
+                "GPS": {},
+                "1st": {},
+            }
+        )
+        Image.fromarray(np.zeros((64, 64, 3), dtype=np.uint8)).save(path, "JPEG", exif=exif)
+
+        assert identify(path, check_visible=False, check_invisible=False).is_ai_generated is True
+        _assert_same_verdict(path)
+
     def test_a_trailer_after_eoi_survives(self, tmp_path: Path):
         """Samsung Galaxy AI appends its marker past the JPEG EOI, and the value it is
         gated on can sit further back still. A record that stopped at the last

@@ -238,7 +238,8 @@ def _is_ai_value(value: str) -> bool:
     from remove_ai_watermarks._internal.constants import AI_GENERATOR_TOKENS
 
     value_lower = value.lower()
-    return any(token in value_lower for token in AI_GENERATOR_TOKENS)
+    provenance, generator = _app_metadata_evidence(value)
+    return provenance is not None or generator is not None or any(token in value_lower for token in AI_GENERATOR_TOKENS)
 
 
 def _png_late_metadata(image_path: Path, window: int) -> bytes:
@@ -477,6 +478,9 @@ def has_ai_metadata(image_path: Path) -> bool:
             for key in img.info:
                 if isinstance(key, str) and _is_ai_key(key):
                     return True
+            exif_bytes = img.info.get("exif")
+        if exif_bytes and any(_app_metadata_evidence(exif_bytes)):
+            return True
     except Exception as exc:
         logger.debug("PIL could not open %s for metadata scan: %s", image_path, exc)
 
@@ -499,6 +503,8 @@ def has_ai_metadata(image_path: Path) -> bool:
         return True
     # IPTC 2025.1 AI-disclosure XMP properties (their presence flags AI content).
     if any(marker in data for marker in IPTC_AI_FIELD_MARKERS):
+        return True
+    if any(_app_metadata_evidence(data)):
         return True
     # China TC260 AIGC label as a PNG text chunk (the byte scan above catches
     # only the XMP form; the raw-JSON tEXt chunk needs the PIL-based parse).
@@ -830,14 +836,77 @@ def generator_from_metadata(candidates: Iterable[str], scan: bytes = b"") -> str
     """Return a known AI generator from collected EXIF, PNG, or XMP values."""
     from remove_ai_watermarks._internal.constants import AI_GENERATOR_TOKENS
 
+    if app_generator := app_generator_from_metadata(scan):
+        return app_generator
+
     creator_tools = (
         match.group(1).decode("latin1", "replace")
         for match in re.finditer(rb"CreatorTool[>\"'=\s]{1,4}([^<\"']{1,80})", scan)
     )
     for value in itertools.chain(candidates, creator_tools):
+        if app_generator := app_generator_from_metadata(value):
+            return app_generator
         if any(token in value.lower() for token in AI_GENERATOR_TOKENS):
             return value.strip()
     return None
+
+
+_APP_PROVENANCE_PRODUCTS: dict[str, str] = {
+    "doubao": "ByteDance Doubao",
+    "xinghui": "ByteDance Xinghui",
+    "dreamina": "ByteDance Dreamina",
+    "dreamina_oversea": "ByteDance Dreamina",
+}
+_APP_PRODUCT_RE = re.compile(r'"product"\s*:\s*"([a-z0-9_]+)"', re.IGNORECASE)
+_APP_EXPORT_TYPE_RE = re.compile(r'"exportType"\s*:\s*"([a-z0-9_]+)"', re.IGNORECASE)
+_APP_AIGC_LABEL_RE = re.compile(r'"aigc_label_type"\s*:\s*[12](?=\s*[,}])', re.IGNORECASE)
+_APP_AIGC_TYPE_RE = re.compile(r'"aigc_type"\s*:\s*1(?=\s*[,}])', re.IGNORECASE)
+
+
+def _normalized_app_metadata(value: str | bytes) -> str:
+    text = value.decode("latin-1", "ignore") if isinstance(value, bytes) else value
+    return text.replace('\\"', '"')
+
+
+def _app_metadata_evidence(value: str | bytes) -> tuple[str | None, str | None]:
+    """Return removable product provenance and stronger AI-origin evidence."""
+    normalized = _normalized_app_metadata(value)
+    products = tuple(match.group(1).lower() for match in _APP_PRODUCT_RE.finditer(normalized))
+    provenance = next(
+        (_APP_PROVENANCE_PRODUCTS[product] for product in products if product in _APP_PROVENANCE_PRODUCTS), None
+    )
+    export_types = {match.group(1).lower() for match in _APP_EXPORT_TYPE_RE.finditer(normalized)}
+
+    generator = None
+    if set(products).intersection({"dreamina", "dreamina_oversea"}) and "generation" in export_types:
+        generator = "ByteDance Dreamina"
+    elif '"aigc_info"' in normalized.lower():
+        if "aweme" in products and _APP_AIGC_TYPE_RE.search(normalized):
+            generator = "ByteDance Aweme AI"
+        elif _APP_AIGC_LABEL_RE.search(normalized):
+            generator = "Embedded app AIGC disclosure"
+    return provenance, generator
+
+
+def app_provenance_from_metadata(value: str | bytes) -> str | None:
+    """Return exact AI-product provenance that is safe to scrub.
+
+    An exporting product does not by itself prove that the pixels were generated.
+    That stronger interpretation stays in :func:`app_generator_from_metadata`.
+    """
+    return _app_metadata_evidence(value)[0]
+
+
+def app_generator_from_metadata(value: str | bytes) -> str | None:
+    """Identify exact app-export AI disclosures embedded in JSON-shaped metadata.
+
+    ByteDance-family apps write a second provenance object beside C2PA or TC260.
+    Its keys are ordinary EXIF fields, so generic key matching misses it and a
+    metadata-preserving JPEG scrub keeps it. Only explicit AIGC discriminators or
+    a Dreamina generation export assert AI origin. Product provenance alone remains
+    removable without changing the image's origin verdict.
+    """
+    return _app_metadata_evidence(value)[1]
 
 
 def exif_generator(image_path: Path) -> str | None:
@@ -870,7 +939,9 @@ def exif_generator(image_path: Path) -> str | None:
                 if isinstance(value, str) and value:
                     candidates.append(value)
         if exif_bytes:
-            tags = piexif.load(exif_bytes).get("0th", {})
+            loaded = piexif.load(exif_bytes)
+            tags = loaded.get("0th", {})
+            exif_tags: dict[int, Any] = loaded.get("Exif") or {}
             # Make catches camera-style tags AI tools reuse (Ideogram writes
             # Make="Ideogram AI"); real cameras put "Apple"/"Canon" there, which
             # carry no AI token, so this stays low-false-positive.
@@ -883,6 +954,9 @@ def exif_generator(image_path: Path) -> str | None:
                 value = tags.get(tag)
                 if isinstance(value, bytes):
                     candidates.append(value.decode("latin1", "replace"))
+            user_comment = exif_tags.get(piexif.ExifIFD.UserComment)
+            if isinstance(user_comment, bytes):
+                candidates.append(user_comment.decode("latin1", "replace"))
     except Exception as exc:  # unopenable format / malformed EXIF
         logger.debug("EXIF generator read failed for %s: %s", image_path, exc)
 
@@ -1009,6 +1083,15 @@ def _ai_exif_targets(loaded: dict[str, Any]) -> list[tuple[str, int, bytes, str]
         add("0th", ifd0, piexif.ImageIFD.ImageDescription, "ImageDescription")
     if _is_aigc_exif_value(ifde.get(piexif.ExifIFD.UserComment)):
         add("Exif", ifde, piexif.ExifIFD.UserComment, "UserComment")
+    # (d) ByteDance-family app JSON. Exact AI-product provenance is removable even
+    # when it does not by itself assert generated pixels. Ordinary Aweme/retouch/lv
+    # exports remain untouched.
+    for ifd_key, ifd, tag, name in (
+        ("0th", ifd0, piexif.ImageIFD.ImageDescription, "ImageDescription"),
+        ("Exif", ifde, piexif.ExifIFD.UserComment, "UserComment"),
+    ):
+        if any(_app_metadata_evidence(ifd.get(tag, b""))):
+            add(ifd_key, ifd, tag, name)
 
     return targets
 
@@ -1086,6 +1169,13 @@ def get_ai_metadata(image_path: Path) -> dict[str, str]:
     if (aigc := aigc_label(image_path)) is not None:
         producer = aigc.get("ContentProducer", "")
         result["aigc_label"] = f"China AIGC label (TC260){f'; producer {producer}' if producer else ''}"
+
+    app_scan = scan_head(image_path)
+    app_provenance, app_generator = _app_metadata_evidence(app_scan)
+    if app_provenance:
+        result.setdefault("app_provenance", f"App export provenance ({app_provenance})")
+    if app_generator:
+        result.setdefault("app_aigc", f"App AIGC disclosure ({app_generator})")
 
     # xAI / Grok EXIF signature scheme (its only provenance signal).
     if xai_signature(image_path):
@@ -1181,7 +1271,7 @@ def _jpeg_app_carries_ai(marker: int, payload: bytes) -> bool:
     # (detection<->removal parity). Skip APP1-EXIF (0xE1 ``Exif``): its camera tags are
     # scrubbed tag-by-tag via piexif, not dropped wholesale.
     if not (marker == 0xE1 and payload.startswith(b"Exif")):
-        return _is_aigc_exif_value(payload)
+        return _is_aigc_exif_value(payload) or any(_app_metadata_evidence(payload))
     return False
 
 

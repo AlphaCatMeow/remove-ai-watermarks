@@ -12,6 +12,7 @@ import pytest
 from PIL import Image
 from PIL.PngImagePlugin import PngInfo
 
+from remove_ai_watermarks.identify import identify
 from remove_ai_watermarks.metadata import (
     C2PA_UUID,
     _is_ai_key,
@@ -950,6 +951,158 @@ class TestXaiSignature:
 
 class TestRemoveAiExif:
     """remove_ai_metadata scrubs AI-provenance EXIF tags but keeps genuine EXIF."""
+
+    @staticmethod
+    def _app_aigc_jpeg(tmp_path: Path, name: str, payload: dict) -> Path:
+        import json
+
+        exif = piexif.dump(
+            {
+                "0th": {
+                    piexif.ImageIFD.ImageDescription: json.dumps(payload, separators=(",", ":")).encode(),
+                    piexif.ImageIFD.Make: b"Canon",
+                },
+                "Exif": {},
+                "GPS": {},
+                "1st": {},
+            }
+        )
+        path = tmp_path / name
+        Image.new("RGB", (64, 64)).save(path, exif=exif)
+        return path
+
+    @pytest.mark.parametrize(
+        ("payload", "generator"),
+        [
+            (
+                {
+                    "data": {
+                        "product": "dreamina_oversea",
+                        "source_type": "dreamina_oversea",
+                        "exportType": "generation",
+                    }
+                },
+                "Dreamina",
+            ),
+            (
+                {
+                    "data": {
+                        "product": "aweme",
+                        "aigc_info": {
+                            "aigc_type": 1,
+                            "is_sticker_aigc": 0,
+                        },
+                    }
+                },
+                "Aweme",
+            ),
+            ({"data": {"aigc_info": {"aigc_label_type": 1}}}, "AIGC disclosure"),
+            ({"data": {"aigc_info": {"aigc_label_type": 2}}}, "AIGC disclosure"),
+        ],
+    )
+    def test_embedded_app_aigc_detected_and_stripped(self, tmp_path: Path, payload: dict, generator: str):
+        src = self._app_aigc_jpeg(tmp_path, "app-aigc.jpg", payload)
+
+        assert generator in (exif_generator(src) or "")
+        assert has_ai_metadata(src) is True
+        assert "app_aigc" in get_ai_metadata(src)
+
+        out = tmp_path / "clean.jpg"
+        _, remaining = strip_and_verify(src, out)
+
+        assert remaining == {}
+        assert exif_generator(out) is None
+        kept = piexif.load(Image.open(out).info["exif"])["0th"]
+        assert kept.get(piexif.ImageIFD.ImageDescription) is None
+        assert kept.get(piexif.ImageIFD.Make) == b"Canon"
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"data": {"product": "aweme"}},
+            {"data": {"product": "retouch"}},
+            {"data": {"product": "lv", "exportType": "image_export"}},
+            {"data": {"aigc_info": {"aigc_label_type": 0}}},
+            {"data": {"aigc_info": {"aigc_label_type": 9}}},
+            {"data": {"aigc_info": {"aigc_label_type": 10}}},
+            {"data": {"product": "aweme", "aigc_info": {"aigc_type": 0}}},
+            {"data": {"product": "aweme", "aigc_info": {"aigc_type": 2}}},
+            {"data": {"product": "aweme", "aigc_info": {"aigc_type": 10}}},
+        ],
+    )
+    def test_neighboring_app_metadata_is_preserved(self, tmp_path: Path, payload: dict):
+        src = self._app_aigc_jpeg(tmp_path, "ordinary-app.jpg", payload)
+
+        assert exif_generator(src) is None
+        assert has_ai_metadata(src) is False
+        assert get_ai_metadata(src) == {}
+
+        out = tmp_path / "kept.jpg"
+        remove_ai_metadata(src, out)
+
+        kept = piexif.load(Image.open(out).info["exif"])["0th"]
+        assert kept.get(piexif.ImageIFD.ImageDescription) is not None
+        assert kept.get(piexif.ImageIFD.Make) == b"Canon"
+
+    @pytest.mark.parametrize("product", ["doubao", "xinghui", "dreamina", "dreamina_oversea"])
+    def test_ai_product_provenance_is_stripped_without_asserting_generation(self, tmp_path: Path, product: str):
+        src = self._app_aigc_jpeg(tmp_path, "app-provenance.jpg", {"data": {"product": product}})
+
+        assert exif_generator(src) is None
+        assert has_ai_metadata(src) is True
+        assert "app_provenance" in get_ai_metadata(src)
+        assert identify(src, check_visible=False, check_invisible=False).is_ai_generated is None
+
+        out = tmp_path / "clean-provenance.jpg"
+        _, remaining = strip_and_verify(src, out)
+
+        assert remaining == {}
+        kept = piexif.load(Image.open(out).info["exif"])["0th"]
+        assert kept.get(piexif.ImageIFD.ImageDescription) is None
+        assert kept.get(piexif.ImageIFD.Make) == b"Canon"
+
+    @pytest.mark.parametrize("product", ["dreamina", "dreamina_oversea"])
+    def test_dreamina_requires_generation_export_for_ai_verdict(self, tmp_path: Path, product: str):
+        generated = self._app_aigc_jpeg(
+            tmp_path,
+            "dreamina-generation.jpg",
+            {"data": {"product": product, "exportType": "generation"}},
+        )
+        edited = self._app_aigc_jpeg(
+            tmp_path,
+            "dreamina-edit.jpg",
+            {"data": {"product": product, "exportType": "image_export"}},
+        )
+
+        assert "Dreamina" in (exif_generator(generated) or "")
+        assert identify(generated, check_visible=False, check_invisible=False).is_ai_generated is True
+        assert exif_generator(edited) is None
+        assert has_ai_metadata(edited) is True
+
+    def test_nested_app_aigc_user_comment_is_detected_and_stripped(self, tmp_path: Path):
+        import json
+
+        payload = {"data": {"aigc_info": json.dumps({"aigc_label_type": 2})}}
+        exif = piexif.dump(
+            {
+                "0th": {piexif.ImageIFD.Make: b"Canon"},
+                "Exif": {piexif.ExifIFD.UserComment: json.dumps(payload, separators=(",", ":")).encode()},
+                "GPS": {},
+                "1st": {},
+            }
+        )
+        src = tmp_path / "app-aigc-user-comment.jpg"
+        Image.new("RGB", (64, 64)).save(src, exif=exif)
+
+        assert has_ai_metadata(src) is True
+
+        out = tmp_path / "clean-user-comment.jpg"
+        _, remaining = strip_and_verify(src, out)
+
+        assert remaining == {}
+        kept = piexif.load(Image.open(out).info["exif"])
+        assert kept["Exif"].get(piexif.ExifIFD.UserComment) is None
+        assert kept["0th"].get(piexif.ImageIFD.Make) == b"Canon"
 
     def test_grok_signature_stripped_on_jpeg_output(self, tmp_path: Path):
         src = _grok_jpeg(tmp_path)

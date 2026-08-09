@@ -37,6 +37,7 @@ from remove_ai_watermarks._internal.c2pa import (
 from remove_ai_watermarks._internal.constants import (
     C2PA_AI_TOOLS,
     C2PA_AI_VENDORS,
+    C2PA_CLAIM_GENERATOR_PLATFORMS,
     C2PA_IDENTITY_AI_ORGS,
     C2PA_ISSUERS,
 )
@@ -260,6 +261,7 @@ def _external_exif_generator(pairs: list[tuple[str, Any]], scan: bytes) -> str |
         "title",
         "description",
         "creatortool",
+        "usercomment",
     }
     candidates = [
         _external_text(value)
@@ -691,6 +693,14 @@ def _attribute_platform(issuers: list[str], *, is_ai: bool = True) -> str | None
     return None
 
 
+def _claim_generator_platform(generator: str | None) -> str | None:
+    """Resolve a distinctive C2PA claim generator to its user-facing product."""
+    if not generator:
+        return None
+    lowered = generator.lower()
+    return next((platform for token, platform in C2PA_CLAIM_GENERATOR_PLATFORMS if token in lowered), None)
+
+
 # Coarse origin-vendor normalization for integrity-clash detection. Two signals
 # that resolve to the SAME key are consistent (a C2PA "Google (Gemini)" issuer
 # and Google SynthID provenance, or Adobe Firefly + its Adobe TrustMark soft
@@ -1103,7 +1113,16 @@ def _identify_from_evidence(
     # ASUS Gallery), with the issuer byte-scan only as fallback. The issuer scan
     # alone mis-attributed real samples (Leica->Truepic timestamp authority,
     # Nikon->Adobe namespace, Pixel->Google Gemini) -- the token scans fix that.
-    platform = (camera_label or signer_label or _attribute_platform(issuers, is_ai=c2pa_is_ai)) if has_c2pa else None
+    platform = (
+        (
+            camera_label
+            or signer_label
+            or (_claim_generator_platform(generator) if c2pa_is_ai else None)
+            or _attribute_platform(issuers, is_ai=c2pa_is_ai)
+        )
+        if has_c2pa
+        else None
+    )
     if has_c2pa:
         detail = ", ".join(filter(None, [", ".join(issuers), generator, info.get("source_type")]))
         signals.append(Signal("c2pa", detail or "C2PA manifest present", "high"))

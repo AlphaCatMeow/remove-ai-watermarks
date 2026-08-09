@@ -67,6 +67,9 @@ The inspection and stripping code handles signals in these groups:
 
 - C2PA Content Credentials and supported cloud manifest references;
 - EXIF and XMP generator fields;
+- exact app-export provenance and AIGC disclosures from supported
+  ByteDance-family products, with product-only provenance excluded from the
+  generated-image verdict;
 - IPTC AI disclosure fields;
 - PNG text chunks and embedded generation parameters;
 - China TC260 AIGC labels in supported image placements and the normative
@@ -153,7 +156,7 @@ not a universal clean verdict.
 | FLUX | None registered | Diffusion regeneration; optional open decoder | C2PA for supported sources |
 | Adobe Firefly | None registered | No proprietary local decoder | C2PA; optional TrustMark decoder |
 | Midjourney | None registered | No registered pixel decoder | EXIF, XMP, and IPTC signals |
-| ByteDance generators | Doubao and Jimeng marks | No registered pixel decoder | TC260 AIGC and supported C2PA signals |
+| ByteDance generators | Doubao and Jimeng marks | No registered pixel decoder | TC260 AIGC, supported C2PA, and exact app-export AIGC disclosures |
 | Qwen | Qwen mark | No registered pixel decoder | TC260 AIGC |
 | Kling | Kling image and video marks | No registered pixel decoder | TC260 AIGC |
 | Hailuo / MiniMax video | Hailuo composite video label | No registered pixel decoder | TC260 AIGC where present |

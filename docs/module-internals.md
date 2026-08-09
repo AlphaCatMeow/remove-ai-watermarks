@@ -367,6 +367,11 @@ for partial and synthetic fixtures that the official reader rejects.
 Vendor attribution comes from the registry in
 [`_internal/constants.py`](../src/remove_ai_watermarks/_internal/constants.py). Derived
 issuer and platform maps should not be maintained separately.
+For an AI C2PA claim, a recognized product in `claim_generator` takes precedence
+over the certificate issuer: an application can sign through an upstream model
+provider without becoming that provider's product. Only exact product mappings
+receive this precedence; an unknown claim generator still falls back to issuer
+attribution.
 
 ### Metadata scanning and stripping
 
@@ -387,6 +392,11 @@ Key contracts:
   "the credentials could not be read", and the second silently downgrades a verdict.
 - JPEG stripping walks metadata segments and preserves the entropy-coded image
   scan.
+- Exact app-export JSON disclosures in EXIF `ImageDescription` or `UserComment`
+  share one parser. Known AI-product provenance is removable without by itself
+  asserting that the pixels were generated; explicit `aigc_info` discriminator
+  values and Dreamina `exportType=generation` do assert AI origin. Ordinary
+  Aweme, retouch, and `lv` editor exports are preserved.
 - ISOBMFF containers use
   [`_internal/isobmff.py`](../src/remove_ai_watermarks/_internal/isobmff.py).
 - Native MP4/MOV TC260 `AIGC` entries are read from

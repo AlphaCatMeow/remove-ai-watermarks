@@ -103,6 +103,15 @@ C2PA_AI_VENDORS: tuple[C2paAiVendor, ...] = (
 C2PA_ISSUERS = {vendor.issuer: vendor.org for vendor in C2PA_AI_VENDORS}
 C2PA_IDENTITY_AI_ORGS = frozenset(vendor.org for vendor in C2PA_AI_VENDORS if vendor.asserts_ai)
 
+# Product-specific claim generators can sign through a different upstream issuer.
+# Keep this attribution beside the issuer registry so every C2PA consumer has one
+# canonical source rather than maintaining a derived product map in identify.py.
+C2PA_CLAIM_GENERATOR_PLATFORMS: tuple[tuple[str, str], ...] = (
+    ("higgsfield ai", "Higgsfield AI"),
+    ("topaz labs image api", "Topaz Labs"),
+    ("tiktok ad creative toolbox", "TikTok Ad Creative Toolbox"),
+)
+
 C2PA_AI_TOOLS = {
     token.encode(): label
     for token, label in (

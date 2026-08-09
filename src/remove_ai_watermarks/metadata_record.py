@@ -302,12 +302,14 @@ def _exif_pairs(info: dict[str, Any]) -> dict[str, str]:
     try:
         import piexif
 
-        tags = piexif.load(exif_bytes).get("0th", {})
+        loaded = piexif.load(exif_bytes)
+        tags = loaded.get("0th", {})
+        exif_tags = loaded.get("Exif", {})
     except Exception as exc:  # malformed EXIF
         logger.debug("EXIF parse failed: %s", exc)
         return {}
 
-    return {
+    pairs = {
         name: text
         for name, tag in (
             ("Software", piexif.ImageIFD.Software),
@@ -317,6 +319,9 @@ def _exif_pairs(info: dict[str, Any]) -> dict[str, str]:
         )
         if (text := exif_text(tags, tag))
     }
+    if text := exif_text(exif_tags, piexif.ExifIFD.UserComment):
+        pairs["UserComment"] = text
+    return pairs
 
 
 def _pil_info(info: dict[str, Any]) -> dict[str, str]:

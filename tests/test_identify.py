@@ -313,6 +313,38 @@ class TestIdentifyNonPng:
         assert r.is_ai_generated is True
         assert "ByteDance" in (r.platform or "")
 
+    @pytest.mark.parametrize(
+        ("claim_generator", "platform"),
+        [
+            ("Higgsfield AI", "Higgsfield AI"),
+            ("Topaz Labs Image API", "Topaz Labs"),
+            ("TIKTOK AD Creative Toolbox", "TikTok Ad Creative Toolbox"),
+        ],
+    )
+    def test_claim_generator_wins_over_upstream_issuer(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, claim_generator: str, platform: str
+    ):
+        path = tmp_path / "generated.png"
+        from PIL import Image
+
+        Image.new("RGB", (32, 32)).save(path)
+        monkeypatch.setattr(
+            "remove_ai_watermarks.identify.extract_c2pa_info",
+            lambda _path: {
+                "has_c2pa": True,
+                "issuer": "OpenAI",
+                "claim_generator": claim_generator,
+                "source_type": "trainedAlgorithmicMedia (AI-generated)",
+                "ai_source_kind": "generated",
+            },
+        )
+
+        report = identify(path, check_visible=False, check_invisible=False)
+
+        assert report.is_ai_generated is True
+        assert report.platform == platform
+        assert claim_generator in next(s.detail for s in report.signals if s.name == "c2pa")
+
     def test_dreamina_attributed_without_source_type(self, tmp_path: Path):
         # Dreamina (ByteDance's international Jimeng brand) signs C2PA as
         # "Bytedance Pte. Ltd." with a "Dreamina/x.y" claim generator and NO
