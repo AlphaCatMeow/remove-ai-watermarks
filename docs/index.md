@@ -22,7 +22,7 @@ to run the tool. Use the maintainer references only when changing the code.
 | [Development](development.md) | Environment setup, dependency recovery, CI behavior, and fixture policy. |
 | [Code provenance](code-provenance.md) | Required notices for licensed derivative work. |
 | [Verification plan](verification-plan.md) | Verification methods, completed measurements, and remaining validation gaps. |
-| [Release and distribution](release-and-distribution.md) | PyPI, Homebrew, Hugging Face Space, and release workflow. |
+| [Release and distribution](release-and-distribution.md) | PyPI, Homebrew, Hugging Face Space, ComfyUI Registry, and the release workflow. |
 | [Watermarking landscape](watermarking-landscape.md) | Vendor signals and detection approaches. |
 | [SynthID technical reference](synthid.md) | Mechanism, detector access, robustness, and implications for this project. |
 

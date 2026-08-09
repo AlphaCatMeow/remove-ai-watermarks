@@ -20,3 +20,13 @@ def test_sdist_has_explicit_public_boundary() -> None:
 
     assert _array_values(sdist_config, "include") == {"/src", "/LICENSE", "/README.md", "/pyproject.toml"}
     assert {"/data", "/tmp", "/.sc"} <= _array_values(sdist_config, "exclude")
+
+
+def test_release_guide_names_every_published_surface() -> None:
+    """A release checklist must not silently forget a downstream surface."""
+    root = Path(__file__).resolve().parents[1]
+    guide = (root / "docs" / "release-and-distribution.md").read_text(encoding="utf-8")
+
+    for surface in ("PyPI", "Homebrew", "Hugging Face Space", "ComfyUI Registry"):
+        assert surface in guide
+    assert re.search(r"Conda is\s+not a supported publishing surface", guide)

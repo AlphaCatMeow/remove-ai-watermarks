@@ -3,6 +3,21 @@
 This page describes the release behavior defined in this repository. External
 registry state can change independently, so verify it during a release.
 
+## Published surfaces
+
+A release is complete only after all four published surfaces are verified:
+
+| Surface | Published result | Automation |
+|---|---|---|
+| PyPI | The `remove-ai-watermarks` wheel and source distribution | `publish.yml` |
+| Homebrew | The `remove-ai-watermarks` formula in `wiltodelta/homebrew-tap` | `distribute.yml` |
+| Hugging Face Space | A factory rebuild of `wiltodelta/remove-ai-watermarks` against the new PyPI release | `distribute.yml` |
+| ComfyUI Registry | A compatible release of `wiltodelta/ComfyUI-remove-ai-watermarks` with its own node version | `distribute.yml` and the node repository's workflows |
+
+The GitHub Release is the trigger and release record for this flow. Conda is
+not a supported publishing surface: this repository has no conda recipe or
+conda publication job.
+
 ## Release sources of truth
 
 The package version appears in:
@@ -43,7 +58,8 @@ PyPI API token from the repository.
 waits for the matching source distribution to appear on PyPI, then:
 
 - updates the Homebrew tap formula URL and SHA-256;
-- triggers a factory rebuild of the Hugging Face Space.
+- triggers a factory rebuild of the Hugging Face Space;
+- synchronizes, tests, versions, and publishes the ComfyUI nodes.
 
 The workflow can also be started manually with an optional version input.
 
