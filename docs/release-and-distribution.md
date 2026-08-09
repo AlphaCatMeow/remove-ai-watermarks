@@ -43,24 +43,13 @@ PyPI API token from the repository.
 waits for the matching source distribution to appear on PyPI, then:
 
 - updates the Homebrew tap formula URL and SHA-256;
-- updates the repository conda recipe version and source-distribution SHA-256;
 - triggers a factory rebuild of the Hugging Face Space.
 
 The workflow can also be started manually with an optional version input.
-Conda-forge updates are outside this workflow.
 
 If a distribution job fails because a repository or Hugging Face credential is
 invalid, rotate the corresponding GitHub secret and rerun the failed job. A
 manual Homebrew formula update is the fallback when its automation is blocked.
-
-The conda job uses the published artifact rather than a locally built archive
-as the hash source and commits the resulting recipe change to `main`. Runtime
-dependency mapping remains review-controlled: keep it aligned with the default
-metadata dependencies in `pyproject.toml`, do not copy optional pixel extras
-into the default recipe, and document any conda-forge package that is
-unavailable and must be omitted.
-The optional `video` extra carries PyAV with Python-version-specific bounds; it
-does not belong in the default metadata-focused conda recipe.
 
 ## Source distribution boundary
 
@@ -82,8 +71,6 @@ The package uses hatchling through the unpinned `hatchling` build requirement in
 `pyproject.toml`. Uploading uses uv rather than the older twine-based action.
 
 ## Other channels
-
-The repository includes a conda recipe under `packaging/conda/recipe.yaml`.
 
 The ComfyUI nodes are maintained and versioned in their own repository. After
 the matching source distribution appears on PyPI, `distribute.yml` dispatches
@@ -112,7 +99,5 @@ After publication, verify:
 - the package version matches the tag;
 - the Homebrew formula points to the new source distribution;
 - the distribution workflow completed successfully;
-- the repository's conda recipe matches the published version and source
-  distribution;
 - the ComfyUI Registry node requires the new library version;
 - a clean install can run `remove-ai-watermarks --version`.

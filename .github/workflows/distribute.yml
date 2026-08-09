@@ -1,9 +1,8 @@
 name: Distribute on release
 
 # Fans a published GitHub Release out to the channels that need a nudge.
-# PyPI is handled by publish.yml; the conda-forge channel is handled by its
-# autotick bot. This workflow updates the repository recipe and event-drives
-# the three channels that would otherwise be manual:
+# PyPI is handled by publish.yml. This workflow event-drives the three channels
+# that would otherwise be manual:
 #   - Homebrew tap: rewrite the formula's url + sha256 to the new sdist.
 #   - HF Space: factory-rebuild so it reinstalls the latest sdist from PyPI.
 #   - ComfyUI: sync, test, and publish the node against the exact library release.
@@ -87,34 +86,6 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add "$F"
           git commit -m "remove-ai-watermarks $VERSION" || { echo "Formula already current"; exit 0; }
-          git push
-
-  conda-recipe:
-    needs: resolve
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout main
-        uses: actions/checkout@v7
-        with:
-          ref: main
-      - name: Bump the repository conda recipe
-        env:
-          SHA: ${{ needs.resolve.outputs.sha }}
-          VERSION: ${{ needs.resolve.outputs.version }}
-        run: |
-          set -euo pipefail
-          python scripts/sync_conda_recipe.py --version "$VERSION" --sha256 "$SHA"
-          git diff --check
-          if git diff --quiet -- packaging/conda/recipe.yaml; then
-            echo "Conda recipe already current"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add packaging/conda/recipe.yaml
-          git commit -m "Sync conda recipe with v$VERSION"
           git push
 
   hf-space:
