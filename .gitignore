@@ -48,3 +48,12 @@ gfpgan/
 
 # Local evaluation data
 .local-eval/
+
+# Other harnesses' generated config. Claude's sync owns these; a committed copy
+# is a second source nobody reconciles. Anchored so a same-named source file
+# deeper in the tree is not caught.
+/.agents/
+/.codex/
+/.opencode/
+/opencode.json
+/opencode.jsonc
