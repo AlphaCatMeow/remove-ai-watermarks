@@ -1,4 +1,8 @@
 [project]
+# This name is the published PyPI distribution, not a local label: changing it
+# strands every `pip install remove-ai-watermarks` and every pinned dependency
+# on it, including the ComfyUI node package. The console script below carries
+# the same weight, since users have it on PATH.
 name = "remove-ai-watermarks"
 version = "0.26.3"
 description = "AI watermark remover for visible, invisible, and provenance marks in images and video"
