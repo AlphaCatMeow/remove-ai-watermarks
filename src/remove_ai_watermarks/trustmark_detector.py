@@ -32,6 +32,9 @@ logger = logging.getLogger(__name__)
 
 # Adobe ships Variant P in production (com.adobe.trustmark.P).
 _MODEL_TYPE = "P"
+# Schema 3 (BCH_3) is below the detector's measured precision threshold; the
+# calibration history is canonical in docs/module-internals.md.
+_SUPPORTED_SCHEMAS = frozenset({0, 1, 2})
 # Lazily constructed singleton -- model load + first-use download is expensive.
 # Guarded by a lock so concurrent callers don't double-construct/double-download.
 _tm: Any = None
@@ -57,8 +60,9 @@ def _decoder() -> Any:
 
 
 # JPEG quality for the false-positive durability gate (see detect_trustmark).
-# Deliberately mild: a genuine TrustMark survives far harsher, while every
-# observed false positive collapsed even at this quality.
+# Deliberately mild: a genuine TrustMark survives far harsher. The round-trip
+# still needs payload and schema validation because content-correlated false
+# positives can survive this compression level.
 _REENCODE_QUALITY = 95
 
 
@@ -79,8 +83,8 @@ def detect_trustmark(image_path: Path) -> str | None:
     cannot carry Adobe's watermark, and decoded a random-bytes secret). A genuine
     TrustMark is a *durable* soft binding engineered to survive re-encoding (that
     is its entire purpose once C2PA is stripped), so we re-decode after a mild
-    JPEG round-trip and require the same schema both times. Every observed false
-    positive collapsed under this gate.
+    JPEG round-trip and require the same binary payload and schema both times.
+    Only the calibrated schemas 0-2 count as high-precision positives.
     """
     if not is_available():
         return None
@@ -90,10 +94,17 @@ def detect_trustmark(image_path: Path) -> str | None:
         with Image.open(image_path) as img:
             cover = img.convert("RGB")
         decoder = _decoder()
-        _wm_secret, wm_present, wm_schema = decoder.decode(cover)
+        wm_secret, wm_present, wm_schema = decoder.decode(cover, "binary")
         if not wm_present:
             return None
-        if not _survives_reencode(decoder, cover, wm_schema):
+        if wm_schema not in _SUPPORTED_SCHEMAS:
+            logger.debug(
+                "TrustMark decode for %s used weak schema %s; treating as false positive",
+                image_path,
+                wm_schema,
+            )
+            return None
+        if not _survives_reencode(decoder, cover, wm_secret, wm_schema):
             logger.debug("TrustMark decode for %s did not survive re-encode; treating as false positive", image_path)
             return None
     except Exception as exc:  # model download / decode failure / unreadable image
@@ -102,10 +113,8 @@ def detect_trustmark(image_path: Path) -> str | None:
     return f"Adobe TrustMark (variant {_MODEL_TYPE}, schema {wm_schema})"
 
 
-def _survives_reencode(decoder: Any, cover: Any, schema: int) -> bool:
-    """True if the watermark re-decodes with the same schema after a mild JPEG
-    round-trip -- the durability a genuine TrustMark guarantees, which a BCH
-    false positive (content noise) does not."""
+def _survives_reencode(decoder: Any, cover: Any, payload: str, schema: int) -> bool:
+    """True if the same watermark re-decodes after a mild JPEG round-trip."""
     import io
 
     from PIL import Image
@@ -114,5 +123,5 @@ def _survives_reencode(decoder: Any, cover: Any, schema: int) -> bool:
     cover.save(buffer, "JPEG", quality=_REENCODE_QUALITY)
     buffer.seek(0)
     with Image.open(buffer) as reencoded:
-        _secret, present, reencoded_schema = decoder.decode(reencoded.convert("RGB"))
-    return bool(present) and reencoded_schema == schema
+        reencoded_payload, present, reencoded_schema = decoder.decode(reencoded.convert("RGB"), "binary")
+    return bool(present) and reencoded_schema == schema and reencoded_payload == payload

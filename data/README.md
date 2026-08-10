@@ -6,6 +6,7 @@ Tracked data is organized by purpose:
 data/
   fixtures/
     provenance/   Real format and provenance fixtures used by tests
+                  (source records live in fixtures/README.md)
   calibration/
     <vendor>/     Minimal controlled inputs needed to rebuild detector assets
   synthid/
@@ -31,7 +32,9 @@ data/
    commands, hashes, and oracle verdicts instead of committing another corpus
    copy. A small curated before-and-after example may live in `docs/images/`
    when it is part of the public documentation.
-6. Runtime detector assets belong in `src/remove_ai_watermarks/assets/`.
+6. Keep third-party fixture license notices in `licenses/`, outside directories
+   that tests enumerate as media inputs.
+7. Runtime detector assets belong in `src/remove_ai_watermarks/assets/`.
    Unregistered research candidates belong in
    `scripts/assets/visible-mark-candidates/` so they are not shipped in the
    wheel.

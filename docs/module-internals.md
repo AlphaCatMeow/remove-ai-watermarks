@@ -564,7 +564,13 @@ human-made verdict. `ai_source_kind` distinguishes fully generated content from
 AI-enhanced composites when the source metadata provides that distinction.
 
 TrustMark is reported as a watermark signal but does not by itself assert AI
-origin because it can also protect human-authored content.
+origin because it can also protect human-authored content. The decoder requests
+binary mode, matching Adobe's Durable Content Credentials example, then requires
+the same payload and schema after a quality-95 JPEG round-trip. Only Variant P
+schemas 0-2 count as positives. Schema 3 is below the precision threshold: all
+38 measured historical false-positive candidates used it, and six retained the
+same false payload after re-encoding. The official Adobe Variant P schema-1
+fixture in `data/fixtures/provenance/` is the positive regression control.
 
 Regression coverage:
 

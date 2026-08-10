@@ -80,7 +80,9 @@ The inspection and stripping code handles signals in these groups:
 - Samsung AI editing markers;
 - Hugging Face job metadata;
 - open Stable Diffusion style DWT-DCT watermarks with the `detect` extra;
-- Adobe TrustMark with the `trustmark` extra.
+- Adobe TrustMark Variant P schemas 0-2 with the `trustmark` extra. Variant Q
+  needs a different model, while schema 3 is deliberately rejected because it
+  produced persistent false positives on unrelated generators.
 
 `identify` combines detected signals into a `ProvenanceReport`. It reports
 unknown when evidence is absent. It never treats missing metadata as proof that
@@ -154,7 +156,7 @@ not a universal clean verdict.
 | OpenAI image generators | None registered | Diffusion regeneration for supported invisible signals | C2PA and generator provenance |
 | Stable Diffusion and SDXL | None registered | Diffusion regeneration; optional open decoder | Embedded parameters and text metadata |
 | FLUX | None registered | Diffusion regeneration; optional open decoder | C2PA for supported sources |
-| Adobe Firefly | None registered | No proprietary local decoder | C2PA; optional TrustMark decoder |
+| Adobe Firefly | None registered | Optional TrustMark Variant P decoder | C2PA |
 | Midjourney | None registered | No registered pixel decoder | EXIF, XMP, and IPTC signals |
 | ByteDance generators | Doubao and Jimeng marks | No registered pixel decoder | TC260 AIGC, supported C2PA, and exact app-export AIGC disclosures |
 | Qwen | Qwen mark | No registered pixel decoder | TC260 AIGC |
