@@ -11,8 +11,9 @@ cleaning, directory batches, visible Sora, Veo, Seedance, Dola, Hailuo, and
 Kling mark removal, and oracle-certified VAE regeneration for video SynthID
 removal.
 
-> Try it online at [raiw.cc](https://raiw.cc) if you do not want to install Python
-> or run diffusion models locally.
+> [raiw.cc](https://raiw.cc) runs this library as a hosted service, with the GPU
+> included and nothing to install. Visible mark and metadata removal are free
+> there; invisible watermark removal is paid.
 
 [![PyPI](https://img.shields.io/pypi/v/remove-ai-watermarks?logo=pypi&logoColor=white)](https://pypi.org/project/remove-ai-watermarks/)
 [![Python](https://img.shields.io/pypi/pyversions/remove-ai-watermarks?logo=python&logoColor=white)](https://pypi.org/project/remove-ai-watermarks/)
