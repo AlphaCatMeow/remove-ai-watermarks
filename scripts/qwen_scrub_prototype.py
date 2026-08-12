@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.11"
 # dependencies = [
 #   "diffusers>=0.35.0",
 #   "transformers>=4.51.0",

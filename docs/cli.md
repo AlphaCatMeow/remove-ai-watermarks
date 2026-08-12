@@ -16,7 +16,7 @@ defaults. This page focuses on choosing the right command.
 | `metadata` and metadata-only `identify` | Default package |
 | Visible signals in `identify` | `remove-ai-watermarks[visible]` (`pixels` is the minimal runtime) |
 | Open DWT-DCT signals in `identify` | `remove-ai-watermarks[detect]` |
-| Adobe TrustMark signals in `identify` | `remove-ai-watermarks[trustmark]` |
+| Adobe TrustMark signals in `identify` on Python 3.11-3.12 | `remove-ai-watermarks[trustmark]` |
 | `visible` and `erase` with OpenCV | `remove-ai-watermarks[visible]` (`pixels` is the minimal runtime) |
 | `visible` or `erase` with MI-GAN | `remove-ai-watermarks[migan]` |
 | `visible` or `erase` with big-LaMa | `remove-ai-watermarks[lama]` |
@@ -26,7 +26,7 @@ defaults. This page focuses on choosing the right command.
 | `video visible`, `video all`, and visible/all batch modes | `remove-ai-watermarks[video]` plus ffmpeg on PATH |
 | `video invisible` and `video all --invisible` | `remove-ai-watermarks[video,diffusion]` plus ffmpeg on PATH |
 | HEIC/HEIF/AVIF pixel input | Add `remove-ai-watermarks[heif]` |
-| Every production command and backend | `remove-ai-watermarks[all]` |
+| Every production command and Python-compatible backend | `remove-ai-watermarks[all]` |
 
 `batch` requires the same extra as its selected mode. Extras can be combined in
 one installation, for example `remove-ai-watermarks[visible,detect,heif]`.
@@ -426,7 +426,7 @@ It is a memory strategy, not a guarantee of better quality.
 
 The `all` command and the `all` installation extra are separate concepts. The
 command runs every applicable stage. Installing `remove-ai-watermarks[all]`
-makes every production backend available; a smaller installation such as
+makes every backend compatible with the active Python available; a smaller installation such as
 `remove-ai-watermarks[visible,qwen-zimage]` can also run the command with fewer
 optional backends.
 

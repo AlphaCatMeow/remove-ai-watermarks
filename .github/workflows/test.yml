@@ -28,13 +28,26 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Cross-OS x Python-floor/recent. The default-install surface only
-        # needs the core deps plus dev tooling (no GPU extra): the model-running
-        # paths are availability-gated and skip when torch/diffusers are absent,
-        # so this matrix exercises metadata, identify, visible, and the cv2
-        # eraser on every OS without pulling the heavy ML stack.
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ["3.10", "3.12"]
+        # Exercise every supported minor. The floor and latest minor run on all
+        # operating systems; intermediate minors run on Linux to bound the
+        # matrix without leaving a declared Python version untested.
+        include:
+          - os: ubuntu-latest
+            python-version: "3.11"
+          - os: macos-latest
+            python-version: "3.11"
+          - os: windows-latest
+            python-version: "3.11"
+          - os: ubuntu-latest
+            python-version: "3.12"
+          - os: ubuntu-latest
+            python-version: "3.13"
+          - os: ubuntu-latest
+            python-version: "3.14"
+          - os: macos-latest
+            python-version: "3.14"
+          - os: windows-latest
+            python-version: "3.14"
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7

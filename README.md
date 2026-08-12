@@ -54,12 +54,12 @@ removal.
 | Video SynthID removal | `remove-ai-watermarks[video,diffusion]` |
 | Torch-free DWT-DCT detection | `remove-ai-watermarks[detect]` |
 | Invisible image removal (needs CUDA) | `remove-ai-watermarks[qwen-zimage]` |
-| Every production feature | `remove-ai-watermarks[all]` |
+| Every production feature available on the active Python | `remove-ai-watermarks[all]` |
 
 Lower-level and specialized extras include `pixels`, `heif`, `trustmark`,
 `migan`, `lama`, and `diffusion`. The
 [installation guide](docs/installation.md#feature-extras) documents their exact
-dependency composition and model requirements.
+dependency composition, Python compatibility, and model requirements.
 
 ## Quick start
 

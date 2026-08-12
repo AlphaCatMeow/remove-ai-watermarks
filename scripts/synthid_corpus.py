@@ -22,7 +22,7 @@ import shutil
 import subprocess
 import sys
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import click
@@ -180,7 +180,7 @@ def ingest(
                 "c2pa_issuer": issuer,
                 "synthid_metadata": "yes" if synthid else "",
                 "verified_via": verified_via,
-                "added": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "added": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "notes": notes,
             }
         )

@@ -1,6 +1,6 @@
 # Installation
 
-Python 3.10.1 or newer is required.
+Python 3.11 through 3.14 are supported.
 
 ## Default metadata mode
 
@@ -99,12 +99,12 @@ application actually uses:
 | `visible` | Visible mark detection, OpenCV inpainting, and manual erasing | `pixels` | No |
 | `video` | Visible video identification/removal and timestamp preservation | `visible`, PyAV | No |
 | `detect` | Open DWT-DCT detection for Stable Diffusion, SDXL, and FLUX | `pixels`, PyWavelets | No |
-| `trustmark` | Adobe TrustMark detection | trustmark | Yes |
+| `trustmark` | Adobe TrustMark detection on Python 3.11-3.12 | trustmark | Yes |
 | `diffusion` | Torch and Diffusers runtime; video SynthID regeneration | `pixels`, Torch, Diffusers | Yes |
 | `migan` | MI-GAN ONNX fill backend | `visible`, ONNX Runtime | Model download, no Torch |
 | `lama` | big-LaMa ONNX fill backend | `visible`, ONNX Runtime | Model download, no Torch |
 | `qwen-zimage` | Invisible image-watermark removal, both CUDA-only profiles | `diffusion`, DiffSynth | Yes |
-| `all` | Every production feature | All rows above | Yes |
+| `all` | Every production feature available on the active Python | All compatible rows above | Yes |
 | `dev` | Tests, linting, typing, and upstream parity checks | `video`, `detect`, upstream invisible-watermark | Yes, for parity tests |
 
 Dependency composition:
@@ -123,8 +123,10 @@ flowchart LR
 ```
 
 `heif` and `trustmark` are independent branches. Combine them explicitly with
-another feature when required. The `all` bundle contains every production
-branch but never includes `dev`.
+another feature when required. TrustMark requires NumPy 1.x, which has no
+CPython 3.13 or 3.14 wheels, so that branch is available only on Python
+3.11-3.12. The `all` bundle contains every production branch compatible with
+the active Python and never includes `dev`.
 
 Examples:
 
@@ -141,7 +143,7 @@ uv tool install --force "remove-ai-watermarks[video]"
 # DWT-DCT and TrustMark detection without diffusion removal
 uv tool install --force "remove-ai-watermarks[detect,trustmark]"
 
-# Every production capability
+# Every production capability compatible with this Python
 uv tool install --force "remove-ai-watermarks[all]"
 
 # An arbitrary minimal combination

@@ -347,8 +347,10 @@ The `trustmark` extra adds Adobe TrustMark decoding. The implementation retains
 an additional JPEG re-encode gate and requires the binary payload and schema to
 remain identical because isolated decoder hits can otherwise be content noise.
 It accepts Variant P schemas 0-2. Variant Q requires a different model, and
-schema 3 is rejected at the measured precision threshold. The calibration
-history is in [module internals](module-internals.md#metadata-and-provenance).
+schema 3 is rejected at the measured precision threshold. Its NumPy 1.x runtime
+limits the extra to Python 3.11-3.12; the rest of the package remains supported
+through Python 3.14. The calibration history is in
+[module internals](module-internals.md#metadata-and-provenance).
 
 External AI versus real image classifiers are out of scope. The project
 identifies concrete local provenance signals instead of shipping a generic
