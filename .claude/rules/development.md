@@ -98,6 +98,15 @@ record is byte-identical, and a green test suite does not establish that on its 
 change that is meant to FIX detection is the exception that proves the rule: the diff
 must then be exactly the files you intended to change, named in advance.
 
+Two corollaries in `dwt_dct.py`, where "close enough" has an exact meaning. The bit test
+is `peak % 36 > 18.0` and for uint8 input the exact Haar value is a multiple of 0.5, so it
+lands ON the threshold once per 72 blocks and a 1-ulp difference flips real bits: leave the
+transform to `pywt` however slow it looks, because its C convolution contracts into an FMA
+that numpy has no ufunc for (`docs/module-internals.md` carries what that costs). And
+`tests/test_invisible_watermark.py` is `skipif(not is_available())` -- without the `detect`
+extra the upstream-parity test never runs, so a green suite is not evidence here and the
+verdict record is not optional.
+
 ## A certified operating point is data, not a constant
 
 The video SynthID default is only meaningful as a row in

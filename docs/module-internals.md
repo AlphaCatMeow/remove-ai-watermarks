@@ -555,9 +555,11 @@ the function it replaces does — no provenance means no relaxation, and an unkn
 invisible target means scrub rather than skip.
 
 The `detect` extra composes the shared `pixels` runtime with PyWavelets. Its
-in-tree [`dwt_dct.py`](../src/remove_ai_watermarks/dwt_dct.py) decoder preserves
-the upstream matrix algorithm without installing Torch or non-headless OpenCV.
-The upstream MIT notice ships inside the wheel under `licenses/`.
+in-tree [`dwt_dct.py`](../src/remove_ai_watermarks/dwt_dct.py) decoder reproduces
+the upstream algorithm's output bit for bit without installing Torch or
+non-headless OpenCV; the block scan is vectorized rather than transcribed, so
+the file no longer reads line by line against `maxDct.py`. The upstream MIT
+notice ships inside the wheel under `licenses/`.
 
 `is_ai_generated` is `True` or `None`; absence of evidence is not reported as a
 human-made verdict. `ai_source_kind` distinguishes fully generated content from
@@ -572,11 +574,49 @@ schemas 0-2 count as positives. Schema 3 is below the precision threshold: all
 same false payload after re-encoding. The official Adobe Variant P schema-1
 fixture in `data/fixtures/provenance/` is the positive regression control.
 
+#### Why the DWT-DCT decoder looks the way it does
+
+Two things in `dwt_dct.py` are load-bearing and neither is obvious from the code.
+
+`_approximation` calls `pywt.dwt` twice instead of `pywt.dwt2`, and transposes
+before each pass. A factorial ablation over both axes separates the two:
+skipping the three detail bands `dwt2` computes and this code discards is worth
+**4%**, while the transposes are worth **2.8x**, because pywt walks the axis it
+transforms and on axis 0 of a C-contiguous plane that is a column walk. The
+arithmetic saving is the intuitive explanation and it is the small term; four
+independent profiles named it as the mechanism before the ablation contradicted
+them.
+
+Bit-identity is a hard requirement, not a preference. For uint8 input the exact
+Haar LL value is a multiple of 0.5 and the bit test is `peak % 36 > 18.0`, a
+threshold sitting exactly on a representable value that ~1 block in 72 lands on,
+so a 1-ulp difference deterministically flips real bits. That is why the ~16x
+available from a hand-rolled numpy Haar is unreachable rather than merely
+untaken: pywt's C convolution contracts into an FMA that numpy has no ufunc for,
+and `np.longdouble` is 64-bit on arm64 macOS.
+
+Measured on a 1536x2816 image: the decoder went 0.280 s to 0.019 s, and a warm
+`identify()` on the same file 1.757 s to 1.365 s (-22.3%), both arms timed in one
+process. Verified by recording decoder output and detector verdict over 200
+sampled `data/` images plus two synthesized carriers before and after the change:
+the record is byte-identical, as are five degenerate shapes (`1x65536` through
+`8x8192`) that clear the caller's area check.
+
+Two further optimizations were identified and deliberately not taken, because
+each buys speed with a new precondition rather than with less work:
+`pywt.downcoef("a", ...)` on a flattened plane (valid only while the last axis
+stays even and C-contiguous), and a single-pass `np.abs(..., out=)` over the
+block gather. Both would need their own ablation.
+
 Regression coverage:
 
 - [`test_identify.py`](../tests/test_identify.py)
 - [`test_trustmark_detector.py`](../tests/test_trustmark_detector.py)
-- [`test_invisible_watermark.py`](../tests/test_invisible_watermark.py)
+- [`test_invisible_watermark.py`](../tests/test_invisible_watermark.py) --
+  note `test_in_tree_decoder_matches_upstream` is the parity guard against
+  upstream's own decoder, and the whole module is `skipif(not is_available())`.
+  A green run without the `detect` extra installed has not checked parity at
+  all, so a decoder change still owes the before/after verdict record.
 
 ## Visible mark removal
 

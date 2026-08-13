@@ -1,7 +1,11 @@
 """DWT-DCT decoder compatible with invisible-watermark's ``dwtDct`` path.
 
 Derived from ShieldMnt/invisible-watermark ``imwatermark/maxDct.py`` (MIT),
-trimmed to the matrix path used by Stable Diffusion, SDXL, and FLUX.
+trimmed to the matrix path used by Stable Diffusion, SDXL, and FLUX. The block
+scan is vectorized rather than transcribed, so the file no longer reads line by
+line against upstream; what it preserves is the output, bit for bit. See
+[`docs/module-internals.md`](../../docs/module-internals.md) for the
+measurements and for why a faster hand-rolled transform is not available.
 
 Copyright (c) 2021 ShieldMnt
 
@@ -42,45 +46,64 @@ class _DecodeMaxDct:
     def decode(self, bgr: NDArray[Any]) -> dict[int, NDArray[Any]]:
         row, col, _channels = bgr.shape
         yuv = cv2.cvtColor(bgr, cv2.COLOR_BGR2YUV)
+        trimmed = yuv[: row // 4 * 4, : col // 4 * 4]
 
-        scores_by_length = {wm_len: ([0] * wm_len, [0] * wm_len) for wm_len in self._wm_lengths}
-        for channel in range(2):
-            if self._scales[channel] <= 0:
-                continue
-            ca1, _detail = pywt.dwt2(yuv[: row // 4 * 4, : col // 4 * 4, channel], "haar")
-            self._decode_frame(ca1, self._scales[channel], scores_by_length)
+        per_channel = [
+            self._frame_bits(self._approximation(trimmed, channel), self._scales[channel])
+            for channel in range(2)
+            if self._scales[channel] > 0
+        ]
+        # Each channel restarts the bit index at 0, so the buckets come from a
+        # per-channel arange rather than one running counter.
+        index = np.concatenate([np.arange(bits.size) for bits in per_channel] or [np.zeros(0, dtype=np.int64)])
+        weights = np.concatenate(per_channel or [np.zeros(0)])
 
-        return {
-            wm_len: np.asarray(sums) * 255 > np.asarray(counts) * 127
-            for wm_len, (sums, counts) in scores_by_length.items()
-        }
+        decoded: dict[int, NDArray[Any]] = {}
+        for wm_len in self._wm_lengths:
+            bucket = index % wm_len
+            sums = np.bincount(bucket, weights=weights, minlength=wm_len)
+            counts = np.bincount(bucket, minlength=wm_len)
+            decoded[wm_len] = sums * 255 > counts * 127
+        return decoded
 
-    def _decode_frame(
-        self,
-        frame: NDArray[Any],
-        scale: int,
-        scores_by_length: dict[int, tuple[list[int], list[int]]],
-    ) -> None:
-        row, col = frame.shape
-        bit_index = 0
-        for i in range(row // self._block):
-            for j in range(col // self._block):
-                block = frame[
-                    i * self._block : i * self._block + self._block,
-                    j * self._block : j * self._block + self._block,
-                ]
-                inferred = self._infer_bit(block, scale)
-                for wm_len, (sums, counts) in scores_by_length.items():
-                    bucket = bit_index % wm_len
-                    sums[bucket] += inferred
-                    counts[bucket] += 1
-                bit_index += 1
+    @staticmethod
+    def _approximation(trimmed: NDArray[Any], channel: int) -> NDArray[Any]:
+        """The Haar approximation band, and only it.
 
-    def _infer_bit(self, block: NDArray[Any], scale: int) -> int:
-        position = int(np.argmax(np.abs(block.flatten()[1:]))) + 1
-        i, j = position // self._block, position % self._block
-        value = abs(float(block[i][j]))
-        return int((value % scale) > 0.5 * scale)
+        ``dwt2`` is ``dwtn``: it transforms along axis 0, then along axis 1 over
+        both halves, and three of the four bands it returns are discarded here.
+        Two ``dwt`` calls keeping ``[0]`` skip that, and transposing between them
+        lets pywt walk a contiguous axis instead of a column.
+
+        The result must stay bit-identical to ``dwt2``'s, which is why the
+        transform is left to pywt however slow that is: the caller's threshold is
+        ``peak % 36 > 18.0``, and for uint8 input the exact value is a multiple
+        of 0.5, so it lands exactly on the threshold often enough that a 1-ulp
+        difference flips real bits.
+        """
+        if trimmed.shape[0] == 0 or trimmed.shape[1] == 0:
+            # Reachable: a 1x65536 image clears the caller's area check. Left to
+            # dwt2 so the exception stays the one this module has always raised.
+            return pywt.dwt2(trimmed[:, :, channel], "haar")[0]
+        columns = cv2.transpose(cv2.extractChannel(trimmed, channel))
+        along_rows = pywt.dwt(columns, "haar", axis=1)[0]
+        return pywt.dwt(cv2.transpose(along_rows), "haar", axis=1)[0]
+
+    def _frame_bits(self, frame: NDArray[Any], scale: int) -> NDArray[Any]:
+        """One bit per 4x4 block, in row-major block order.
+
+        Upstream's per-block loop, said to numpy once instead of to the
+        interpreter ~135k times per image.
+        """
+        block = self._block
+        rows = frame.shape[0] // block
+        cols = frame.shape[1] // block
+        if rows == 0 or cols == 0:
+            return np.zeros(0, dtype=np.float64)
+        aligned = frame[: rows * block, : cols * block]
+        blocks = aligned.reshape(rows, block, cols, block).swapaxes(1, 2)
+        peak = np.abs(blocks.reshape(rows * cols, block * block)[:, 1:]).max(axis=1)
+        return ((peak % scale) > 0.5 * scale).astype(np.float64)
 
 
 def decode_dwt_dct(bgr: NDArray[Any], wm_len: int) -> NDArray[Any]:

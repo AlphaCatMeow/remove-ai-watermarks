@@ -7,6 +7,11 @@ This page records notices required by source dependencies and licensed derivativ
 - The DWT-DCT implementation derives from ShieldMnt's
   [`invisible-watermark`](https://github.com/ShieldMnt/invisible-watermark), licensed
   under MIT. Its notice ships in `src/remove_ai_watermarks/licenses/invisible-watermark-MIT.txt`.
+  The decode path is a vectorized reformulation, not a transcription: it produces
+  the same bits and is checked against upstream's own decoder, but it no longer
+  corresponds line by line to `imwatermark/maxDct.py`. Diffing the two files will
+  show structurally different code, which is expected and does not mean the
+  derivation notice is stale.
 
 ## Licensed test fixtures
 
