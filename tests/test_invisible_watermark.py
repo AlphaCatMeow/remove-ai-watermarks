@@ -59,6 +59,47 @@ class TestHelpers:
         assert _bytes_match_frac(b"abc", b"abcd") == 0.0
 
 
+class TestRaveledHaarPass:
+    """The precondition that makes the decoder's flat Haar pass legitimate.
+
+    `_approximation` replaces `pywt.dwt(x, "haar", axis=1)[0]` with one
+    `downcoef` call over `x.ravel()`. That is exact only while the last axis is
+    even. Neither half of this is checked anywhere else: the equivalence is a
+    property of pywt's implementation that an upgrade could take away, and an
+    odd width produces wrong bits with no exception, since the reshape still
+    succeeds whenever the total length is even.
+    """
+
+    @pytest.mark.parametrize("shape", [(64, 64), (7, 128), (129, 2), (2, 2), (33, 400)])
+    def test_matches_pywt_dwt_on_even_widths(self, shape: tuple[int, int]):
+        import pywt
+
+        from remove_ai_watermarks.dwt_dct import _approximation
+
+        rng = np.random.default_rng(0)
+        # uint8 is what the FIRST production pass receives -- `decode` builds its
+        # plane with cvtColor, and extractChannel and transpose preserve the
+        # dtype -- so a divergence in how downcoef coerces integers would be
+        # invisible to a float-only parametrization.
+        for array in (
+            rng.random(shape),
+            rng.integers(0, 256, shape).astype(np.float64),
+            rng.integers(0, 256, shape).astype(np.uint8),
+        ):
+            expected = pywt.dwt(array, "haar", axis=1)[0]
+            got = _approximation(array)
+            assert got.shape == expected.shape
+            assert np.array_equal(got, expected), "downcoef diverged from dwt -- a pywt upgrade may have changed it"
+
+    def test_odd_width_raises_instead_of_returning_wrong_bits(self):
+        from remove_ai_watermarks.dwt_dct import _approximation
+
+        # 4x6 ravels to 24, an even total, so the reshape would happily produce
+        # a 4x3 array of numbers that pair across row boundaries.
+        with pytest.raises(RuntimeError, match="odd"):
+            _approximation(np.zeros((4, 6))[:, :5])
+
+
 class TestDetect:
     def test_in_tree_decoder_matches_upstream(self, tmp_path: Path):
         from imwatermark import WatermarkDecoder

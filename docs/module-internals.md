@@ -595,18 +595,32 @@ available from a hand-rolled numpy Haar is unreachable rather than merely
 untaken: pywt's C convolution contracts into an FMA that numpy has no ufunc for,
 and `np.longdouble` is 64-bit on arm64 macOS.
 
-Measured on a 1536x2816 image: the decoder went 0.280 s to 0.019 s, and a warm
-`identify()` on the same file 1.757 s to 1.365 s (-22.3%), both arms timed in one
-process. Verified by recording decoder output and detector verdict over 200
-sampled `data/` images plus two synthesized carriers before and after the change:
-the record is byte-identical, as are five degenerate shapes (`1x65536` through
-`8x8192`) that clear the caller's area check.
+Each pass is one flat `pywt.downcoef` call over a raveled strip rather than
+`pywt.dwt(..., axis=1)[0]`, and the plane is processed in strips of `_STRIP`
+block-rows so no full-plane float64 intermediate is ever materialized. The strip
+height is not a tuned value: 8 through 64 all scored inside each other's noise
+with unstable ordering, and only "strips at all" versus whole-plane matters.
 
-Two further optimizations were identified and deliberately not taken, because
-each buys speed with a new precondition rather than with less work:
-`pywt.downcoef("a", ...)` on a flattened plane (valid only while the last axis
-stays even and C-contiguous), and a single-pass `np.abs(..., out=)` over the
-block gather. Both would need their own ablation.
+`_approximation`'s even-last-axis check is load-bearing, not defensive. Haar's
+filter is length 2, so an even row length keeps every pair inside its own row;
+on an odd width the pairs walk across row boundaries and the reshape still
+succeeds whenever the total is even, which would be wrong bits with no
+exception. Both call sites are even by construction today, and
+`TestRaveledHaarPass` pins both halves -- the `downcoef`/`dwt` equivalence,
+which a pywt upgrade could take away, and the raise on an odd width.
+
+Measured on a 1536x2816 image, all arms timed in one process: the decoder went
+0.112 s (the original per-block Python loop) to 0.011 s vectorized to 0.007 s
+with strips, and a warm `identify()` 1.757 s to 1.365 s on the first step and a
+further 0.4% on the second. That last figure is the point at which this target
+is finished: the decoder is now under 2% of `identify()`, so speed here has
+stopped buying anything. What the strips buy is peak RSS in the stage, 111 MB to
+21 MB on a 4.3 MP image, which is what matters on the memory-limited Space.
+
+Both steps were verified by recording decoder output and detector verdict over
+200 sampled `data/` images plus two synthesized carriers before and after: the
+record is byte-identical, as are seven degenerate shapes (`1x65536` through
+`8x8192`, plus an odd width) that clear the caller's area check.
 
 Regression coverage:
 
