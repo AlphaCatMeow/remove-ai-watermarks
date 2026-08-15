@@ -69,15 +69,15 @@ difficult faces. The measurements and their OCR and oracle caveats are tracked
 in [`data/evaluations/fidelity/`](../data/evaluations/fidelity/README.md).
 A global Z-Image Turbo prototype preserved text substantially better at low
 strength, but it has no useful cross-provider operating point and is not a
-supported profile. The evaluated text restorers also remain research-only:
-fresh-font and silhouette variants visibly changed typography, while the
-higher-fidelity `vae-glyphs` route still requires verified strings, line
-geometry, a separately generated donor, and an independently clean global
-anchor. Automatic OCR and line-box proposals are not reliable enough to remove
-those requirements, and the exact oracle results do not establish a general
-mask, seed, or provider operating range. Qwen-Image-2.0 is hosted-only and
-exposes no equivalent low-strength denoise control. Exact experiments, controls,
-and pass rates are kept in
+supported profile. Automatic text restorers also remain research-only:
+fresh-font and silhouette variants visibly changed typography. The higher-fidelity
+`vae-glyphs` route is available only as an experimental opt-in with verified strings
+and line geometry. It builds its donor internally but still requires an independently
+clean global anchor. Automatic OCR and line-box proposals are not reliable enough to
+remove those requirements, and exact oracle results do not establish a general mask,
+seed, runtime, or provider operating range. Qwen-Image-2.0 is hosted-only and exposes
+no equivalent low-strength denoise control. Exact experiments, controls, and pass
+rates are kept in
 [`text-protection-research.md`](text-protection-research.md) and the
 [`fidelity` evaluation record](../data/evaluations/fidelity/README.md).
 
@@ -192,7 +192,8 @@ certified at a fixed seed. The live resolver is
 | `qwen-zimage` | CUDA only, large model stack, and limited broad certification across seeds and content. |
 | `sdxl-zimage` | CUDA only. Its strength ladder is flat per vendor, not a resolution curve, because flat values are what was measured. |
 
-The evaluated text-restoration prototypes are not optional production stages.
+Only manually verified `vae-glyphs` is an optional production stage, and it is
+experimental rather than a default.
 OCR plus LaMa recovered literal poster text but changed fonts and worsened whole-image
 fidelity. Restricting it to OCR-mismatched lines improved the tradeoff but still
 left a local shadow on one poster. The published AnyText2 SD1.5 checkpoint

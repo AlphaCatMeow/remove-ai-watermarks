@@ -243,6 +243,7 @@ class InvisibleOptions:
     tile: bool = False
     tile_size: int = 1024
     tile_overlap: int = 128
+    text_manifest: Path | None = None
 
 
 # What the invisible stage did. "unavailable" is the one outcome the caller must
@@ -523,6 +524,7 @@ def _run_invisible(
         tile=opts.tile,
         tile_size=opts.tile_size,
         tile_overlap=opts.tile_overlap,
+        text_manifest=opts.text_manifest,
     )
     say("invisible", "removed")
     return "removed"

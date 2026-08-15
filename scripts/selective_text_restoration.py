@@ -33,7 +33,7 @@ import os
 import shutil
 import sys
 import unicodedata
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +48,14 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
 from remove_ai_watermarks import region_eraser  # noqa: E402
+from remove_ai_watermarks._internal.text_restoration import VerifiedTextLine as TextLine  # noqa: E402
+from remove_ai_watermarks._internal.text_restoration import (  # noqa: E402
+    composite_fresh_text_edges,
+    composite_reconstructed_glyphs,
+    group_text_lines,
+    residual_glyph_mask,
+    source_silhouette_mask,
+)
 from scripts._text_eval import normalize_text, normalized_edit_distance  # noqa: E402
 
 if ROOT not in Path(region_eraser.__file__).resolve().parents:
@@ -56,14 +64,6 @@ if ROOT not in Path(region_eraser.__file__).resolve().parents:
 REGULAR_FONT = Path("/System/Library/Fonts/Supplemental/Arial.ttf")
 BOLD_FONT = Path("/System/Library/Fonts/Supplemental/Arial Bold.ttf")
 CJK_FONT = Path("/System/Library/Fonts/STHeiti Medium.ttc")
-
-
-@dataclass(frozen=True)
-class TextLine:
-    box: tuple[int, int, int, int]
-    text: str
-    script: str
-    angle: float = 0.0
 
 
 def should_preserve_line(
@@ -80,16 +80,6 @@ def should_preserve_line(
     return normalize_text(source_text) == normalize_text(candidate_text)
 
 
-def residual_glyph_mask(
-    background_rgb: np.ndarray,
-    original_mask: np.ndarray,
-    box: tuple[int, int, int, int],
-) -> np.ndarray:
-    residual = foreground_mask(background_rgb, box)
-    residual = cv2.bitwise_and(residual, original_mask)
-    return cv2.dilate(residual, np.ones((5, 5), np.uint8), iterations=1)
-
-
 def composite_source_glyphs(
     source_rgb: np.ndarray,
     background_rgb: np.ndarray,
@@ -98,131 +88,13 @@ def composite_source_glyphs(
     feather: float = 0.7,
 ) -> np.ndarray:
     """Composite exact source pixels inside a glyph mask with an outer feather."""
-    return _composite_exact_core(
-        source_rgb,
-        background_rgb,
-        glyph_mask,
-        feather=feather,
-        round_output=False,
-    )
-
-
-def source_silhouette_mask(
-    source_rgb: np.ndarray,
-    box: tuple[int, int, int, int],
-    angle: float = 0.0,
-) -> np.ndarray:
-    """Recover the thresholded glyph shape without retaining source amplitudes."""
-    height, width = source_rgb.shape[:2]
-    x1, y1, x2, y2 = _clip_box(box, width, height)
-    gray = cv2.cvtColor(source_rgb[y1:y2, x1:x2], cv2.COLOR_RGB2GRAY)
-    support = np.ones(gray.shape, dtype=np.uint8)
-    if angle:
-        box_width, box_height = x2 - x1, y2 - y1
-        theta = math.radians(abs(angle))
-        cosine, sine = math.cos(theta), math.sin(theta)
-        denominator = cosine * cosine - sine * sine
-        rect_width = (box_width * cosine - box_height * sine) / denominator
-        rect_height = (box_height * cosine - box_width * sine) / denominator
-        rotated = cv2.boxPoints(
-            (
-                (box_width / 2, box_height / 2),
-                (max(1.0, rect_width * 0.92), max(1.0, rect_height * 0.62)),
-                -angle,
-            )
-        )
-        support.fill(0)
-        cv2.fillConvexPoly(support, np.rint(rotated).astype(np.int32), 1)
-        values = gray[support > 0]
-        background_luma = float(np.median(values))
-    else:
-        ring_pad = max(6, min(20, (y2 - y1) // 4))
-        rx1, ry1, rx2, ry2 = _clip_box((x1, y1, x2, y2), width, height, pad=ring_pad)
-        context = cv2.cvtColor(source_rgb[ry1:ry2, rx1:rx2], cv2.COLOR_RGB2GRAY)
-        ring = np.ones(context.shape, dtype=bool)
-        ring[y1 - ry1 : y2 - ry1, x1 - rx1 : x2 - rx1] = False
-        background_luma = float(np.median(context[ring])) if ring.any() else float(np.median(gray))
-        values = gray.reshape(-1)
-    low, high = float(np.percentile(values, 2)), float(np.percentile(values, 98))
-    dark_contrast, light_contrast = background_luma - low, high - background_luma
-    contrast = max(light_contrast, dark_contrast)
-    threshold = max(16.0, min(56.0, contrast * 0.22))
-    if light_contrast > dark_contrast:
-        crop_mask = (gray.astype(np.float32) >= background_luma + threshold).astype(np.uint8) * 255
-    else:
-        crop_mask = (gray.astype(np.float32) <= background_luma - threshold).astype(np.uint8) * 255
-    crop_mask[support == 0] = 0
-    result = np.zeros((height, width), dtype=np.uint8)
-    result[y1:y2, x1:x2] = crop_mask
-    return result
-
-
-def composite_fresh_silhouette(
-    background_rgb: np.ndarray,
-    glyph_mask: np.ndarray,
-    color: tuple[int, int, int],
-    *,
-    feather: float = 0.35,
-) -> np.ndarray:
-    """Render a binary source shape with fresh color and antialiasing."""
-    if background_rgb.shape[:2] != glyph_mask.shape:
-        raise ValueError("background and glyph mask dimensions must match")
-    antialiased = cv2.GaussianBlur(glyph_mask, (0, 0), feather) if feather > 0 else glyph_mask
-    alpha = antialiased.astype(np.float32) / 255.0
-    alpha = alpha[..., None]
-    foreground = np.empty_like(background_rgb)
-    foreground[:, :] = color
-    combined = foreground.astype(np.float32) * alpha + background_rgb.astype(np.float32) * (1.0 - alpha)
-    return np.clip(combined, 0, 255).astype(np.uint8)
-
-
-def composite_fresh_text_edges(
-    source_rgb: np.ndarray,
-    background_rgb: np.ndarray,
-    lines: list[TextLine],
-    masks: list[np.ndarray],
-) -> np.ndarray:
-    """Render fresh antialiased edges for a set of source-derived glyph masks."""
-    restored = background_rgb
-    for line, mask in zip(lines, masks, strict=True):
-        color = _sample_text_color(source_rgb, mask, line.box)
-        restored = composite_fresh_silhouette(restored, mask, color)
-    return restored
-
-
-def composite_reconstructed_glyphs(
-    donor_rgb: np.ndarray,
-    background_rgb: np.ndarray,
-    glyph_mask: np.ndarray,
-    *,
-    feather: float = 0.5,
-) -> np.ndarray:
-    """Composite an exact reconstructed core with a narrow donor edge."""
-    return _composite_exact_core(
-        donor_rgb,
-        background_rgb,
-        glyph_mask,
-        feather=feather,
-        round_output=True,
-    )
-
-
-def _composite_exact_core(
-    foreground_rgb: np.ndarray,
-    background_rgb: np.ndarray,
-    glyph_mask: np.ndarray,
-    *,
-    feather: float,
-    round_output: bool,
-) -> np.ndarray:
-    if foreground_rgb.shape != background_rgb.shape or foreground_rgb.shape[:2] != glyph_mask.shape:
-        raise ValueError("foreground, background, and glyph mask dimensions must match")
+    if source_rgb.shape != background_rgb.shape or source_rgb.shape[:2] != glyph_mask.shape:
+        raise ValueError("source, background, and glyph mask dimensions must match")
     blurred = cv2.GaussianBlur(glyph_mask, (0, 0), feather) if feather > 0 else glyph_mask
     alpha = np.maximum(glyph_mask, blurred).astype(np.float32) / 255.0
     alpha = alpha[..., None]
-    combined = foreground_rgb.astype(np.float32) * alpha + background_rgb.astype(np.float32) * (1.0 - alpha)
-    output = np.rint(combined) if round_output else combined
-    return np.clip(output, 0, 255).astype(np.uint8)
+    combined = source_rgb.astype(np.float32) * alpha + background_rgb.astype(np.float32) * (1.0 - alpha)
+    return np.clip(combined, 0, 255).astype(np.uint8)
 
 
 def source_box_mask(
@@ -353,21 +225,6 @@ def _write_manifest(path: Path | None, payload: dict[str, Any]) -> None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def _groups(lines: list[TextLine]) -> list[list[int]]:
-    groups: list[list[int]] = []
-    for index, line in enumerate(lines):
-        if not groups:
-            groups.append([index])
-            continue
-        previous = lines[groups[-1][-1]]
-        gap = line.box[1] - previous.box[3]
-        if line.script != previous.script or gap > max(60, int((previous.box[3] - previous.box[1]) * 1.1)):
-            groups.append([index])
-        else:
-            groups[-1].append(index)
-    return groups
 
 
 def _vertical_overlap_ratio(left: tuple[int, int, int, int], right: tuple[int, int, int, int]) -> float:
@@ -606,7 +463,7 @@ def main(
         candidate_masks = [foreground_mask(candidate_rgb, line.box) for line in selected]
         masks = [np.maximum(left, right) for left, right in zip(source_masks, candidate_masks, strict=True)]
     del candidate_masks
-    groups = _groups(selected)
+    groups = group_text_lines(selected)
     if erase_background:
         background = cv2.cvtColor(candidate_rgb, cv2.COLOR_RGB2BGR)
         for group in groups:

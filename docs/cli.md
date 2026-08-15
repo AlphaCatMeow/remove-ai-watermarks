@@ -398,6 +398,37 @@ schedule, CFG 1.0 and CUDA, so every one of those flags existed only to be refus
 several layers down. They are not parsed at all now, which fails at the point the
 user can act on rather than after a model load.
 
+### Restore operator-verified text
+
+`--text-manifest` enables the experimental `vae-glyphs` post-pass. It reconstructs
+the source with the Qwen VAE, blends 15% of that reconstruction into the normal
+`qwen-zimage` result, erases the annotated candidate glyphs with LaMa, and composites
+only the reconstructed glyph cores through source-derived silhouettes. It does not
+run OCR or choose which strings are correct.
+
+Install the combined extra and run only with a manually reviewed manifest:
+
+```bash
+uv tool install --force "remove-ai-watermarks[text-restoration]"
+remove-ai-watermarks invisible image.png -o clean.png \
+  --pipeline qwen-zimage --text-manifest verified-lines.json --force
+```
+
+The manifest is a JSON object with `schema_version: 1`, `verified: true`, decoded
+RGB dimensions, `source_pixel_sha256`, and a non-empty `lines` array. Each line has
+an integer `[x1, y1, x2, y2]` box, exact `text`, a non-empty `script`, and an optional
+angle from -30 to 30 degrees. Lines must be in top-to-bottom, left-to-right order.
+The hash binds the annotations to decoded RGB geometry and pixels, so metadata-only
+container changes remain valid while a resized or edited source fails closed. The
+experimental helper
+`remove_ai_watermarks._internal.text_restoration.source_pixel_sha256` computes it.
+
+This mode is supported only by `qwen-zimage` at native untiled geometry with
+`humanize=0`, `unsharp=0`, and adaptive polish disabled. `all` also accepts the flag,
+but its manifest must match the pixels entering the invisible stage; if visible-mark
+removal changes those pixels, the hash check rejects the run. One oracle verdict does
+not certify another manifest, seed, model/runtime version, or output hash.
+
 ### Work with limited memory
 
 Lower CUDA memory pressure:

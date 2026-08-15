@@ -949,6 +949,29 @@ orchestration, YuNet integration, SAM selection, masks, sizing helpers, and pixe
 compositing are implemented for this runtime. Changing a calibrated model input
 requires the same provider-oracle and identity evaluation as a model change.
 
+#### Verified text restoration
+
+[`_internal/text_restoration.py`](../src/remove_ai_watermarks/_internal/text_restoration.py)
+implements the opt-in `vae-glyphs` stage. A versioned manifest carries manually
+reviewed strings and source-space line boxes, plus a SHA-256 over decoded RGB width,
+height, and pixels. Validation happens before model loading. The product never treats
+OCR confidence as verification.
+
+When enabled, `QwenZImagePipeline` reconstructs the source once through its already
+loaded Qwen VAE, runs the ordinary global and face stages, blends 15% of the VAE
+reconstruction into that clean result, and calls the shared restoration compositor.
+The compositor derives binary source and candidate silhouettes, groups nearby lines,
+uses LaMa for the initial and residual-glyph erase passes, paints fresh silhouette
+edges, then copies the Qwen-VAE core with a 0.5-pixel feather. The evaluation script
+imports these same mask and compositing helpers so the two implementations cannot
+silently drift.
+
+The stage is deliberately narrower than the engine: it rejects `sdxl-zimage`, tiles,
+resolution caps, humanize, unsharp, and adaptive polish. Those combinations change
+geometry or final pixels after the verified layer and have no measured oracle result.
+It remains opt-in because annotations are manual and provider verdicts apply only to
+the exact tested output hashes, not to the mechanism in general.
+
 A matched stage-isolation check on the 18-face Gemini portrait grid confirms the
 division of responsibility. The visible-cleaned, metadata-stripped control and the
 Z-Image face-only output were both SynthID-positive; Qwen global-only and the full

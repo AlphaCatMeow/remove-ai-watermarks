@@ -8,6 +8,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from remove_ai_watermarks._internal import text_restoration
+
 SCRIPT = Path(__file__).parents[1] / "scripts" / "selective_text_restoration.py"
 SPEC = importlib.util.spec_from_file_location("selective_text_restoration", SCRIPT)
 assert SPEC is not None
@@ -87,7 +89,7 @@ def test_fresh_silhouette_uses_new_color_instead_of_source_pixels() -> None:
     mask = np.zeros((9, 9), dtype=np.uint8)
     mask[3:6, 3:6] = 255
 
-    result = module.composite_fresh_silhouette(background, mask, (220, 180, 40), feather=0)
+    result = text_restoration.composite_fresh_silhouette(background, mask, (220, 180, 40), feather=0)
 
     assert np.all(result[3:6, 3:6] == (220, 180, 40))
     np.testing.assert_array_equal(result[0, 0], background[0, 0])
@@ -99,7 +101,7 @@ def test_fresh_silhouette_antialiasing_softens_binary_edges() -> None:
     mask = np.zeros((9, 9), dtype=np.uint8)
     mask[3:6, 3:6] = 255
 
-    result = module.composite_fresh_silhouette(background, mask, (220, 180, 40), feather=1.0)
+    result = text_restoration.composite_fresh_silhouette(background, mask, (220, 180, 40), feather=1.0)
 
     assert np.all(result[3, 3] > background[3, 3])
     assert np.all(result[3, 3] < (220, 180, 40))
@@ -113,7 +115,7 @@ def test_reconstructed_glyphs_keep_exact_donor_core_and_fresh_edge() -> None:
     mask = np.zeros((9, 9), dtype=np.uint8)
     mask[3:6, 3:6] = 255
 
-    fresh_edge = module.composite_fresh_silhouette(background, mask, (220, 180, 40))
+    fresh_edge = text_restoration.composite_fresh_silhouette(background, mask, (220, 180, 40))
     result = module.composite_reconstructed_glyphs(donor, fresh_edge, mask, feather=0.5)
 
     np.testing.assert_array_equal(result[3:6, 3:6], donor[3:6, 3:6])
@@ -163,13 +165,15 @@ def test_detect_line_boxes_fails_closed_on_count_mismatch() -> None:
 
 
 def test_residual_mask_is_limited_to_original_glyph_positions(monkeypatch) -> None:
+    from remove_ai_watermarks._internal import text_restoration
+
     background = np.zeros((8, 8, 3), dtype=np.uint8)
     original = np.zeros((8, 8), dtype=np.uint8)
     original[3, 3] = 255
     detected = np.zeros((8, 8), dtype=np.uint8)
     detected[3, 3] = 255
     detected[6, 6] = 255
-    monkeypatch.setattr(module, "foreground_mask", lambda _image, _box: detected)
+    monkeypatch.setattr(text_restoration, "_foreground_mask", lambda _image, _box: detected)
 
     residual = module.residual_glyph_mask(background, original, (0, 0, 8, 8))
 

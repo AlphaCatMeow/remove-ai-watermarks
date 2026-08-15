@@ -250,6 +250,16 @@ Laplacian variance. The tracked script reproduced the feathered file byte for
 byte. These two exact-byte verdicts do not certify other images or the larger
 matrix masks, and the global smoothing fails a strict unchanged-image criterion.
 
+The opt-in production port was rechecked separately on 2026-08-15. Its current
+LaMa runtime did not reproduce the earlier evaluation PNG byte for byte, but all
+changed pixels were confined to the erased background outside the donor glyph
+core. The exact production artifact returned `No OpenAI signals detected` in
+3/3 OpenAI Verify runs, while the matched source control returned `Generated
+with OpenAI tools` in 2/2 runs in the same Chrome session; expanded details
+identified SynthID and no C2PA manifest on the control. The private control and
+artifact hashes remain outside the public repository. This certifies only that
+runtime, verified manifest, and output, not arbitrary text masks or images.
+
 The Google result is negative. On the synthetic CJK sign case, two separate
 work-account runs both detected SynthID in the resaved source control and in the
 exact Qwen-VAE donor output. The candidate improved mean text-box SSIM from

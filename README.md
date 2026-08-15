@@ -199,6 +199,19 @@ image came from an AI generator, add `--force`:
 remove-ai-watermarks invisible image.png -o clean.png --force
 ```
 
+Typography-heavy images can opt into the experimental verified-text post-pass.
+It requires manually reviewed strings and line boxes; it never trusts OCR as ground
+truth or runs automatically:
+
+```bash
+uv tool install --force "remove-ai-watermarks[text-restoration]"
+remove-ai-watermarks invisible image.png -o clean.png \
+  --text-manifest verified-lines.json --force
+```
+
+See the [CLI guide](docs/cli.md#restore-operator-verified-text) for the manifest
+schema, compatibility restrictions, and oracle caveats.
+
 See the [installation guide](docs/installation.md) for Homebrew, uv, optional
 features, and development setup.
 

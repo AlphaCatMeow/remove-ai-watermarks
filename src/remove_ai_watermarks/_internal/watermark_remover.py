@@ -26,6 +26,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
+    from remove_ai_watermarks._internal.text_restoration import VerifiedTextManifest
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -187,6 +189,7 @@ class WatermarkRemover:
         tile: bool = False,
         tile_size: int = 1024,
         tile_overlap: int = 128,
+        text_manifest: VerifiedTextManifest | None = None,
     ) -> Path:
         """Regenerate image pixels and write the result without AI metadata.
 
@@ -203,6 +206,10 @@ class WatermarkRemover:
         resolved_strength = resolve_strength(strength, vendor, self.model_profile, size=source.size)
         if not 0.0 <= resolved_strength <= 1.0:
             raise ValueError(f"Strength must be between 0.0 and 1.0, got {resolved_strength}")
+        if text_manifest is not None and self.model_profile == SDXL_ZIMAGE_PROFILE:
+            raise ValueError("Verified text restoration is supported only by the qwen-zimage profile")
+        if text_manifest is not None and tile:
+            raise ValueError("Verified text restoration is not calibrated with tiled diffusion")
 
         result = self._load_qwen_zimage_pipeline().run(
             source,
@@ -211,6 +218,7 @@ class WatermarkRemover:
             tile=tile,
             tile_size=tile_size,
             tile_overlap=tile_overlap,
+            text_manifest=text_manifest,
         )
         self._write_output(result, destination)
         return destination
