@@ -112,6 +112,21 @@ measured 25.39 dB paired PSNR and a 1.058 motion-compensated temporal-residual
 ratio. This is one carrier, not a universal guarantee; hashes and exact verdicts
 are tracked in `data/evaluations/video-synthid-oracle.csv`.
 
+### The invisible video path does not touch the audio track
+
+`remove_video_invisible` regenerates the video stream and copies the source audio
+verbatim: the extracted audio bitstream of input and output has an identical
+sha256, measured on two carriers. It also strips every metadata marker, so the
+output can report clean from `get_ai_metadata` and `identify_video` while carrying
+an untouched generated audio track. Google's verifier scores audio and visual
+tracks separately, and a track this path never modifies is a track it cannot have
+cleaned.
+
+Whether a given carrier's audio actually holds a mark the verifier reads has not
+been established -- that needs a provider verdict, which has not been obtained.
+Treat a clean local report on a clip with generated audio as unproven, not as a
+guarantee, and check the audio separately when it matters.
+
 The shipped engine streams sampled frames in bounded batches, computes its
 fidelity metrics incrementally, and pipes regenerated pixels directly to
 ffmpeg. Its frame and latent memory is therefore bounded by `--batch-size`
