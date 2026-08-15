@@ -293,6 +293,14 @@ class TestReportTransport:
 
         assert convenience == explicit
 
+    def test_c2pa_validation_survives_the_portable_record(self, tampered_chatgpt_png: Path):
+        direct = identify(tampered_chatgpt_png, check_visible=False, check_invisible=False)
+        portable = identify_metadata_record(collect_metadata_record(tampered_chatgpt_png), path=tampered_chatgpt_png)
+
+        assert portable == direct
+        assert portable.c2pa_validation is not None
+        assert portable.c2pa_validation["integrity"] == "invalid"
+
 
 def test_a_webp_record_matches(tmp_path: Path):
     """RIFF has its own walk; a chunk kept or dropped wrongly shows up here."""

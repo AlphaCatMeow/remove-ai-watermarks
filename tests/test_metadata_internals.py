@@ -12,6 +12,7 @@ from PIL import Image
 
 from remove_ai_watermarks._internal.c2pa import (
     _parse_c2pa_chunk,
+    c2pa_info_from_manifest_store,
     cbor_text_after,
     extract_c2pa_chunk,
     extract_c2pa_info,
@@ -153,6 +154,110 @@ class TestC2PA:
     def test_c2pa_returns_false_for_non_png(self, tmp_jpeg_path):
         assert not has_c2pa_metadata(tmp_jpeg_path)
 
+    def test_structured_extraction_ignores_unreachable_manifests(self):
+        store = {
+            "active_manifest": "active",
+            "manifests": {
+                "active": {
+                    "signature_info": {"issuer": "Adobe"},
+                    "assertions": [],
+                },
+                "unreachable": {
+                    "signature_info": {"issuer": "OpenAI"},
+                    "assertions": [
+                        {
+                            "label": "c2pa.actions.v2",
+                            "data": {
+                                "actions": [
+                                    {
+                                        "action": "c2pa.created",
+                                        "digitalSourceType": "trainedAlgorithmicMedia",
+                                    }
+                                ]
+                            },
+                        }
+                    ],
+                },
+            },
+        }
+
+        info = c2pa_info_from_manifest_store(store)
+
+        assert info["issuer"] == "Adobe"
+        assert "source_type" not in info
+        assert "ai_source_kind" not in info
+        assert "c2pa_identity_ai" not in info
+
+    def test_reachable_ingredient_claim_generator_can_assert_ai(self):
+        store = {
+            "active_manifest": "update",
+            "manifests": {
+                "update": {
+                    "claim_generator": "c2pa-tool/0.1.0",
+                    "ingredients": [{"active_manifest": "created"}],
+                    "assertions": [],
+                },
+                "created": {
+                    "claim_generator": "Dreamina/7.5.0",
+                    "assertions": [],
+                },
+            },
+        }
+
+        info = c2pa_info_from_manifest_store(store)
+
+        assert info["ai_tool"] == "Dreamina"
+        assert info["c2pa_identity_ai"] is True
+
+    def test_invalid_ingredient_does_not_taint_active_validation_or_supply_claims(self):
+        store = {
+            "active_manifest": "update",
+            "validation_results": {
+                "activeManifest": {
+                    "success": [
+                        {"code": "assertion.dataHash.match"},
+                        {"code": "claimSignature.validated"},
+                    ],
+                    "failure": [{"code": "signingCredential.untrusted"}],
+                },
+                "ingredientDeltas": [
+                    {
+                        "validationDeltas": {
+                            "failure": [{"code": "assertion.dataHash.mismatch"}],
+                        }
+                    }
+                ],
+            },
+            "manifests": {
+                "update": {
+                    "claim_generator": "c2pa-tool/0.1.0",
+                    "ingredients": [
+                        {
+                            "active_manifest": "created",
+                            "validation_results": {
+                                "activeManifest": {
+                                    "failure": [{"code": "assertion.dataHash.mismatch"}],
+                                }
+                            },
+                        }
+                    ],
+                    "assertions": [],
+                },
+                "created": {
+                    "claim_generator": "Dreamina/7.5.0",
+                    "assertions": [],
+                },
+            },
+        }
+
+        info = c2pa_info_from_manifest_store(store)
+
+        assert info["c2pa_integrity"] == "valid"
+        assert info["c2pa_signature"] == "valid"
+        assert info["c2pa_signer_trust"] == "untrusted"
+        assert "ai_tool" not in info
+        assert "c2pa_identity_ai" not in info
+
 
 SAMPLES_DIR = Path(__file__).resolve().parent.parent / "data" / "fixtures" / "provenance"
 CURRENT_OPENAI_SAMPLE = (
@@ -227,6 +332,22 @@ class TestC2PARealSamples:
         # Structured claim generator is exact, not a CBOR-scanned best-effort.
         assert info["claim_generator"] == "ChatGPT"
 
+    def test_reader_reports_intact_but_untrusted_credentials(self):
+        info = extract_c2pa_info(SAMPLES_DIR / "chatgpt-1.png")
+
+        assert info["c2pa_integrity"] == "valid"
+        assert info["c2pa_signature"] == "valid"
+        assert info["c2pa_signer_trust"] == "untrusted"
+        assert info["c2pa_signer_validity"] == "expired"
+        assert "assertion.dataHash.match" in info["c2pa_validation_codes"]
+
+    def test_reader_reports_post_signing_container_mutation(self, tampered_chatgpt_png):
+        info = extract_c2pa_info(tampered_chatgpt_png)
+
+        assert info["c2pa_integrity"] == "invalid"
+        assert info["c2pa_signature"] == "valid"
+        assert "assertion.dataHash.mismatch" in info["c2pa_validation_codes"]
+
     def test_fallback_to_png_parser_when_reader_unavailable(self, monkeypatch):
         """With the reader disabled, the hand-rolled PNG parser still works."""
         from remove_ai_watermarks._internal import c2pa
@@ -237,6 +358,8 @@ class TestC2PARealSamples:
         assert "OpenAI" in info["issuer"]
         assert "trainedAlgorithmicMedia" in info["source_type"]
         assert "synthid_watermark" not in info
+        assert info["c2pa_integrity"] == "unknown"
+        assert info["c2pa_validation_source"] == "fallback"
 
 
 class TestC2PAInjectValidation:

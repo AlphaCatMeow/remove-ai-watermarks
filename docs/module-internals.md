@@ -364,6 +364,30 @@ Regression coverage:
 official `c2pa-python` reader first. Its byte-level PNG parser remains a fallback
 for partial and synthetic fixtures that the official reader rejects.
 
+Structured extraction is limited to the active manifest and the ingredient
+manifests reachable from it. Validation is preserved as separate dimensions:
+asset binding integrity, claim signature, signer trust, and signer certificate
+validity. A matching asset hash and valid claim signature do not make an
+untrusted or expired signer trusted. `identify` therefore assigns high confidence
+only when all four dimensions validate, medium confidence to an intact but
+untrusted or unvalidated claim, and no origin verdict to a hash/signature failure.
+The failed claim remains in the marker inventory and keeps the removal gate
+fail-safe because a post-signing container edit can invalidate C2PA without
+removing a declared pixel watermark.
+
+The structured walk also treats an exact known AI product in a reachable
+`claim_generator` as an AI assertion. This covers update chains where the active
+manifest names only `c2pa-tool` while a validated ingredient names Dreamina, and
+Firefly chains that identify `Adobe_Firefly` without repeating a digital source
+type. Unreachable manifests remain excluded.
+
+The SDK default enables trust verification but supplies no production trust
+anchors. Consequently, an installation without an explicitly maintained C2PA
+trust bundle reports otherwise valid signer chains as untrusted and keeps their
+attribution at medium confidence. Shipping or fetching an official trust bundle
+requires a separate update, provenance, and availability policy; do not silently
+convert `signingCredential.untrusted` into trusted based on a vendor-name match.
+
 Vendor attribution comes from the registry in
 [`_internal/constants.py`](../src/remove_ai_watermarks/_internal/constants.py). Derived
 issuer and platform maps should not be maintained separately.

@@ -39,6 +39,15 @@ confidence), reviewed once, then re-baselined. Lost detections are the alarm.
 
 Implemented as `scripts/sidecar_regression.py` (resumable, ~1.5 h at 8 workers).
 
+A 2026-08-15 metadata-only C2PA regression audit over the local historical
+corpus caught two structured-parser gaps before release: an exact Firefly claim
+generator without a repeated source type, and a Dreamina generator carried by a
+reachable ingredient under a generic update manifest. Both now have focused
+tests. The same audit confirmed that invalid hash/signature claims lose origin
+attribution without losing the C2PA inventory, and exposed the absence of
+production trust anchors in the SDK defaults. Dataset-derived counts and
+identifiers remain in the gitignored audit output.
+
 #### Local run protocol
 
 Re-run `identify` against locally recorded sidecars, classify losses separately from intended new detections, and keep generated reports under `.local-eval/`. Do not commit dataset-derived counts or identifiers.

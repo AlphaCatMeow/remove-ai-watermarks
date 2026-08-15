@@ -8,6 +8,7 @@ import json
 import logging
 import re
 import struct
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -36,6 +37,31 @@ with contextlib.suppress(Exception):
 
 _C2PA_READER_AVAILABLE = _C2paReader is not None
 _PNG_HEADER = struct.Struct(">I4s")
+
+_CONTENT_BINDING_MATCHES = (
+    "assertion.dataHash.match",
+    "assertion.bmffHash.match",
+    "assertion.boxesHash.match",
+    "assertion.collectionHash.match",
+    "assertion.multiAssetHash.match",
+)
+_CONTENT_BINDING_FAILURE_MARKERS = (
+    "Hash.incorrectFileCount",
+    "Hash.malformed",
+    "Hash.mismatch",
+    "Hash.missingPart",
+    "assertion.hashedURI.mismatch",
+    "claim.hardBindings.missing",
+    "hashedUri.mismatch",
+    "ingredient.manifest.mismatch",
+)
+_SIGNATURE_FAILURES = frozenset(
+    {
+        "claimSignature.mismatch",
+        "claimSignature.missing",
+        "claimSignature.outsideValidity",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -185,6 +211,159 @@ def _active_manifest(store: dict[str, Any]) -> dict[str, Any]:
     return cast("dict[str, Any]", active) if isinstance(active, dict) else {}
 
 
+def _manifest_chain(store: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the active manifest followed by credential-usable reachable ingredients."""
+    manifests = store.get("manifests")
+    active_label = store.get("active_manifest")
+    if not isinstance(manifests, dict) or not isinstance(active_label, str):
+        return []
+    typed_manifests = cast("dict[object, object]", manifests)
+    pending = deque([active_label])
+    seen: set[str] = set()
+    chain: list[dict[str, Any]] = []
+    while pending:
+        label = pending.popleft()
+        if label in seen:
+            continue
+        seen.add(label)
+        manifest_value = typed_manifests.get(label)
+        if not isinstance(manifest_value, dict):
+            continue
+        manifest = cast("dict[str, Any]", manifest_value)
+        chain.append(manifest)
+        ingredients = manifest.get("ingredients")
+        if not isinstance(ingredients, list):
+            continue
+        for ingredient_value in cast("list[object]", ingredients):
+            if not isinstance(ingredient_value, dict):
+                continue
+            ingredient = cast("dict[object, object]", ingredient_value)
+            child = ingredient.get("active_manifest")
+            if (
+                isinstance(child, str)
+                and child not in seen
+                and not _store_has_invalid_credential(cast("dict[str, Any]", ingredient))
+            ):
+                pending.append(child)
+    return chain
+
+
+def _status_codes(store: dict[str, Any]) -> tuple[list[str], list[str], list[str]]:
+    """Return ordered status codes for this store's active credential."""
+    successes: list[str] = []
+    informationals: list[str] = []
+    failures: list[str] = []
+
+    def extend(status_set: object) -> None:
+        if not isinstance(status_set, dict):
+            return
+        mapping = cast("dict[object, object]", status_set)
+        for key, target in (
+            ("success", successes),
+            ("informational", informationals),
+            ("failure", failures),
+        ):
+            values = mapping.get(key)
+            if not isinstance(values, list):
+                continue
+            for value in cast("list[object]", values):
+                if not isinstance(value, dict):
+                    continue
+                code = cast("dict[object, object]", value).get("code")
+                if isinstance(code, str) and code:
+                    target.append(code)
+
+    validation_results = store.get("validation_results")
+    if isinstance(validation_results, dict):
+        results = cast("dict[object, object]", validation_results)
+        extend(results.get("activeManifest"))
+
+    if not (successes or informationals or failures):
+        # Older readers expose only the flat non-success list. It still carries the
+        # exact codes needed to reject a mismatched binding or invalid credential.
+        values = store.get("validation_status")
+        if isinstance(values, list):
+            for value in cast("list[object]", values):
+                if not isinstance(value, dict):
+                    continue
+                code = cast("dict[object, object]", value).get("code")
+                if isinstance(code, str) and code:
+                    failures.append(code)
+    return successes, informationals, failures
+
+
+def _store_has_invalid_credential(store: dict[str, Any]) -> bool:
+    """Return whether this store's own active credential failed validation."""
+    _, _, failures = _status_codes(store)
+    return any(marker in code for code in failures for marker in _CONTENT_BINDING_FAILURE_MARKERS) or any(
+        code in _SIGNATURE_FAILURES for code in failures
+    )
+
+
+def c2pa_info_has_invalid_credential(info: dict[str, Any]) -> bool:
+    """Return whether parsed C2PA info reports a failed binding or signature."""
+    return info.get("c2pa_integrity") == "invalid" or info.get("c2pa_signature") == "invalid"
+
+
+def c2pa_info_has_removal_hint(info: dict[str, Any]) -> bool:
+    """Return whether a C2PA AI or watermark claim should keep removal fail-safe."""
+    return bool(info.get("ai_source_kind") or info.get("synthid_watermark"))
+
+
+def _has_suffix(codes: list[str], suffixes: tuple[str, ...]) -> bool:
+    return any(code.endswith(suffix) for code in codes for suffix in suffixes)
+
+
+def _validation_fields(store: dict[str, Any]) -> dict[str, Any]:
+    successes, informationals, failures = _status_codes(store)
+    all_codes = list(dict.fromkeys([*successes, *informationals, *failures]))
+
+    binding_failed = any(marker in code for code in failures for marker in _CONTENT_BINDING_FAILURE_MARKERS)
+    binding_matched = _has_suffix(successes, _CONTENT_BINDING_MATCHES)
+    signature_failed = any(code in _SIGNATURE_FAILURES for code in failures)
+    signature_validated = "claimSignature.validated" in successes
+
+    if binding_failed:
+        integrity = "invalid"
+    elif binding_matched:
+        integrity = "valid"
+    else:
+        integrity = "unknown"
+    if signature_failed:
+        signature = "invalid"
+    elif signature_validated:
+        signature = "valid"
+    else:
+        signature = "unknown"
+
+    if "signingCredential.trusted" in successes:
+        signer_trust = "trusted"
+    elif "signingCredential.untrusted" in failures:
+        signer_trust = "untrusted"
+    else:
+        signer_trust = "unknown"
+
+    if any(code in failures for code in ("signingCredential.invalid", "signingCredential.ocsp.revoked")):
+        signer_validity = "invalid"
+    elif "signingCredential.expired" in failures:
+        signer_validity = "expired"
+    elif "claimSignature.insideValidity" in successes:
+        signer_validity = "valid"
+    else:
+        signer_validity = "unknown"
+
+    state = store.get("validation_state")
+    return {
+        "c2pa_validation_source": "reader",
+        "c2pa_validation_state": state if isinstance(state, str) and state else "unknown",
+        "c2pa_integrity": integrity,
+        "c2pa_signature": signature,
+        "c2pa_signer_trust": signer_trust,
+        "c2pa_signer_validity": signer_validity,
+        "c2pa_validation_codes": all_codes,
+    }
+
+
 def _claim_generator_from_store(store: dict[str, Any]) -> str | None:
     active = _active_manifest(store)
     direct = active.get("claim_generator")
@@ -197,6 +376,127 @@ def _claim_generator_from_store(store: dict[str, Any]) -> str | None:
         if isinstance(name, str) and name.isprintable() and name:
             return name
     return None
+
+
+def _structured_manifest_fields(store: dict[str, Any]) -> dict[str, Any]:
+    """Extract provenance only from the active manifest and its ingredient graph."""
+    chain = _manifest_chain(store)
+    if not chain:
+        return {}
+
+    info: dict[str, Any] = {}
+    issuers: list[str] = []
+    tools: list[str] = []
+    actions: list[str] = []
+    source_types: list[str] = []
+    soft_binding_algorithms: list[str] = []
+    claim_generator_asserts_ai = False
+
+    def add_tool_matches(value: str, *, asserts_ai: bool = False) -> None:
+        nonlocal claim_generator_asserts_ai
+        matches = _ordered_matches(value.encode(), C2PA_AI_TOOLS)
+        tools.extend(matches)
+        if asserts_ai and matches:
+            claim_generator_asserts_ai = True
+
+    for manifest in chain:
+        signature_value = manifest.get("signature_info")
+        if isinstance(signature_value, dict):
+            signature = cast("dict[object, object]", signature_value)
+            for key in ("issuer", "common_name", "certificate_issuer"):
+                value = signature.get(key)
+                if isinstance(value, str):
+                    issuers.extend(_ordered_matches(value.encode(), C2PA_ISSUERS))
+
+        direct_generator = manifest.get("claim_generator")
+        if isinstance(direct_generator, str):
+            add_tool_matches(direct_generator, asserts_ai=True)
+
+        candidates = manifest.get("claim_generator_info")
+        if isinstance(candidates, list):
+            for candidate_value in cast("list[object]", candidates):
+                if not isinstance(candidate_value, dict):
+                    continue
+                name = cast("dict[object, object]", candidate_value).get("name")
+                if isinstance(name, str):
+                    add_tool_matches(name, asserts_ai=True)
+
+        assertions = manifest.get("assertions")
+        if not isinstance(assertions, list):
+            continue
+        for assertion_value in cast("list[object]", assertions):
+            if not isinstance(assertion_value, dict):
+                continue
+            assertion = cast("dict[object, object]", assertion_value)
+            label = assertion.get("label")
+            data = assertion.get("data")
+            if isinstance(label, str) and label.startswith("c2pa.soft-binding") and isinstance(data, dict):
+                algorithm = cast("dict[object, object]", data).get("alg")
+                if isinstance(algorithm, str):
+                    soft_binding_algorithms.append(algorithm)
+            if not (isinstance(label, str) and label.startswith("c2pa.actions") and isinstance(data, dict)):
+                continue
+            action_values = cast("dict[object, object]", data).get("actions")
+            if not isinstance(action_values, list):
+                continue
+            for action_value in cast("list[object]", action_values):
+                if not isinstance(action_value, dict):
+                    continue
+                action = cast("dict[object, object]", action_value)
+                action_name = action.get("action")
+                if isinstance(action_name, str):
+                    actions.append(C2PA_ACTIONS.get(action_name.encode(), action_name.removeprefix("c2pa.")))
+                source_type = action.get("digitalSourceType")
+                if isinstance(source_type, str):
+                    source_types.append(source_type)
+                software_agent = action.get("softwareAgent")
+                if isinstance(software_agent, dict):
+                    name = cast("dict[object, object]", software_agent).get("name")
+                    if isinstance(name, str):
+                        add_tool_matches(name)
+
+    issuers = list(dict.fromkeys(issuers))
+    tools = list(dict.fromkeys(tools))
+    actions = list(dict.fromkeys(actions))
+    if issuers:
+        info["issuer"] = ", ".join(issuers)
+    if tools:
+        info["ai_tool"] = ", ".join(tools)
+    if actions:
+        info["actions"] = ", ".join(actions)
+    if claim_generator_asserts_ai:
+        info["c2pa_identity_ai"] = True
+
+    generated = any(
+        "trainedAlgorithmicMedia" in value and "compositeWithTrainedAlgorithmicMedia" not in value
+        for value in source_types
+    )
+    enhanced = any("compositeWithTrainedAlgorithmicMedia" in value for value in source_types)
+    procedural = any("algorithmicMedia" in value for value in source_types)
+    if generated:
+        info.update(source_type="trainedAlgorithmicMedia (AI-generated)", ai_source_kind="generated")
+    elif enhanced:
+        info.update(source_type="compositeWithTrainedAlgorithmicMedia (AI-enhanced)", ai_source_kind="enhanced")
+    elif procedural:
+        info["source_type"] = "algorithmicMedia"
+
+    has_watermark_action = any(action.startswith("watermarked") for action in actions)
+    if has_watermark_action:
+        info["watermarked"] = True
+    if info.get("ai_source_kind"):
+        selected_bytes = json.dumps(chain, ensure_ascii=False).encode()
+        synthid = synthid_evidence_vendors_in(selected_bytes, has_watermark_action=has_watermark_action)
+        if synthid:
+            info["synthid_vendors"] = synthid
+            info["synthid_watermark"] = synthid_verdict(", ".join(synthid))
+
+    if soft_binding_algorithms:
+        algorithms = "\n".join(soft_binding_algorithms).encode()
+        soft_bindings = soft_binding_vendors_in(algorithms)
+        if soft_bindings:
+            info["soft_binding_vendors"] = soft_bindings
+            info["soft_binding"] = ", ".join(soft_bindings)
+    return info
 
 
 def synthid_verdict(vendors: str) -> str:
@@ -276,16 +576,28 @@ def _populate_registry_fields(buffer: bytes, info: dict[str, Any]) -> bool:
 
 def _base_info(byte_count: int, *, fallback: bool = False) -> dict[str, Any]:
     container = "C2PA manifest" if fallback else "C2PA manifest store"
-    return {
+    info: dict[str, Any] = {
         "has_c2pa": True,
         "type": "C2PA (Coalition for Content Provenance and Authenticity)",
         "c2pa_manifest": f"{container} ({byte_count} bytes)",
     }
+    if fallback:
+        info.update(
+            c2pa_validation_source="fallback",
+            c2pa_validation_state="unknown",
+            c2pa_integrity="unknown",
+            c2pa_signature="unknown",
+            c2pa_signer_trust="unknown",
+            c2pa_signer_validity="unknown",
+            c2pa_validation_codes=[],
+        )
+    return info
 
 
 def _info_from_store(store: dict[str, Any], encoded: bytes) -> dict[str, Any]:
     info = _base_info(len(encoded))
-    _populate_registry_fields(encoded, info)
+    info.update(_structured_manifest_fields(store))
+    info.update(_validation_fields(store))
     generator = _claim_generator_from_store(store)
     if generator is not None:
         info["claim_generator"] = generator

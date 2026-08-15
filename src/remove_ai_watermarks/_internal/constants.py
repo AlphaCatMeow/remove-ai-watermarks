@@ -107,6 +107,9 @@ C2PA_IDENTITY_AI_ORGS = frozenset(vendor.org for vendor in C2PA_AI_VENDORS if ve
 # Keep this attribution beside the issuer registry so every C2PA consumer has one
 # canonical source rather than maintaining a derived product map in identify.py.
 C2PA_CLAIM_GENERATOR_PLATFORMS: tuple[tuple[str, str], ...] = (
+    ("adobe_firefly", "Adobe Firefly"),
+    ("firefly", "Adobe Firefly"),
+    ("dreamina", "ByteDance (Doubao / Jimeng / Volcano Engine)"),
     ("higgsfield ai", "Higgsfield AI"),
     ("topaz labs image api", "Topaz Labs"),
     ("tiktok ad creative toolbox", "TikTok Ad Creative Toolbox"),
@@ -122,6 +125,7 @@ C2PA_AI_TOOLS = {
         ("DALL", "DALL-E"),
         ("Imagen", "Imagen"),
         ("Firefly", "Firefly"),
+        ("Dreamina", "Dreamina"),
     )
 }
 
