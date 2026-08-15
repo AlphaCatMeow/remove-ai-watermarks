@@ -311,6 +311,16 @@ _cpu_offload_option = click.option(
     ),
 )
 
+_text_manifest_option = click.option(
+    "--text-manifest",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "Experimental verified-text restoration manifest. Requires qwen-zimage, "
+        "the text-restoration extra, native untiled geometry, and no postprocessing."
+    ),
+)
+
 
 _visible_backend_option = click.option(
     "--backend",
@@ -787,6 +797,7 @@ def cmd_erase(
 @_tile_options
 @_force_option
 @_cpu_offload_option
+@_text_manifest_option
 @click.pass_context
 def cmd_invisible(
     ctx: click.Context,
@@ -806,6 +817,7 @@ def cmd_invisible(
     tile_overlap: int,
     force: bool,
     cpu_offload: bool,
+    text_manifest: Path | None,
 ) -> None:
     """Remove invisible AI watermarks (SynthID, StableSignature, TreeRing).
 
@@ -853,20 +865,25 @@ def cmd_invisible(
     console.print(f"  Strength: {_resolved_strength_for_display(source, strength, vendor, pipeline)}")
 
     t0 = time.monotonic()
-    result_path = engine.remove_watermark(
-        image_path=source,
-        output_path=output,
-        strength=strength,
-        seed=seed,
-        humanize=humanize,
-        unsharp=unsharp,
-        adaptive_polish=adaptive_polish,
-        max_resolution=max_resolution,
-        vendor=vendor,
-        tile=tile,
-        tile_size=tile_size,
-        tile_overlap=tile_overlap,
-    )
+    try:
+        result_path = engine.remove_watermark(
+            image_path=source,
+            output_path=output,
+            strength=strength,
+            seed=seed,
+            humanize=humanize,
+            unsharp=unsharp,
+            adaptive_polish=adaptive_polish,
+            max_resolution=max_resolution,
+            vendor=vendor,
+            tile=tile,
+            tile_size=tile_size,
+            tile_overlap=tile_overlap,
+            text_manifest=text_manifest,
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        console.print(f"  Error: {exc}")
+        raise SystemExit(1) from exc
     elapsed = time.monotonic() - t0
 
     size_kb = result_path.stat().st_size / 1024
@@ -1410,6 +1427,7 @@ def cmd_identify(ctx: click.Context, source: Path, no_visible: bool, as_json: bo
 @_tile_options
 @_force_option
 @_cpu_offload_option
+@_text_manifest_option
 @click.pass_context
 def cmd_all(
     ctx: click.Context,
@@ -1431,6 +1449,7 @@ def cmd_all(
     tile_overlap: int,
     force: bool,
     cpu_offload: bool,
+    text_manifest: Path | None,
 ) -> None:
     """Remove ALL watermarks: visible + invisible + metadata.
 
@@ -1508,6 +1527,7 @@ def cmd_all(
                 tile=tile,
                 tile_size=tile_size,
                 tile_overlap=tile_overlap,
+                text_manifest=text_manifest,
             ),
             force=force,
             progress=progress,

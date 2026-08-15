@@ -43,6 +43,76 @@ class TestInvisibleEngineInit:
         assert engine._preload_kwargs == {"global_only": True}
 
 
+class TestVerifiedTextMode:
+    """The experimental mode must fail before loading models on unmeasured inputs."""
+
+    @staticmethod
+    def _engine(profile: str = "qwen-zimage") -> InvisibleEngine:
+        engine = object.__new__(InvisibleEngine)
+        engine._progress_callback = None
+        engine._remover = SimpleNamespace(model_profile=profile)
+        return engine
+
+    def test_rejects_incompatible_pipeline_options(self, tmp_path):
+        import pytest
+
+        manifest = tmp_path / "manifest.json"
+        manifest.write_text("{}", encoding="utf-8")
+        cases = (
+            ("sdxl-zimage", {}, "qwen-zimage"),
+            ("qwen-zimage", {"max_resolution": 1024}, "max-resolution 0"),
+            ("qwen-zimage", {"tile": True}, "not calibrated"),
+            ("qwen-zimage", {"humanize": 1.0}, "humanize=0"),
+            ("qwen-zimage", {"adaptive_polish": True}, "polish disabled"),
+        )
+        for profile, kwargs, message in cases:
+            with pytest.raises(ValueError, match=message):
+                self._engine(profile).remove_watermark(
+                    tmp_path / "unused.png",
+                    text_manifest=manifest,
+                    **kwargs,
+                )
+
+    def test_loads_and_forwards_verified_manifest(self, tmp_path, monkeypatch):
+        import json
+
+        from remove_ai_watermarks import region_eraser
+        from remove_ai_watermarks._internal.text_restoration import source_pixel_sha256
+
+        source = tmp_path / "source.png"
+        output = tmp_path / "output.png"
+        image = Image.new("RGB", (48, 32), (10, 20, 30))
+        image.save(source)
+        manifest = tmp_path / "manifest.json"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "verified": True,
+                    "source_pixel_sha256": source_pixel_sha256(image),
+                    "width": 48,
+                    "height": 32,
+                    "lines": [{"box": [8, 8, 40, 24], "text": "Exact", "script": "alphabetic"}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        seen = {}
+
+        def fake_remove(**kwargs):
+            seen.update(kwargs)
+            Image.open(kwargs["image_path"]).save(kwargs["output_path"])
+            return kwargs["output_path"]
+
+        engine = self._engine()
+        engine._remover.remove_watermark = fake_remove
+        monkeypatch.setattr(region_eraser, "lama_available", lambda: True)
+
+        engine.remove_watermark(source, output, text_manifest=manifest)
+
+        assert seen["text_manifest"].lines[0].text == "Exact"
+
+
 class TestNativeOutputSize:
     """Model-side latent-grid rounding must not change the public output size."""
 

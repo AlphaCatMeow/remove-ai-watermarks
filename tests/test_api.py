@@ -245,6 +245,7 @@ class TestInvisibleOptionsMirrorTheEngine:
             tile=True,
             tile_size=768,
             tile_overlap=64,
+            text_manifest=tmp_path / "verified-lines.json",
         )
         seen: dict[str, object] = {}
 

@@ -120,6 +120,11 @@ qwen-zimage = [
     "diffsynth>=2.0.17,<3",
     "torchvision>=0.20.0",
 ]
+# Opt-in verified-text reconstruction over qwen-zimage. LaMa removes the changed
+# candidate glyphs before exact Qwen-VAE cores are composited back.
+text-restoration = [
+    "remove-ai-watermarks[qwen-zimage,lama]",
+]
 # Adobe TrustMark decoder -- the open, keyless watermark behind Adobe Durable
 # Content Credentials (soft-binding alg ``com.adobe.trustmark.P``). Optional
 # because it pulls torch and downloads model weights on first use. identify()
@@ -161,7 +166,7 @@ dev = [
 ]
 # ``qwen-zimage`` already pulls ``diffusion``; naming both would suggest diffusion is
 # independently sufficient for a removal, which it is not.
-all = ["remove-ai-watermarks[video,heif,detect,trustmark,qwen-zimage,lama,migan]"]
+all = ["remove-ai-watermarks[video,heif,detect,trustmark,text-restoration,migan]"]
 
 [project.scripts]
 remove-ai-watermarks = "remove_ai_watermarks.cli:main"

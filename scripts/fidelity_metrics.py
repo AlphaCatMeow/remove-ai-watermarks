@@ -3,10 +3,9 @@
 # dependencies = [
 #   "click",
 #   "numpy",
-#   "opencv-python-headless",
+#   "opencv-python-headless<5",
 #   "pillow",
 #   "scikit-image",
-#   "rapidfuzz",
 #   "torch",
 #   "lpips",
 #   "paddleocr",
@@ -29,7 +28,7 @@ metrics run only where faces are detected, text metrics only where text is.
 
 Two subcommands:
 
-  ocr      -- OCR images (PaddleOCR PP-OCRv6) into a JSON {basename: text} file.
+  ocr      -- OCR images (PaddleOCR defaults) into a JSON {basename: text} file.
               Run this on the ORIGINALS, hand-verify/correct the file, and it
               becomes the ground truth for ``compare --ground-truth`` -- the clean
               way to score text, since OCR-vs-OCR is doubly noisy (errors on both
@@ -54,6 +53,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import sys
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -65,7 +65,10 @@ import numpy as np
 from _plain_console import Console, Table
 
 console = Console()
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
+from scripts._text_eval import levenshtein_normalized  # noqa: E402
 
 # ── helpers ──────────────────────────────────────────────────────────
 
@@ -89,7 +92,7 @@ def _norm(text: str) -> str:
     return "".join(unicodedata.normalize("NFC", text).split())
 
 
-# ── text: PaddleOCR (PP-OCRv6) ───────────────────────────────────────
+# ── text: PaddleOCR defaults ─────────────────────────────────────────
 
 # Our lang codes -> PaddleOCR lang. The 'ch' model also reads Latin; 'ru' reads
 # Cyrillic + Latin. Multiple langs in one image -> run each model, union detections.
@@ -165,9 +168,7 @@ def _ocr_lines(bgr: np.ndarray, langs: list[str], min_score: float = 0.5) -> lis
 
 
 def _cer(ref: str, hyp: str) -> float:
-    from rapidfuzz.distance import Levenshtein
-
-    return Levenshtein.normalized_distance(_norm(ref), _norm(hyp))
+    return levenshtein_normalized(_norm(ref), _norm(hyp))
 
 
 # ── face: detection + ArcFace + texture ──────────────────────────────

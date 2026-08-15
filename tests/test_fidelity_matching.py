@@ -20,7 +20,7 @@ import pytest
 _SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 
 
-def _load_assign():
+def _load_module():
     # fidelity_metrics is a standalone PEP723 script, not an installed module; load it by
     # path with scripts/ on sys.path so its `_plain_console` shim import resolves.
     sys.path.insert(0, str(_SCRIPTS))
@@ -35,7 +35,15 @@ def _load_assign():
         pytest.skip(f"fidelity_metrics import deps missing: {exc}")
     finally:
         sys.path.remove(str(_SCRIPTS))
-    return mod.assign_faces_one_to_one
+    return mod
+
+
+def _load_assign():
+    return _load_module().assign_faces_one_to_one
+
+
+def test_cer_remains_case_sensitive() -> None:
+    assert _load_module()._cer("A", "a") == 1.0
 
 
 def test_distinct_faces_match_nearest() -> None:

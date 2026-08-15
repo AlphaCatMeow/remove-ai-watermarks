@@ -949,6 +949,57 @@ orchestration, YuNet integration, SAM selection, masks, sizing helpers, and pixe
 compositing are implemented for this runtime. Changing a calibrated model input
 requires the same provider-oracle and identity evaluation as a model change.
 
+#### Verified text restoration
+
+[`_internal/text_restoration.py`](../src/remove_ai_watermarks/_internal/text_restoration.py)
+implements the opt-in `vae-glyphs` stage. A versioned manifest carries manually
+reviewed strings and source-space line boxes, plus a SHA-256 over decoded RGB width,
+height, and pixels. Validation happens before model loading. The product never treats
+OCR confidence as verification.
+
+When enabled, `QwenZImagePipeline` reconstructs the source once through its already
+loaded Qwen VAE, runs the ordinary global and face stages, blends 15% of the VAE
+reconstruction into that clean result, and calls the shared restoration compositor.
+The compositor derives binary source and candidate silhouettes, groups nearby lines,
+uses LaMa for the initial and residual-glyph erase passes, paints fresh silhouette
+edges, then copies the Qwen-VAE core with a 0.5-pixel feather. The evaluation script
+imports these same mask and compositing helpers so the two implementations cannot
+silently drift.
+
+The stage is deliberately narrower than the engine: it rejects `sdxl-zimage`, tiles,
+resolution caps, humanize, unsharp, and adaptive polish. Those combinations change
+geometry or final pixels after the verified layer and have no measured oracle result.
+It remains opt-in because annotations are manual and provider verdicts apply only to
+the exact tested output hashes, not to the mechanism in general.
+
+A matched stage-isolation check on the 18-face Gemini portrait grid confirms the
+division of responsibility. The visible-cleaned, metadata-stripped control and the
+Z-Image face-only output were both SynthID-positive; Qwen global-only and the full
+Qwen-then-Z-Image output were both clean. The face stage raised identity cosine from
+0.589 to 0.852 and reduced face LPIPS from 0.217 to 0.050 without reintroducing a
+detectable whole-image signal. Thus Z-Image is a masked fidelity repair stage here,
+not the watermark-removal stage. Exact hashes, metrics, strengths, and the one-fixture,
+one-seed caveat are recorded in
+[`data/evaluations/fidelity/face-stage-isolation-2026-08-13.csv`](../data/evaluations/fidelity/face-stage-isolation-2026-08-13.csv).
+
+The public Synthid-Bypass v2 graph was subsequently audited at upstream commit
+`3007d035`. Its saved-output path confirms the same division: Qwen-Image-2512
+Lightning plus Canny is global, and Z-Image Turbo exists only inside the masked
+face detailer. The connected face path is YOLOv8-face plus SAM; the MediaPipe nodes
+described by the upstream README and the 1.2-megapixel normalization node do not
+reach `SaveImage`. Upstream also applies its adaptive face strength directly,
+whereas this implementation multiplies it by `FACE_DENOISE_SCALE = 0.5`.
+
+A close reproduction on the same portrait fixture kept the control positive and
+made both Qwen global-only and full Qwen-then-Z-Image outputs clean. Applying the
+upstream-strength face pass raised identity from 0.589 to 0.783 and reduced face
+LPIPS from 0.217 to 0.083, but remained worse than this profile's 0.852 and 0.050.
+The published upstream pair 12 was also independently checked positive before and
+clean after, with 0.975 identity. Exact workflow provenance, hashes, metrics,
+oracle outcomes, and the DiffSynth/GGUF, scheduler, detector, and seed caveats are
+recorded in
+[`data/evaluations/fidelity/upstream-v2-reproduction-2026-08-13.csv`](../data/evaluations/fidelity/upstream-v2-reproduction-2026-08-13.csv).
+
 ### SDXL plus Z-Image
 
 [`_internal/sdxl_zimage_pipeline.py`](../src/remove_ai_watermarks/_internal/sdxl_zimage_pipeline.py)

@@ -87,6 +87,15 @@ removal, metadata stripping and every `identify` command still run anywhere.
 Video SynthID regeneration is a separate VAE path and does still run on CPU or MPS;
 it needs the `diffusion` extra, not this one.
 
+The experimental verified-text post-pass additionally needs LaMa:
+
+```bash
+uv tool install --force "remove-ai-watermarks[text-restoration]"
+```
+
+That extra includes `qwen-zimage` and `lama`; it does not add OCR. Text strings and
+line boxes must be reviewed before the run.
+
 ## Feature extras
 
 Extras are composable. Install only the capabilities and file formats the
@@ -104,6 +113,7 @@ application actually uses:
 | `migan` | MI-GAN ONNX fill backend | `visible`, ONNX Runtime | Model download, no Torch |
 | `lama` | big-LaMa ONNX fill backend | `visible`, ONNX Runtime | Model download, no Torch |
 | `qwen-zimage` | Invisible image-watermark removal, both CUDA-only profiles | `diffusion`, DiffSynth | Yes |
+| `text-restoration` | Opt-in verified Qwen-VAE glyph restoration | `qwen-zimage`, `lama` | Yes |
 | `all` | Every production feature available on the active Python | All compatible rows above | Yes |
 | `dev` | Tests, linting, typing, and upstream parity checks | `video`, `detect`, upstream invisible-watermark | Yes, for parity tests |
 
@@ -118,6 +128,8 @@ flowchart LR
     migan --> visible
     lama --> visible
     qwen["qwen-zimage"] --> diffusion
+    text["text-restoration"] --> qwen
+    text --> lama
     heif
     trustmark
 ```

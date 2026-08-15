@@ -596,6 +596,23 @@ engine = InvisibleEngine(pipeline="sdxl-zimage")
 The `qwen-zimage` extra is required for both profiles: each runs the same
 DiffSynth Z-Image face stage.
 
+The opt-in verified-text stage uses the same `text_manifest` argument as the CLI:
+
+```python
+engine.remove_watermark(
+    Path("watermarked.png"),
+    Path("clean.png"),
+    text_manifest=Path("verified-lines.json"),
+)
+```
+
+Install `remove-ai-watermarks[text-restoration]`. The manifest schema and safety
+constraints are documented in the CLI guide. The engine verifies its decoded RGB
+hash before loading the diffusion models and rejects SDXL, tiling, downscaling, and
+postprocessing combinations that were not evaluated. `InvisibleOptions` exposes the
+same field for `remove_all`; after a visible-stage edit, the manifest must be built
+against the staged pixels rather than the pristine source.
+
 `remove_watermark` takes strength, seed, tiling, resolution, and postprocessing
 controls. It takes no model id, step count or guidance scale, and neither does the
 constructor: each profile pins its model stack, its per-stage schedule and CFG
