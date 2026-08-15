@@ -171,6 +171,120 @@ Three readings, all MEASURED, none of them about SynthID:
    so the `max(temporal_baseline, 1e-6)` denominator collapses and the ratio
    inflates. This is the predicted defect, now observed rather than argued.
 
+## Measurements on the real carrier (2026-08-06)
+
+The public Veo 3 off-road sample was downloaded and its sha256 matched the manifest
+exactly, so everything below is measured on the same file the 2026-07-31
+calibration used. Its properties, none of which the manifest recorded at the time:
+H.264 1920x1080 at 24 fps, 8.000 s, 5,155,063 bps video, plus an **AAC 48 kHz
+stereo 192,241 bps audio track of 7.914 s**.
+
+The shipped profile therefore delivers 512x288 at 12 fps: **7.1% of the frame area
+and 3.6% of the pixels per second.**
+
+### The geometry prize, measured end to end
+
+Scored with `scripts/video_fidelity_probe.py` against the untouched 1920x1080
+source, all at `noise_std=0.15`:
+
+| Geometry | Frame area | PSNR | SSIM | Temporal | Bitrate |
+| --- | --- | --- | --- | --- | --- |
+| 512x288 @12 (shipped) | 7.1% | 25.3971 | 0.8215 | 1.0407 | 2187 kbps |
+| 768x432 @12 | 16.0% | 27.3796 | 0.8556 | 1.0323 | 3782 kbps |
+| 1024x576 @12 | 28.4% | 28.8542 | 0.8819 | 1.0262 | 5604 kbps |
+| 512x288 @24 | 7.1% | 25.6142 | 0.8270 | 1.0995 | 3181 kbps |
+
+**512 to 1024 is worth +3.46 dB, against 1.92 dB for the entire `noise_std` axis.**
+The geometry lever is roughly twice the noise lever, which is the first hard number
+this investigation has for the size of the prize. What it still costs in removal is
+unknown: none of these was ever submitted.
+
+Two readings that are not obvious from the table:
+
+- **Temporal residual improves as resolution rises** (1.0407 to 1.0262). The shared
+  noise field lives on the latent grid, so at 1920 it is four times finer relative
+  to the frame than at 512, where it stretches into low-frequency blotches. Higher
+  resolution plausibly makes the perturbation *less* visible, not more.
+- **The frame-rate arm looks bad here and the metric is the wrong judge.** 24 fps
+  buys +0.22 dB and worsens the temporal ratio to 1.0995, but what 24 fps actually
+  buys is smoothness, which neither PSNR nor SSIM measures at all. The metric sees
+  only the cost. Do not decide the fps question from this table.
+
+Encoder cost on an M-series MPS device, 8 seconds of source: 51 s at 512/12, 180 s
+at 768/12, 380 s at 1024/12, 190 s at 512/24. Native 1920x1080 at 24 fps
+extrapolates to roughly 46 minutes for the same 8 seconds, around 350x real time. A
+native run was started and killed before producing anything, so that figure remains
+an extrapolation.
+
+### The certified row does not reproduce
+
+Re-running the certified configuration (512/12/0.15, seed 0) on this machine gave
+25.5002 dB and 1.0675 against the manifest's 25.3911 and 1.0578, and a different
+output sha256. The manifest records neither device nor dtype, and the original was
+almost certainly CUDA fp16 while this was MPS fp32. **The oracle certified a
+specific file that cannot be rebuilt**, so any re-run produces an artifact the
+verifier never saw. Device and dtype belong in the schema.
+
+### Audio passes through untouched, and the output still reads clean
+
+Established on two carriers, by comparing the extracted audio bitstream sha256 of
+input and output:
+
+- Veo carrier: `674063df...` in, `674063df...` out.
+- A Lyria 3 track generated for this purpose: `6ee4c041...` in, `6ee4c041...` out.
+
+The Lyria case is the sharper one because its provenance is known. Google's own
+generator stamps it: `get_ai_metadata` reads a C2PA manifest naming
+`Google C2PA Core Generator Library`, issuer `Google LLC`, `trainedAlgorithmicMedia`.
+After the shipped path runs, that output reports `{}` -- every metadata marker
+stripped, `remaining_metadata` empty, visuals regenerated -- while the audio the
+generator produced is bit-for-bit intact.
+
+So the pipeline can produce a file that **our own detector calls clean while an
+untouched Google-generated audio track sits inside it**. The mechanism is proven;
+whether that audio carries an audible-to-the-verifier SynthID mark is not, and only
+the oracle can say. If it does, this is a shipped defect rather than a quality
+question, and it outranks everything else in this document.
+
+Worth recording alongside it: the Veo carrier itself returns `{}` from
+`get_ai_metadata`. The public sample carries no C2PA at all, which is exactly why it
+needed an oracle verdict in the first place.
+
+## State when this work was parked (2026-08-06)
+
+Landed in `main` through PR #78: the manifest-backed default pin, the
+scaling-factor gate and its single seam, the sweep loading through the engine's
+loader, `scripts/video_fidelity_probe.py` with its tests, the extended manifest
+schema, and this document. **The shipped operating point did not move**: it is
+still 512 px / 12 fps / `noise_std=0.15`.
+
+A product requirement arrived late and reframes the target: output resolution,
+frame rate and bitrate must not be reduced. Resolution, frame rate and crf are
+parameters and can be preserved, but zero quality loss is not achievable by this
+mechanism at all -- removal works by rebuilding pixels, so a regeneration can never
+return its input. The honest goal is to preserve container properties and make the
+perceptual loss imperceptible, judged by DISTS and VMAF rather than PSNR. Two
+consequences follow: crf 18 on this path against crf 14 on the visible path is an
+unexplained asymmetry and a free quality win, and the oracle's 100 MB limit means a
+higher-quality profile is *harder* to certify than the one it replaces.
+
+Nothing is blocked on analysis. Six oracle submissions were prepared and never run,
+because file upload to the verifier failed at the tool level:
+
+1. A Lyria carrier and the pipeline's output from it, answering the audio question.
+2. A multiplexed control-plus-candidate file at the shipped geometry, validating
+   whether the verifier reads a concatenated pair by time range. Verified locally
+   frame by frame: half one is bit-identical to the control, half two to the
+   candidate.
+3. Three more multiplexed pairs for 768, 1024 and 24 fps, worth three queries
+   instead of six if the instrument validates.
+
+Every generated artifact for those submissions has since been lost with its
+scratch directory, which is the intended lifecycle for generated media. Rebuilding
+costs one download and roughly 25 minutes of encoding; the Lyria track is the
+exception, since regenerating it would produce a different track, and the copies
+that survive are the only ones.
+
 ## The single most important unknown
 
 **How much the 512 px downscale contributes to removal.** Every quality gain routes
