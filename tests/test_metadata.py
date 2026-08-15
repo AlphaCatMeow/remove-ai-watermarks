@@ -500,6 +500,10 @@ class TestGetAiMetadataRealSample:
         assert "OpenAI" in meta["issuer"]
         assert "synthid_watermark" not in meta
         assert "trainedAlgorithmicMedia" in meta["source_type"]
+        assert meta["c2pa_integrity"] == "valid"
+        assert meta["c2pa_signature"] == "valid"
+        assert meta["c2pa_signer_trust"] == "untrusted"
+        assert meta["c2pa_signer_validity"] == "expired"
 
 
 @pytest.mark.parametrize(

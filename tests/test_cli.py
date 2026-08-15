@@ -723,6 +723,8 @@ class TestIdentifyCommand:
         result = runner.invoke(main, ["identify", str(sample), "--no-visible"])
         assert result.exit_code == 0
         assert "AI-generated (fully synthetic)" in result.output
+        assert "C2PA validation: integrity=valid, signature=valid" in result.output
+        assert "signer trust=untrusted, signer validity=expired" in result.output
 
     def test_identify_json_is_valid(self, runner, tmp_png_with_ai_metadata):
         result = runner.invoke(main, ["identify", str(tmp_png_with_ai_metadata), "--no-visible", "--json"])

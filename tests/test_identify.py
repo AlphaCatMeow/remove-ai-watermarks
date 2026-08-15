@@ -39,6 +39,79 @@ SAMPLES_DIR = Path(__file__).resolve().parent.parent / "data" / "fixtures" / "pr
 
 
 class TestProvenanceEvidence:
+    def test_exact_ai_claim_generator_can_assert_ai_without_source_type(self, tmp_path: Path):
+        path = tmp_path / "firefly.png"
+        info = {
+            "has_c2pa": True,
+            "issuer": "Adobe",
+            "claim_generator": "Adobe_Firefly",
+            "ai_tool": "Firefly",
+            "c2pa_identity_ai": True,
+            "c2pa_validation_source": "reader",
+            "c2pa_validation_state": "Valid",
+            "c2pa_integrity": "valid",
+            "c2pa_signature": "valid",
+            "c2pa_signer_trust": "untrusted",
+            "c2pa_signer_validity": "valid",
+            "c2pa_validation_codes": ["assertion.dataHash.match", "claimSignature.validated"],
+        }
+        evidence = ProvenanceEvidence(
+            path=path,
+            c2pa_info=info,
+            ai_metadata={},
+            scan=b"jumb c2pa Adobe_Firefly",
+            iptc_ai_system=None,
+            aigc_label=None,
+            exif_generator=None,
+            xai_signature=False,
+            huggingface_job=None,
+            samsung_genai=None,
+        )
+
+        report = identify_from_evidence(evidence)
+
+        assert report.is_ai_generated is True
+        assert report.confidence == "medium"
+        assert report.platform == "Adobe Firefly"
+
+    def test_fully_validated_c2pa_claim_is_high_confidence(self, tmp_path: Path):
+        path = tmp_path / "validated.png"
+        info = {
+            "has_c2pa": True,
+            "issuer": "OpenAI",
+            "source_type": "trainedAlgorithmicMedia (AI-generated)",
+            "ai_source_kind": "generated",
+            "c2pa_validation_source": "reader",
+            "c2pa_validation_state": "Valid",
+            "c2pa_integrity": "valid",
+            "c2pa_signature": "valid",
+            "c2pa_signer_trust": "trusted",
+            "c2pa_signer_validity": "valid",
+            "c2pa_validation_codes": [
+                "assertion.dataHash.match",
+                "claimSignature.validated",
+                "signingCredential.trusted",
+            ],
+        }
+        evidence = ProvenanceEvidence(
+            path=path,
+            c2pa_info=info,
+            ai_metadata={},
+            scan=b"jumb c2pa OpenAI trainedAlgorithmicMedia",
+            iptc_ai_system=None,
+            aigc_label=None,
+            exif_generator=None,
+            xai_signature=False,
+            huggingface_job=None,
+            samsung_genai=None,
+        )
+
+        report = identify_from_evidence(evidence)
+
+        assert report.is_ai_generated is True
+        assert report.confidence == "high"
+        assert report.platform == "OpenAI (ChatGPT / gpt-image / DALL-E / Sora)"
+
     def test_external_metadata_record_builds_equivalent_evidence(self, tmp_path: Path):
         path = tmp_path / "external.jpg"
         signature = "A" * 64
@@ -428,12 +501,14 @@ class TestIdentifySamsungGalaxy:
         path.write_bytes(b"\xff\xd8\xff\xe1jumbc2pa" + blob + b"\xff\xd9")
         return path
 
-    def test_galaxy_trained_source_is_high_ai(self, tmp_path: Path):
+    def test_galaxy_trained_source_is_unverified_ai(self, tmp_path: Path):
         path = self._jpeg(tmp_path, "s25.jpg", b"Samsung Galaxy Galaxy S25 c2pa-rs trainedAlgorithmicMedia")
         r = identify(path, check_visible=False, check_invisible=False)
         assert r.is_ai_generated is True
-        assert r.confidence == "high"
+        assert r.confidence == "medium"
         assert r.platform == "Samsung Galaxy (C2PA)"
+        assert r.c2pa_validation is None
+        assert any("without cryptographic validation" in caveat for caveat in r.caveats)
         assert r.integrity_clashes == []  # device cert + AI source-type is legitimate, not a clash
 
     def test_galaxy_genai_only_is_medium_ai(self, tmp_path: Path):
@@ -477,7 +552,7 @@ class TestIdentifyRealSamples:
     def test_openai_chatgpt(self):
         r = identify(SAMPLES_DIR / "chatgpt-1.png", check_visible=False)
         assert r.is_ai_generated is True
-        assert r.confidence == "high"
+        assert r.confidence == "medium"
         assert r.platform
         assert "OpenAI" in r.platform
         assert any("C2PA" in w for w in r.watermarks)
@@ -546,8 +621,38 @@ class TestIdentifyRealSamples:
         # both invisible/metadata targets, so the diffusion scrub should run.
         assert has_invisible_target(SAMPLES_DIR / "chatgpt-1.png") is True
         assert has_invisible_target(SAMPLES_DIR / "mj-1.png") is True
-        # ai_from_metadata mirrors confidence == "high" and backs the helper.
+        # ai_from_metadata records scrub intent even when an untrusted signer
+        # makes the provenance verdict medium-confidence.
         assert identify(SAMPLES_DIR / "chatgpt-1.png", check_visible=False).ai_from_metadata is True
+
+    def test_untrusted_but_intact_c2pa_is_medium_confidence(self):
+        report = identify(SAMPLES_DIR / "chatgpt-1.png", check_visible=False, check_invisible=False)
+
+        assert report.is_ai_generated is True
+        assert report.confidence == "medium"
+        assert report.ai_from_metadata is True
+        assert report.c2pa_validation is not None
+        assert report.c2pa_validation["source"] == "reader"
+        assert report.c2pa_validation["state"] == "Invalid"
+        assert report.c2pa_validation["integrity"] == "valid"
+        assert report.c2pa_validation["signature"] == "valid"
+        assert report.c2pa_validation["signer_trust"] == "untrusted"
+        assert report.c2pa_validation["signer_validity"] == "expired"
+        assert "assertion.dataHash.match" in report.c2pa_validation["codes"]
+        assert any("not anchored" in caveat for caveat in report.caveats)
+
+    def test_hash_mismatch_does_not_confirm_origin_but_keeps_scrub_fail_safe(self, tampered_chatgpt_png: Path):
+        report = identify(tampered_chatgpt_png, check_visible=False, check_invisible=False)
+
+        assert report.is_ai_generated is None
+        assert report.platform is None
+        assert report.confidence == "none"
+        assert report.ai_source_kind is None
+        assert report.ai_from_metadata is False
+        assert report.c2pa_validation is not None
+        assert report.c2pa_validation["integrity"] == "invalid"
+        assert any("dataHash.mismatch" in clash for clash in report.integrity_clashes)
+        assert has_invisible_target(tampered_chatgpt_png) is True
 
     def test_has_invisible_target_false_on_clean_photo(self, clean_photo: Path):
         # No detectable invisible signal -> skip the scrub (do not degrade a clean image).
@@ -566,13 +671,13 @@ class TestHasInvisibleTargetFailSafe:
     """The scrub gate fails SAFE: when a detector errors, it runs the removal."""
 
     def test_detector_error_defaults_to_run(self, tmp_path: Path):
-        # If identify raises (a detector crash), the gate must return True so the
+        # If evidence evaluation raises (a detector crash), the gate must return True so the
         # caller still attempts removal -- leaving a watermark on a paid removal is
         # worse than over-regenerating. (Garbage bytes do NOT raise; identify returns
         # a clean None verdict there, so that path correctly skips -- see below.)
         bad = tmp_path / "x.png"
         bad.write_bytes(b"not image bytes")
-        with patch("remove_ai_watermarks.identify.identify", side_effect=RuntimeError("boom")):
+        with patch("remove_ai_watermarks.identify._identify_from_evidence", side_effect=RuntimeError("boom")):
             assert has_invisible_target(bad) is True
 
     def test_unreadable_bytes_are_not_a_target(self, tmp_path: Path):

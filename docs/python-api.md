@@ -155,7 +155,16 @@ from remove_ai_watermarks.identify import identify
 report = identify(Path("input.png"))
 print(report.platform)
 print(report.signals)
+print(report.c2pa_validation)
 ```
+
+`c2pa_validation`, when present, reports `integrity`, `signature`,
+`signer_trust`, and `signer_validity` independently, plus the reader status
+codes. A valid hash and signature with an untrusted or expired signer is a
+medium-confidence signed claim. A hash or signature failure does not confirm the
+claimed platform or AI origin. Fallback parsing reports unknown validation
+dimensions, while a raw marker in an unsupported or malformed container can
+leave `c2pa_validation` as `None`.
 
 Use `check_visible=False` and `check_invisible=False` for metadata-only
 inspection through the compatible path-based API:

@@ -86,7 +86,11 @@ The inspection and stripping code handles signals in these groups:
 
 `identify` combines detected signals into a `ProvenanceReport`. It reports
 unknown when evidence is absent. It never treats missing metadata as proof that
-an image is human made.
+an image is human made. C2PA presence alone is not a verified identity: the
+report distinguishes asset binding, claim signature, signer trust, and signer
+validity. High-confidence C2PA attribution requires all four; intact but
+untrusted or fallback claims are medium-confidence, while a failed binding or
+signature contributes no origin verdict.
 
 ## File and container formats
 

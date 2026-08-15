@@ -812,10 +812,19 @@ def synthid_source(image_path: Path) -> str | None:
     Returns:
         Comma-joined vendor name(s) (e.g. ``"OpenAI"``) or None.
     """
-    from remove_ai_watermarks._internal.c2pa import extract_c2pa_info, synthid_evidence_vendors_in
+    from remove_ai_watermarks._internal.c2pa import (
+        c2pa_info_has_invalid_credential,
+        extract_c2pa_info,
+        synthid_evidence_vendors_in,
+    )
 
-    # PNG: the caBX chunk parser gives a clean, structured issuer.
-    vendors = extract_c2pa_info(image_path).get("synthid_vendors")
+    # Prefer the official reader's structured result. A failed asset binding or
+    # signature cannot establish the claim, and the raw fallback below must not
+    # resurrect it from the same damaged manifest bytes.
+    c2pa = extract_c2pa_info(image_path)
+    if c2pa_info_has_invalid_credential(c2pa):
+        return None
+    vendors = c2pa.get("synthid_vendors")
     if vendors:
         return ", ".join(vendors)
 
@@ -1151,6 +1160,12 @@ def get_ai_metadata(image_path: Path) -> dict[str, str]:
         "actions",
         "synthid_watermark",
         "soft_binding",
+        "c2pa_validation_source",
+        "c2pa_validation_state",
+        "c2pa_integrity",
+        "c2pa_signature",
+        "c2pa_signer_trust",
+        "c2pa_signer_validity",
     ):
         if key in c2pa:
             result.setdefault(key, str(c2pa[key]))

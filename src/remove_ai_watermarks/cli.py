@@ -1356,6 +1356,13 @@ def cmd_identify(ctx: click.Context, source: Path, no_visible: bool, as_json: bo
         verdict = "AI-generated (fully synthetic)"
     console.print(f"\n  Verdict: {verdict}  (confidence: {report.confidence})")
     console.print(f"  Platform: {report.platform or 'undetermined'}")
+    if report.c2pa_validation is not None:
+        validation = report.c2pa_validation
+        console.print(
+            "  C2PA validation: "
+            f"integrity={validation['integrity']}, signature={validation['signature']}, "
+            f"signer trust={validation['signer_trust']}, signer validity={validation['signer_validity']}"
+        )
 
     if report.is_ai_generated is None:
         console.print(

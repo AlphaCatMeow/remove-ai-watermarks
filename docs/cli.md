@@ -40,7 +40,10 @@ remove-ai-watermarks identify image.png
 `identify` always inspects supported metadata. When pixel extras are installed,
 it also evaluates supported visible and invisible pixel signals. When no signal
 is found, it reports the origin as unknown. It does not claim the image is
-clean.
+clean. For C2PA files, the text report shows asset integrity, claim-signature,
+signer-trust, and signer-validity results separately. An intact claim from an
+untrusted or expired signer is reported at medium confidence; a failed asset
+binding or signature does not confirm the claimed origin.
 
 Machine readable output:
 
