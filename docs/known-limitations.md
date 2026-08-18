@@ -57,6 +57,19 @@ Invisible removal does not decode and delete a payload. It regenerates the
 image through a diffusion pipeline. Faces, text, colors, and fine detail can
 change even when the watermark is successfully disrupted.
 
+Text, tables, and UI screenshots are the worst case for a forced scrub: the
+model redraws glyphs as plausible-but-wrong shapes. Do not run the invisible
+stage on such content unless a locally-detectable invisible signal exists.
+The default `all`, `invisible`, and `batch` commands already skip it then, and
+`visible` (which strips AI metadata by default) or `metadata` alone never
+redraws a glyph outside the filled watermark box. `--force` is for content you
+know carries a pixel watermark despite no local signal; on a clean screenshot
+it only buys distortion. Preserving or pasting back the original text pixels
+during a real scrub is deliberately not offered: an invisible watermark such
+as SynthID lives in the pixels everywhere, including inside the glyphs, so
+frozen text regions would keep the watermark
+([text protection research](text-protection-research.md)).
+
 `qwen-zimage` is the default profile and `sdxl-zimage` the only alternative.
 Both are CUDA only and differ only in the global regeneration model: each
 conditions that stage on a canny edge map, which preserves structure but not
