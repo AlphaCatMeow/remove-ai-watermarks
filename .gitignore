@@ -54,6 +54,7 @@ gfpgan/
 # deeper in the tree is not caught.
 /.agents/
 /.codex/
+/sch_*.yaml
 /.opencode/
 /opencode.json
 /opencode.jsonc
