@@ -229,7 +229,9 @@ Supported containers are MP4, MOV, M4V, WebM, MKV, AVI, and FLV. The operation
 delegates to the same verified metadata scanner and stripper as the generic
 `metadata` command, so detection and removal stay in parity. Video and audio
 streams are not transcoded. For MP4 and MOV, this includes the native TC260
-`AIGC` key and JSON value stored in `moov.udta.meta.keys/ilst`. The inspector
+`AIGC` key and JSON value stored in `moov.udta.meta.keys/ilst`, plus the
+QuickTime-form `meta` variants Doubao's iOS export writes (a bare `meta` box
+as a direct `moov` child, and a keyless `hdlr=mdir` metadata list). The inspector
 seeks past a large `mdat` to find a tail `moov`. Removal stream-copies the
 container in bounded chunks, converts supported top-level provenance boxes to
 same-size `free` boxes, and blanks the TC260 key/value in place. Box sizes,

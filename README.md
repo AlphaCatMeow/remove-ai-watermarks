@@ -107,7 +107,9 @@ The `video metadata` command does not transcode video or audio streams. Unlike
 the image command above, when `-o` is omitted it writes `<source>_clean` and
 preserves the original. MP4 and MOV
 inspection includes the native TC260 `AIGC` tag in
-`moov.udta.meta.keys/ilst`, including a `moov` placed after the media payload.
+`moov.udta.meta.keys/ilst`, including a `moov` placed after the media payload,
+plus the QuickTime-form `meta` variants Doubao's iOS export writes (a bare
+`meta` box as a direct `moov` child, and a keyless `hdlr=mdir` metadata list).
 MKV and WebM inspection reads the normative
 `Segment.Tags.Tag.SimpleTag` placement. AVI uses `LIST/INFO/AIGC`, while FLV
 uses `script.onMetaData.AIGC`. The non-ISOBMFF formats are remuxed with stream

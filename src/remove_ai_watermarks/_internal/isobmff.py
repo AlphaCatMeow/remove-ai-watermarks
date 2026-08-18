@@ -12,7 +12,10 @@ so pixel, video, and audio data is preserved bit-for-bit.
 TC260-PG-20257A video metadata is nested instead:
 ``moov.udta.meta.keys/ilst``. Its detector seeks through those boxes without
 reading media payloads, and its stripper blanks the validated key/value in
-place so fast-start media offsets remain valid.
+place so fast-start media offsets remain valid. Two serialization variants are
+covered: the ISO form (``meta`` as a FullBox under ``udta``) and the QuickTime
+form Doubao's iOS export writes (a bare ``meta`` box as a direct ``moov`` child,
+no FullBox header).
 
 This file intentionally avoids dependencies on format-specific libraries
 (pillow-heif, pillow-jxl, pymp4) so it works on systems where they aren't
@@ -184,68 +187,116 @@ def _tc260_key_indices(
     return found
 
 
+# The box types a TC260-bearing ``meta`` box opens with or contains: ISO files
+# have ``hdlr`` then ``keys``/``ilst``; QuickTime metadata lists have ``hdlr``
+# and ``ilst`` only. Which payload offset (0 vs 4) yields such children is what
+# disambiguates the QuickTime form (no FullBox header) from the ISO one.
+_META_CHILD_TYPES = frozenset({b"hdlr", b"keys", b"ilst"})
+
+
+def _meta_child_boxes(
+    stream: BinaryIO,
+    meta_payload: int,
+    meta_end: int,
+) -> Iterator[tuple[int, int, bytes, int]]:
+    """Yield the child boxes of one ``meta`` box in either serialized form.
+
+    ISO serializes ``meta`` as a FullBox, so its children start 4 bytes into
+    the payload; QuickTime writes a bare box, so they start at 0. Both real
+    forms open with a recognized child (``hdlr``), so the form is picked by
+    which offset's first box type is one of ``_META_CHILD_TYPES``; a wrong
+    probe reads garbage header bytes that match no known type.
+    """
+    for offset in (0, 4):
+        boxes = iter_file_boxes(stream, meta_payload + offset, meta_end)
+        first = next(boxes, None)
+        if first is not None and first[2] in _META_CHILD_TYPES:
+            yield first
+            yield from boxes
+            return
+
+
+def _iter_tc260_meta_boxes(
+    stream: BinaryIO,
+    moov_payload: int,
+    moov_end: int,
+) -> Iterator[tuple[int, int]]:
+    """Yield ``(payload, end)`` of every ``meta`` box that may hold a TC260 label.
+
+    The normative ISO placement is ``moov.udta.meta``; Doubao's iOS MOV export
+    instead stores the label in a QuickTime-form ``meta`` box that hangs
+    directly off ``moov``. Both are yielded so one consumer covers them.
+    """
+    for _start, end, box_type, payload in iter_file_boxes(stream, moov_payload, moov_end):
+        if box_type == b"udta":
+            for _udta_start, udta_end, udta_type, udta_payload in iter_file_boxes(stream, payload, end):
+                if udta_type == b"meta":
+                    yield udta_payload, udta_end
+        elif box_type == b"meta":
+            yield payload, end
+
+
 def _tc260_aigc_regions(
     stream: BinaryIO,
     file_size: int,
-) -> list[tuple[int, int, int, int, bytes]]:
+) -> list[tuple[tuple[int, int] | None, int, int, bytes]]:
     """Locate validated native TC260 entries without reading media payloads.
 
-    Each tuple is ``(key_start, key_end, value_start, value_end, value)``.
+    Each tuple is ``(key_span, value_start, value_end, value)``; ``key_span`` is
+    the byte span of the ``AIGC`` key when the normative ``keys`` box maps the
+    item, or None for the QuickTime metadata-list form (``hdlr=mdir``) Doubao's
+    iOS export writes, where the JSON sits in a bare ``ilst`` data item with no
+    key name to blank.
     """
-    regions: list[tuple[int, int, int, int, bytes]] = []
+    regions: list[tuple[tuple[int, int] | None, int, int, bytes]] = []
     for _moov_start, moov_end, moov_type, moov_payload in iter_file_boxes(stream, 0, file_size):
         if moov_type != b"moov":
             continue
-        for _udta_start, udta_end, udta_type, udta_payload in iter_file_boxes(
-            stream,
-            moov_payload,
-            moov_end,
-        ):
-            if udta_type != b"udta":
-                continue
-            for _meta_start, meta_end, meta_type, meta_payload in iter_file_boxes(
+        for meta_payload, meta_end in _iter_tc260_meta_boxes(stream, moov_payload, moov_end):
+            keys: dict[int, tuple[int, int]] = {}
+            ilst_boxes: list[tuple[int, int]] = []
+            keyed = False
+            for _child_start, child_end, child_type, child_payload in _meta_child_boxes(
                 stream,
-                udta_payload,
-                udta_end,
+                meta_payload,
+                meta_end,
             ):
-                if meta_type != b"meta" or meta_payload + 4 > meta_end:
-                    continue
-                keys: dict[int, tuple[int, int]] = {}
-                ilst_boxes: list[tuple[int, int]] = []
-                for _child_start, child_end, child_type, child_payload in iter_file_boxes(
+                if child_type == b"keys":
+                    keyed = True
+                    keys.update(_tc260_key_indices(stream, child_payload, child_end))
+                elif child_type == b"ilst":
+                    ilst_boxes.append((child_payload, child_end))
+            if not ilst_boxes:
+                continue
+            for ilst_payload, ilst_end in ilst_boxes:
+                for _item_start, item_end, item_type, item_payload in iter_file_boxes(
                     stream,
-                    meta_payload + 4,
-                    meta_end,
+                    ilst_payload,
+                    ilst_end,
                 ):
-                    if child_type == b"keys":
-                        keys.update(_tc260_key_indices(stream, child_payload, child_end))
-                    elif child_type == b"ilst":
-                        ilst_boxes.append((child_payload, child_end))
-                if not keys:
-                    continue
-                for ilst_payload, ilst_end in ilst_boxes:
-                    for _item_start, item_end, item_type, item_payload in iter_file_boxes(
+                    index = int.from_bytes(item_type, "big")
+                    key_span = keys.get(index)
+                    if keyed and key_span is None:
+                        # A keyed (ISO) meta box maps items through ``keys``;
+                        # an unmapped index is not an AIGC entry, and reading
+                        # its value would pull arbitrary metadata (e.g. cover
+                        # art) through the JSON parser on every scan. Only the
+                        # keyless QuickTime list falls through to content
+                        # validation below.
+                        continue
+                    for _data_start, data_end, data_type, data_payload in iter_file_boxes(
                         stream,
-                        ilst_payload,
-                        ilst_end,
+                        item_payload,
+                        item_end,
                     ):
-                        index = int.from_bytes(item_type, "big")
-                        key_span = keys.get(index)
-                        if key_span is None:
+                        value_start = data_payload + 8
+                        value_size = data_end - value_start
+                        if data_type != b"data" or value_size < 0 or value_size > MAX_TC260_VALUE_BYTES:
                             continue
-                        for _data_start, data_end, data_type, data_payload in iter_file_boxes(
-                            stream,
-                            item_payload,
-                            item_end,
-                        ):
-                            value_start = data_payload + 8
-                            value_size = data_end - value_start
-                            if data_type != b"data" or value_size < 0 or value_size > MAX_TC260_VALUE_BYTES:
-                                continue
-                            stream.seek(value_start)
-                            value = stream.read(value_size)
-                            if len(value) == value_size and parse_tc260_aigc_json(value) is not None:
-                                regions.append((*key_span, value_start, data_end, value))
+                        stream.seek(value_start)
+                        value = stream.read(value_size)
+                        if len(value) == value_size and parse_tc260_aigc_json(value) is not None:
+                            regions.append((key_span, value_start, data_end, value))
     return regions
 
 
@@ -257,7 +308,7 @@ def tc260_aigc_payloads(path: str | Path) -> tuple[bytes, ...]:
                 return ()
             stream.seek(0, 2)
             file_size = stream.tell()
-            return tuple(region[4] for region in _tc260_aigc_regions(stream, file_size))
+            return tuple(region[3] for region in _tc260_aigc_regions(stream, file_size))
     except OSError:
         return ()
 
@@ -268,6 +319,8 @@ def blank_tc260_aigc_tags(data: bytes) -> tuple[bytes, int]:
     Removing a nested ``ilst`` item would shift ``mdat`` in a fast-start MP4 and
     invalidate its chunk offsets. Replacing the four-byte key with ``free`` and
     the JSON value with spaces keeps every box size and media offset unchanged.
+    A keyless QuickTime metadata-list entry has no key name, so only its value
+    is blanked.
     """
     if not is_isobmff(data):
         return data, 0
@@ -276,9 +329,10 @@ def blank_tc260_aigc_tags(data: bytes) -> tuple[bytes, int]:
         return data, 0
     out = bytearray(data)
     key_spans: set[tuple[int, int]] = set()
-    for key_start, key_end, value_start, value_end, _value in regions:
-        key_spans.add((key_start, key_end))
-        out[key_start:key_end] = b"free"
+    for key_span, value_start, value_end, _value in regions:
+        if key_span is not None:
+            key_spans.add(key_span)
+            out[key_span[0] : key_span[1]] = b"free"
         out[value_start:value_end] = b" " * (value_end - value_start)
     return bytes(out), len(key_spans)
 
@@ -456,7 +510,7 @@ def strip_isobmff_media_file(
             max_scan=max_box_scan,
         )
         tc260_regions = _tc260_aigc_regions(stream, file_size) if targets is not None else []
-        tc260_key_spans = {(region[0], region[1]) for region in tc260_regions}
+        tc260_key_spans = {region[0] for region in tc260_regions if region[0] is not None}
 
     with atomic_video_output(output_path) as temporary_path:
         with source_path.open("rb") as source_stream, temporary_path.open("r+b") as temporary:
@@ -466,9 +520,10 @@ def strip_isobmff_media_file(
                     temporary.seek(box_start + 4)
                     temporary.write(b"free")
                     _overwrite_range(temporary, payload_start, box_end, byte=b"\x00")
-                for key_start, _key_end, value_start, value_end, _value in tc260_regions:
-                    temporary.seek(key_start)
-                    temporary.write(b"free")
+                for key_span, value_start, value_end, _value in tc260_regions:
+                    if key_span is not None:
+                        temporary.seek(key_span[0])
+                        temporary.write(b"free")
                     _overwrite_range(temporary, value_start, value_end, byte=b" ")
             temporary.flush()
             os.fsync(temporary.fileno())

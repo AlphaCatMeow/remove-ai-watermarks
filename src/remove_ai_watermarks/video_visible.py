@@ -890,11 +890,14 @@ class VisibleMarkPolicy:
     Every value here is MEASURED per provider; the arbiter itself
     (:func:`_stabilize_localizations`) is shared and knows nothing about providers.
 
-    ``accepts_provenance`` is load-bearing rather than cosmetic. Hailuo and Kling have
-    no metadata that could confirm them, so their rows force ``provenance=False``; that
-    used to be guaranteed structurally by wrappers that took no ``provenance``
-    parameter at all, and this flag is what preserves the guarantee now that one entry
-    point serves every mark.
+    ``accepts_provenance`` is load-bearing rather than cosmetic. A vendor with no
+    metadata that could confirm it forces ``provenance=False``; that used to be
+    guaranteed structurally by wrappers that took no ``provenance`` parameter at
+    all, and this flag is what preserves the guarantee now that one entry point
+    serves every mark. Kling keeps the flag off (its TC260 producer code is image
+    evidence; no kling video corpus row ties a producer to the moving mark), while
+    Hailuo accepts it through the MiniMax TC260 label
+    (:func:`has_hailuo_video_provenance`).
 
     ``padding_fraction`` and ``mask_style`` belong to the removal plan rather than the
     arbiter, but they are per-provider constants like the rest, so they live on the same
@@ -969,7 +972,9 @@ VISIBLE_MARK_POLICIES: dict[str, VisibleMarkPolicy] = {
         anchor_iou=0.80,
         padding_fraction=0.12,
         mask_style="box",
-        accepts_provenance=False,
+        # No provenance_weak_floor: the measured weak floor stays the entry bar;
+        # a MiniMax TC260 label only drops the strong-frame requirement for an
+        # already-stable run (see has_hailuo_video_provenance).
     ),
     "kling": VisibleMarkPolicy(
         weak_floor=_KLING_WEAK_CONFIDENCE,
@@ -1458,3 +1463,15 @@ def has_bytedance_video_provenance(markers: dict[str, str]) -> bool:
     ).lower()
     source_type = markers.get("source_type", "").lower()
     return ("bytedance" in identity or "byteplus" in identity) and "trainedalgorithmicmedia" in source_type
+
+
+def has_hailuo_video_provenance(markers: dict[str, str]) -> bool:
+    """Whether a TC260 label names MiniMax, Hailuo's maker, as the producer.
+
+    Hailuo video exports carry no C2PA; their TC260 ``ContentProducer`` is the
+    bare name ``MiniMax`` (verified on retained MiniMax-hailuo clips). The
+    producer travels as its own structural marker (``aigc_producer``, set in
+    ``metadata.get_ai_metadata``), so this matches the field exactly rather
+    than parsing the human-readable ``aigc_label`` sentence.
+    """
+    return markers.get("aigc_producer", "").strip().lower() == "minimax"

@@ -1184,6 +1184,11 @@ def get_ai_metadata(image_path: Path) -> dict[str, str]:
     if (aigc := aigc_label(image_path)) is not None:
         producer = aigc.get("ContentProducer", "")
         result["aigc_label"] = f"China AIGC label (TC260){f'; producer {producer}' if producer else ''}"
+        # The structural producer beside its display rendering: a machine
+        # consumer (video-visible provenance) must not parse the formatted
+        # sentence above, whose wording can change without notice.
+        if producer:
+            result["aigc_producer"] = producer
 
     app_scan = scan_head(image_path)
     app_provenance, app_generator = _app_metadata_evidence(app_scan)

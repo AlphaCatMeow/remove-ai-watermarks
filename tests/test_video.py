@@ -65,6 +65,47 @@ def _video_with_tc260(path: Path, *, media_payload: bytes = _VIDEO_PAYLOAD) -> P
     return path
 
 
+def _hdlr(handler: bytes) -> bytes:
+    # version/flags + pre_defined + handler_type + reserved[3]; the TC260 walker
+    # never parses it, but a real-shaped hdlr keeps the fixture honest.
+    return _box(b"hdlr", b"\x00\x00\x00\x00" + b"\x00\x00\x00\x00" + handler + b"\x00" * 12)
+
+
+def _quicktime_meta(*children: bytes) -> bytes:
+    # QuickTime form: no 4-byte FullBox header before the children.
+    return _box(b"meta", b"".join(children))
+
+
+def _video_with_tc260_moov_meta(path: Path, *, media_payload: bytes = _VIDEO_PAYLOAD) -> Path:
+    """Doubao's iOS export form: a QuickTime ``meta`` box as a direct ``moov`` child."""
+    keys = _box(
+        b"keys",
+        b"\x00\x00\x00\x00"
+        + (2).to_bytes(4, "big")
+        + _metadata_key(b"com.apple.quicktime.artwork")
+        + _metadata_key(b"AIGC"),
+    )
+    ilst = _box(
+        b"ilst",
+        _metadata_value(1, b'{"source_type":"","data":{"product":"doubao"}}') + _metadata_value(2, _TC260_AIGC),
+    )
+    meta = _quicktime_meta(_hdlr(b"mdta"), keys, ilst)
+    path.write_bytes(_MP4_FTYP + _box(b"mdat", media_payload) + _box(b"moov", meta))
+    return path
+
+
+def _video_with_tc260_mdir_list(path: Path, *, media_payload: bytes = _VIDEO_PAYLOAD) -> Path:
+    """Doubao's iOS QuickTime metadata list: ``udta.meta(hdlr=mdir)/ilst`` data
+    items with numeric indices and no ``keys`` box at all."""
+    ilst = _box(
+        b"ilst",
+        _metadata_value(0, b"vid:standard-video-id") + _metadata_value(0, _TC260_AIGC),
+    )
+    meta = _quicktime_meta(_hdlr(b"mdir"), ilst)
+    path.write_bytes(_MP4_FTYP + _box(b"mdat", media_payload) + _box(b"moov", _box(b"udta", meta)))
+    return path
+
+
 def _ebml_size(value: int) -> bytes:
     for length in range(1, 9):
         if value < (1 << (7 * length)) - 1:
@@ -611,6 +652,67 @@ class TestVideoMetadataApi:
         assert b"standard title" in cleaned
         assert b"AIGC" not in cleaned
         assert _TC260_AIGC not in cleaned
+
+    @pytest.mark.parametrize("suffix", [".mp4", ".mov"])
+    def test_inspects_native_tc260_in_quicktime_moov_meta(self, tmp_path: Path, suffix: str):
+        # Doubao's iOS export stores the label in a QuickTime-form meta box
+        # (no FullBox header) hanging directly off moov, not under udta.
+        from remove_ai_watermarks.video import inspect_video_metadata
+
+        source = _video_with_tc260_moov_meta(tmp_path / f"source{suffix}")
+
+        report = inspect_video_metadata(source)
+
+        assert report.has_ai_metadata is True
+        assert report.markers["aigc_label"].endswith("producer 00119144030008867405X210002")
+
+    def test_removes_native_tc260_in_quicktime_moov_meta(self, tmp_path: Path):
+        from remove_ai_watermarks.video import remove_video_metadata
+
+        source = _video_with_tc260_moov_meta(tmp_path / "source.mov")
+        output = tmp_path / "clean.mov"
+
+        result = remove_video_metadata(source, output)
+        cleaned = output.read_bytes()
+
+        assert result.detected["aigc_label"].startswith("China AIGC label")
+        # The artwork item's Doubao product JSON is app-export provenance, a
+        # separate signal the TC260 blanker does not touch -- as on the real
+        # Doubao iOS export this fixture mirrors.
+        assert result.remaining == {"app_provenance": "App export provenance (ByteDance Doubao)"}
+        assert len(cleaned) == source.stat().st_size
+        assert _VIDEO_PAYLOAD in cleaned
+        assert _TC260_AIGC not in cleaned
+
+    def test_inspects_native_tc260_in_quicktime_mdir_metadata_list(self, tmp_path: Path):
+        # The second Doubao iOS variant: a QuickTime metadata list under
+        # udta.meta with hdlr=mdir and ilst data items but no keys box.
+        from remove_ai_watermarks.video import inspect_video_metadata
+
+        source = _video_with_tc260_mdir_list(tmp_path / "source.mov")
+
+        report = inspect_video_metadata(source)
+
+        assert report.has_ai_metadata is True
+        assert "aigc_label" in report.markers
+
+    def test_removes_native_tc260_in_quicktime_mdir_metadata_list(self, tmp_path: Path):
+        from remove_ai_watermarks.video import remove_video_metadata
+
+        source = _video_with_tc260_mdir_list(tmp_path / "source.mov")
+        output = tmp_path / "clean.mov"
+
+        result = remove_video_metadata(source, output)
+        cleaned = output.read_bytes()
+
+        assert result.detected["aigc_label"].startswith("China AIGC label")
+        assert result.remaining == {}
+        assert len(cleaned) == source.stat().st_size
+        assert _VIDEO_PAYLOAD in cleaned
+        # The keyless entry has no key name to blank; only the JSON is spaced
+        # out, and the neighboring standard ilst item survives untouched.
+        assert _TC260_AIGC not in cleaned
+        assert b"vid:standard-video-id" in cleaned
 
     def test_streams_large_isobmff_without_full_file_read(
         self,
@@ -1893,6 +1995,25 @@ class TestAdditionalProviderTemporalArbiter:
 
         assert stabilize(weak) == [None] * 12
         assert stabilize(strong) == [box] * 12
+
+    def test_hailuo_provenance_accepts_sub_strong_stable_run(self):
+        # A TC260 label naming MiniMax relaxes only the strong-frame requirement:
+        # the entry bar stays the measured weak floor (0.30), so a stable run
+        # between weak and strong (0.34) passes with provenance, fails without.
+        from remove_ai_watermarks.video_visible import FrameLocalization, stabilize_localizations
+
+        detections = [FrameLocalization(index, 0.31, self._HAILUO_BOX) for index in range(12)]
+
+        assert stabilize_localizations("hailuo", detections, provenance=False) == [None] * 12
+        assert stabilize_localizations("hailuo", detections, provenance=True) == [self._HAILUO_BOX] * 12
+
+    def test_hailuo_provenance_requires_a_minimax_producer_label(self):
+        from remove_ai_watermarks.video_visible import has_hailuo_video_provenance
+
+        assert has_hailuo_video_provenance({"aigc_producer": "MiniMax"})
+        assert not has_hailuo_video_provenance({"aigc_producer": "001191110102MACQD9K64010000"})
+        assert not has_hailuo_video_provenance({"aigc_label": "China AIGC label (TC260); producer MiniMax"})
+        assert not has_hailuo_video_provenance({"issuer": "Some other vendor"})
 
 
 class TestVideoVisibleScan:

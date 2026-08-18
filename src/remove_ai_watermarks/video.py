@@ -239,6 +239,7 @@ def _visible_removal_plan(
     from remove_ai_watermarks.video_visible import (
         VISIBLE_MARK_POLICIES,
         has_bytedance_video_provenance,
+        has_hailuo_video_provenance,
         has_sora_provenance,
         has_veo_provenance,
         stabilize_localizations,
@@ -249,6 +250,7 @@ def _visible_removal_plan(
         "veo": has_veo_provenance,
         "seedance": has_bytedance_video_provenance,
         "dola": has_bytedance_video_provenance,
+        "hailuo": has_hailuo_video_provenance,
     }.get(selected_mark)
     policy = VISIBLE_MARK_POLICIES[selected_mark]
     regions = stabilize_localizations(

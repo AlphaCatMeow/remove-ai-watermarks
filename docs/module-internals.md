@@ -158,7 +158,14 @@ Native MP4/MOV TC260 labels follow TC260-PG-20257A:
 `moov.udta.meta.keys` maps an `AIGC` key to a raw JSON value in `ilst`.
 [`_internal/isobmff.py`](../src/remove_ai_watermarks/_internal/isobmff.py) walks those
 nested boxes by seeking, so detection reaches a tail `moov` without reading the
-preceding `mdat`. The MP4/MOV/M4V/M4A removal path first validates the top-level
+preceding `mdat`. Two Doubao iOS variants sit outside that normative placement
+and are covered by the same walker (2026-08-17 corpus findings, both previously
+undetected): a QuickTime-form `meta` box as a *direct* `moov` child (no FullBox
+header, disambiguated by probing the child-box offset), and a QuickTime
+`hdlr=mdir` metadata list under `udta.meta` whose `ilst` data items carry the
+validated JSON with no `keys` box at all (content-validated, so only genuine
+TC260 JSON matches; the keyless entry has no key name to blank, so its value
+alone is spaced out). The MP4/MOV/M4V/M4A removal path first validates the top-level
 box walk, then copies the source to a sibling temporary file in bounded chunks.
 Supported C2PA/JUMBF/AI-label boxes become same-size `free` boxes with blank
 payloads; TC260 removal changes the four-byte key to `free` and blanks only the

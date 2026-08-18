@@ -37,7 +37,7 @@ when you can select the affected area yourself.
 | `veo` | Current four-point diamond and legacy `Veo` text | Fixed bottom-right corner | Uses separate silhouettes and requires a recurring match; learned fill is preferable on structured backgrounds. |
 | `seedance` | Boxed `AI` label | Fixed bottom-right corner | Requires an anchored recurring match; the full localized box is filled because a thinner synthetic shape mask leaves the real translucent rim behind. |
 | `dola` | `Dola AI` text | Fixed bottom-right corner | Requires an anchored recurring match; ByteDance or BytePlus provenance can relax only an existing visual run. |
-| `hailuo` | `MINIMAX \| hailuo AI` composite label | Fixed lower edge | Uses a synthetic waveform, text, separator, and ring silhouette; the complete recurring label box is filled. |
+| `hailuo` | `MINIMAX \| hailuo AI` composite label | Fixed lower edge | Uses a synthetic waveform, text, separator, and ring silhouette; the complete recurring label box is filled. A TC260 label naming MiniMax as producer can relax only an existing stable run. |
 | `kling` | Kling swirl, `KLING AI`, version, and optional `PRO` suffix | Fixed bottom-right edge | Combines a synthetic logo rescue with font variants, an edge gate, a white-label gate, and anchored temporal recurrence. |
 
 `video identify`, `video visible`, and `video all` share this registry and the
@@ -162,6 +162,7 @@ not a universal clean verdict.
 | FLUX | None registered | Diffusion regeneration; optional open decoder | C2PA for supported sources |
 | Adobe Firefly | None registered | Optional TrustMark Variant P decoder | C2PA |
 | Midjourney | None registered | No registered pixel decoder | EXIF, XMP, and IPTC signals |
+| Luma AI | None registered | No registered pixel decoder | PNG text generator tags (Uni-1) |
 | ByteDance generators | Doubao and Jimeng marks | No registered pixel decoder | TC260 AIGC, supported C2PA, and exact app-export AIGC disclosures |
 | Qwen | Qwen mark | No registered pixel decoder | TC260 AIGC |
 | Kling | Kling image and video marks | No registered pixel decoder | TC260 AIGC |

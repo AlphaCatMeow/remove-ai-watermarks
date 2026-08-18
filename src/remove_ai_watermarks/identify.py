@@ -796,6 +796,8 @@ _AI_VENDOR_TOKENS: tuple[tuple[str, str], ...] = (
     ("fal-ai", "fal.ai"),
     ("bria", "Bria"),
     ("apple photos clean up", "Apple"),
+    ("luma ai", "Luma AI"),
+    ("lumalabs", "Luma AI"),
 )
 
 
