@@ -198,16 +198,21 @@ def draft_available() -> bool:
 def _build_engines() -> tuple[Any, dict[str, Any]]:
     from paddleocr import PaddleOCR, TextRecognition
 
+    # enable_mkldnn=False is load-bearing on linux: paddle's oneDNN PIR executor
+    # raises NotImplementedError on the text-detection graph there (seen on the
+    # Modal draft container, 2026-08-19), while the reference CPU path runs. The
+    # eval scripts never hit it because macOS pads take a different path.
     detector = PaddleOCR(
         lang="ch",
         use_doc_orientation_classify=False,
         use_doc_unwarping=False,
         use_textline_orientation=False,
+        enable_mkldnn=False,
     )
     engines = {
-        "en": TextRecognition(model_name="en_PP-OCRv5_mobile_rec"),
-        "ru": TextRecognition(model_name="eslav_PP-OCRv5_mobile_rec"),
-        "ch": TextRecognition(model_name="PP-OCRv5_server_rec"),
+        "en": TextRecognition(model_name="en_PP-OCRv5_mobile_rec", enable_mkldnn=False),
+        "ru": TextRecognition(model_name="eslav_PP-OCRv5_mobile_rec", enable_mkldnn=False),
+        "ch": TextRecognition(model_name="PP-OCRv5_server_rec", enable_mkldnn=False),
     }
     return detector, engines
 
