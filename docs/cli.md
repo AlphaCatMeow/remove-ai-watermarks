@@ -416,6 +416,12 @@ remove-ai-watermarks invisible image.png -o clean.png \
   --pipeline qwen-zimage --text-manifest verified-lines.json --force
 ```
 
+``verified: true`` may also be set by an automated operator (a service) that
+attests machine-verified geometry: stability-gated detector boxes inside sane
+caps. The restoration pipeline consumes box/script geometry only - the ``text``
+field is advisory metadata and never reaches the pixels - so what verification
+must guarantee is the geometry, and a machine gate can.
+
 Since 0.27.1 the global 15% Qwen-VAE fidelity-anchor blend is off by default: it
 was measured to return detector-visible OpenAI SynthID on poster-scale manifests
 (official Content Provenance API, 2026-08-19). `--fidelity-anchor` restores the
