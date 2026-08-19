@@ -69,6 +69,14 @@ SDXL_ZIMAGE_OPENAI_STRENGTH = 0.15
 SDXL_ZIMAGE_GEMINI_STRENGTH = 0.25
 SDXL_ZIMAGE_UNKNOWN_STRENGTH = SDXL_ZIMAGE_GEMINI_STRENGTH
 
+# qwen-zimage keeps its resolution curve for openai/unknown content, but Google
+# content takes this flat oracle-measured floor instead of the curve (whose top,
+# 0.154, left a 4.33 MP CJK-sign fixture detected x3 on the full production path
+# with a valid pixel control, 2026-08-18). 0.30 anchors measured clean in Gemini
+# across two fixtures and two work accounts (CJK sign + 18-face, 3/3 checks each,
+# 2026-08 research) and stayed clean under the vae-glyphs donor layer on top.
+QWEN_ZIMAGE_GOOGLE_STRENGTH = 0.30
+
 
 # sdxl-zimage picks its strength from the VENDOR (unlike qwen-zimage, which derives it
 # from image area). An unlisted or unknown vendor falls back to the Gemini value.
@@ -103,7 +111,8 @@ def resolve_adaptive_polish(adaptive_polish: bool | None, pipeline: str) -> bool
 def strength_default_help() -> str:
     """Describe the live default policy without duplicating its values."""
     return (
-        "profile-adaptive (qwen-zimage uses resolution-adaptive denoise; sdxl-zimage "
+        "profile-adaptive (qwen-zimage uses resolution-adaptive denoise, with a "
+        f"flat oracle-measured Google floor of {QWEN_ZIMAGE_GOOGLE_STRENGTH}; sdxl-zimage "
         f"uses OpenAI {SDXL_ZIMAGE_OPENAI_STRENGTH} / Google {SDXL_ZIMAGE_GEMINI_STRENGTH} / "
         f"unknown {SDXL_ZIMAGE_UNKNOWN_STRENGTH}, from the C2PA issuer)"
     )
@@ -118,10 +127,14 @@ def resolve_strength(
 ) -> float:
     """Resolve a user override or the calibrated policy for a profile and vendor.
 
-    Total by design. qwen-zimage picks its strength from image area rather than from
-    the vendor, so it needs ``size``; returning ``None`` for it instead would push that
+    Total by design. qwen-zimage picks its strength from image area rather than
+    from the vendor, so it needs ``size``; returning ``None`` for it instead would push that
     branch onto every caller and move one of the two strength policies outside this
     module. ``size`` is required for qwen-zimage without an explicit strength.
+    One measured exception since 0.27.2: Google-provenance content on qwen-zimage
+    takes the flat ``QWEN_ZIMAGE_GOOGLE_STRENGTH`` floor instead of the area curve
+    (the curve's 0.154 top left a 4.33 MP fixture oracle-detected on the full
+    production path; see the constant's comment).
     """
     if strength is not None:
         return strength
@@ -129,6 +142,8 @@ def resolve_strength(
         return _SDXL_ZIMAGE_STRENGTH_BY_VENDOR.get((vendor or "").casefold(), SDXL_ZIMAGE_UNKNOWN_STRENGTH)
     if size is None:
         raise ValueError("qwen-zimage resolves strength from image area, so size is required")
+    if (vendor or "").casefold() == "google":
+        return QWEN_ZIMAGE_GOOGLE_STRENGTH
     from remove_ai_watermarks._internal.qwen_zimage_pipeline import resolution_adaptive_denoise
 
     return resolution_adaptive_denoise(*size)

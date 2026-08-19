@@ -178,8 +178,12 @@ The two profiles resolve an unset strength differently, because different things
 were measured for each.
 
 `qwen-zimage` reads it from image area, through the resolution-adaptive denoise
-curve. The vendor is deliberately ignored: the curve, not the issuer, is what was
-calibrated.
+curve. The vendor is deliberately ignored for openai/unknown content: the curve,
+not the issuer, is what was calibrated. One measured exception (0.27.2):
+Google-provenance content takes the flat `QWEN_ZIMAGE_GOOGLE_STRENGTH` 0.30 floor
+- the curve's 0.154 top left a 4.33 MP fixture oracle-detected on the full
+production path (2026-08-18), while 0.30 anchors measured clean on two fixtures
+in two accounts.
 
 `sdxl-zimage` reads it from the C2PA issuer, on a flat ladder:
 

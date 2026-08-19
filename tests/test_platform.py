@@ -14,6 +14,7 @@ import pytest
 from remove_ai_watermarks._internal.utils import get_image_format, is_supported_format
 from remove_ai_watermarks._internal.watermark_profiles import (
     PROFILE_CHOICES,
+    QWEN_ZIMAGE_GOOGLE_STRENGTH,
     REMOVAL_MODULES,
     SDXL_ZIMAGE_GEMINI_STRENGTH,
     SDXL_ZIMAGE_OPENAI_STRENGTH,
@@ -204,16 +205,21 @@ class TestResolveStrength:
 
         qwen-zimage picks strength from image area, so it takes the size. Returning
         None for it would push that branch onto every caller and leave one of the two
-        strength policies living outside this module. The vendor is ignored here on
-        purpose - the curve, not the issuer, is what was calibrated.
+        strength policies living outside this module. Google content is the one
+        measured exception since 0.27.2: it takes the flat oracle-measured floor
+        instead of the curve (the curve's 0.154 top left a 4.33 MP fixture
+        oracle-detected on the full production path).
         """
-        assert resolve_strength(None, "google", "qwen-zimage", size=(2000, 1850)) == pytest.approx(0.154)
+        assert resolve_strength(None, "openai", "qwen-zimage", size=(2000, 1850)) == pytest.approx(0.154)
         assert resolve_strength(None, None, "qwen-zimage", size=(600, 500)) == pytest.approx(0.084)
+        assert resolve_strength(None, "google", "qwen-zimage", size=(600, 500)) == QWEN_ZIMAGE_GOOGLE_STRENGTH
+        # The floor holds at every size, not only above the curve's top rung.
+        assert resolve_strength(None, "google", "qwen-zimage", size=(2000, 1850)) == QWEN_ZIMAGE_GOOGLE_STRENGTH
 
     def test_qwen_zimage_without_a_size_fails_loudly(self):
         """A missing size must not silently fall back to some vendor value."""
         with pytest.raises(ValueError, match="size is required"):
-            resolve_strength(None, "google", "qwen-zimage")
+            resolve_strength(None, "openai", "qwen-zimage")
 
     def test_sdxl_zimage_uses_its_flat_vendor_ladder(self):
 

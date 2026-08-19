@@ -866,6 +866,7 @@ def test_invisible_engine_passes_the_seed_but_never_a_step_count(tmp_image_path,
 def test_sdxl_zimage_strength_is_vendor_adaptive_and_leaves_other_profiles_alone():
     """An SDXL global pass needs more strength than Qwen, so it gets its own policy."""
     from remove_ai_watermarks._internal.watermark_profiles import (
+        QWEN_ZIMAGE_GOOGLE_STRENGTH,
         SDXL_ZIMAGE_GEMINI_STRENGTH,
         SDXL_ZIMAGE_OPENAI_STRENGTH,
         resolve_strength,
@@ -875,11 +876,14 @@ def test_sdxl_zimage_strength_is_vendor_adaptive_and_leaves_other_profiles_alone
     assert resolve_strength(None, "google", "sdxl-zimage") == pytest.approx(SDXL_ZIMAGE_GEMINI_STRENGTH)
     # Unknown provenance takes the stricter of the two.
     assert resolve_strength(None, None, "sdxl-zimage") == pytest.approx(SDXL_ZIMAGE_GEMINI_STRENGTH)
-    # An explicit value still wins, and qwen-zimage is untouched by this ladder: it
-    # defers to its resolution curve rather than to a vendor value.
+    # An explicit value still wins, and qwen-zimage's curve is untouched by this
+    # ladder - with the one measured exception: Google content takes the flat
+    # oracle floor (0.27.2), not the area curve.
     assert resolve_strength(0.4, "google", "sdxl-zimage") == pytest.approx(0.4)
     assert resolve_strength(None, "openai", "qwen-zimage", size=(2000, 1850)) == pytest.approx(0.154)
-    assert resolve_strength(None, "google", "qwen-zimage", size=(2000, 1850)) == pytest.approx(0.154)
+    assert resolve_strength(None, "google", "qwen-zimage", size=(2000, 1850)) == pytest.approx(
+        QWEN_ZIMAGE_GOOGLE_STRENGTH
+    )
 
 
 def test_sdxl_zimage_shares_the_fixed_seed_contract():

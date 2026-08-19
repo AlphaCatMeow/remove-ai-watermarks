@@ -769,3 +769,15 @@ reproducible verification requires a fixed seed.
 8. Jiang et al. (2025). **VideoMarkBench: Benchmarking Robustness of Video
    Watermarking.** arXiv:2505.21620.
    https://arxiv.org/abs/2505.21620
+
+**Google floor on qwen-zimage (0.27.2, 2026-08-19).** The bracket above did not
+survive the full production path: on the 4.33 MP CJK-sign fixture (visible-stage
+sparkle removal -> qwen-zimage seed 0 at the curve's 0.154 top -> resize-back ->
+metadata strip), the Gemini verifier detected SynthID x3 with a valid
+pixel-identical stripped control in the same session. Google-provenance content
+now takes a flat `QWEN_ZIMAGE_GOOGLE_STRENGTH = 0.30` floor instead of the area
+curve - 0.30 anchors measured clean in Gemini on two fixtures (CJK sign +
+18-face) at 3/3 checks across two work accounts, and stayed clean with the
+vae-glyphs donor layer on top; openai/unknown content keeps the resolution
+curve. An explicit strength still wins. Certification artifacts: raiw-app
+`data/certification/text-restoration-2026-08-18/` (the failing re-baseline).
