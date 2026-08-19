@@ -190,6 +190,7 @@ class WatermarkRemover:
         tile_size: int = 1024,
         tile_overlap: int = 128,
         text_manifest: VerifiedTextManifest | None = None,
+        fidelity_anchor: bool = False,
     ) -> Path:
         """Regenerate image pixels and write the result without AI metadata.
 
@@ -219,6 +220,7 @@ class WatermarkRemover:
             tile_size=tile_size,
             tile_overlap=tile_overlap,
             text_manifest=text_manifest,
+            fidelity_anchor=fidelity_anchor,
         )
         self._write_output(result, destination)
         return destination
