@@ -21,14 +21,11 @@ changes under crop jitter or whose minimum confidence is below the threshold.
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import logging
 import os
 import sys
-import unicodedata
 from pathlib import Path
-from typing import Any
 
 import click
 import numpy as np
@@ -37,38 +34,15 @@ from PIL import Image
 log = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-RESTORATION_SCRIPT = ROOT / "scripts/selective_text_restoration.py"
 
-from scripts._text_eval import normalize_text  # noqa: E402
-
-
-def _load_restoration_module() -> Any:
-    spec = importlib.util.spec_from_file_location("selective_text_restoration_for_inference", RESTORATION_SCRIPT)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"unable to load {RESTORATION_SCRIPT}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-def _has_script(text: str, script: str) -> bool:
-    return any(script in unicodedata.name(character, "") for character in text)
-
-
-def choose_language(probes: dict[str, tuple[str, float]]) -> str:
-    if _has_script(probes["ch"][0], "CJK"):
-        return "ch"
-    if _has_script(probes["ru"][0], "CYRILLIC"):
-        return "ru"
-    return "en"
-
-
-def stable_recognition(reads: list[tuple[str, float]], min_score: float = 0.85) -> str | None:
-    normalized = {normalize_text(text) for text, _score in reads}
-    if len(normalized) != 1 or min(score for _text, score in reads) < min_score:
-        return None
-    return reads[0][0]
+# Dogfoods the packaged draft API (remove_ai_watermarks.text_draft); this script
+# keeps only the CLI wrapper so the package stays the one home for the logic.
+from remove_ai_watermarks.text_draft import (  # noqa: E402
+    _detect_line_boxes,
+    _recognize,
+    choose_language,
+    stable_recognition,
+)
 
 
 @click.command()
@@ -81,7 +55,6 @@ def main(source: Path, out: Path, min_score: float) -> None:
     os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
     from paddleocr import PaddleOCR, TextRecognition
 
-    restoration = _load_restoration_module()
     source_rgb = np.asarray(Image.open(source).convert("RGB"))
     detector = PaddleOCR(
         lang="ch",
@@ -94,19 +67,17 @@ def main(source: Path, out: Path, min_score: float) -> None:
         "ru": TextRecognition(model_name="eslav_PP-OCRv5_mobile_rec"),
         "ch": TextRecognition(model_name="PP-OCRv5_server_rec"),
     }
-    boxes = restoration.detect_line_boxes(detector, source_rgb)
+    boxes = _detect_line_boxes(detector, source_rgb)
     accepted = []
     rejected = []
     for box in boxes:
         probes = {}
         for language, engine in engines.items():
             script = "cjk" if language == "ch" else "alphabetic"
-            line = restoration.TextLine(box, "", script)
-            probes[language] = restoration._recognize(engine, source_rgb, line, 0.1)
+            probes[language] = _recognize(engine, source_rgb, box, script, 0.1)
         language = choose_language(probes)
         script = "cjk" if language == "ch" else "alphabetic"
-        line = restoration.TextLine(box, "", script)
-        reads = [restoration._recognize(engines[language], source_rgb, line, ratio) for ratio in (0.08, 0.12, 0.2)]
+        reads = [_recognize(engines[language], source_rgb, box, script, ratio) for ratio in (0.08, 0.12, 0.2)]
         text = stable_recognition(reads, min_score)
         result = {
             "box": box,

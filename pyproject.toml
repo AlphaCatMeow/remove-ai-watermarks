@@ -4,7 +4,7 @@
 # on it, including the ComfyUI node package. The console script below carries
 # the same weight, since users have it on PATH.
 name = "remove-ai-watermarks"
-version = "0.27.2"
+version = "0.28.0"
 description = "AI watermark remover for visible, invisible, and provenance marks in images and video"
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
@@ -124,6 +124,14 @@ qwen-zimage = [
 # candidate glyphs before exact Qwen-VAE cores are composited back.
 text-restoration = [
     "remove-ai-watermarks[qwen-zimage,lama]",
+]
+# Draft-only OCR proposals for verified-text manifests. CPU, no torch:
+# PaddleOCR detection plus three script-chosen recognition engines. The models
+# download on first use and are cached by huggingface_hub; never bundled.
+text-draft = [
+    "paddleocr>=3.3.3",
+    "paddlepaddle>=3.0.0",
+    "huggingface-hub>=0.20.0",
 ]
 # Adobe TrustMark decoder -- the open, keyless watermark behind Adobe Durable
 # Content Credentials (soft-binding alg ``com.adobe.trustmark.P``). Optional

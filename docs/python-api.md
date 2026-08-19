@@ -621,6 +621,29 @@ Content Provenance API, 2026-08-19 - detected x6 with the anchor, clean x6
 without it, controls and base outputs validated in the same sessions). Pass
 `fidelity_anchor=True` to reproduce the 0.27.0 research behavior.
 
+### Drafting manifest lines
+
+`remove_ai_watermarks.text_draft` proposes lines for a manifest; it never
+produces verified ones:
+
+```python
+from remove_ai_watermarks.text_draft import draft_text_lines
+
+draft = draft_text_lines(Path("watermarked.png"))
+for line in draft.accepted:
+    print(line.box, line.script, line.min_score, line.text)
+```
+
+Install `remove-ai-watermarks[text-draft]` (CPU, no torch: PaddleOCR detection
+plus three script-chosen recognition engines). A line lands in `accepted` only
+when three crop paddings normalize identically and every confidence clears
+`min_score` (default 0.85); `accepted` means crop-stable, NOT ground-truth-
+correct - on the reference posters the draft's exact-text precision was 90.0%
+and 94.4% because high-confidence OCR still lost punctuation. Every accepted
+line needs a human yes/no before a manifest may claim `verified: true`.
+`source_pixel_sha256` is re-exported here for building the manifest's
+pixel-binding hash against the exact source the engine will decode.
+
 `remove_watermark` takes strength, seed, tiling, resolution, and postprocessing
 controls. It takes no model id, step count or guidance scale, and neither does the
 constructor: each profile pins its model stack, its per-stage schedule and CFG
