@@ -416,6 +416,12 @@ remove-ai-watermarks invisible image.png -o clean.png \
   --pipeline qwen-zimage --text-manifest verified-lines.json --force
 ```
 
+Since 0.27.1 the global 15% Qwen-VAE fidelity-anchor blend is off by default: it
+was measured to return detector-visible OpenAI SynthID on poster-scale manifests
+(official Content Provenance API, 2026-08-19). `--fidelity-anchor` restores the
+0.27.0 research behavior; text-box fidelity lost by the default is well under one
+MAE point on the measured fixtures.
+
 The manifest is a JSON object with `schema_version: 1`, `verified: true`, decoded
 RGB dimensions, `source_pixel_sha256`, and a non-empty `lines` array. Each line has
 an integer `[x1, y1, x2, y2]` box, exact `text`, a non-empty `script`, and an optional

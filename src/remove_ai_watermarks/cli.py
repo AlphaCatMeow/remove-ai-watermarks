@@ -321,6 +321,16 @@ _text_manifest_option = click.option(
     ),
 )
 
+_fidelity_anchor_option = click.option(
+    "--fidelity-anchor/--no-fidelity-anchor",
+    default=False,
+    help=(
+        "With --text-manifest: blend 15% of the Qwen-VAE donor across the whole "
+        "frame. Off by default - the global blend was measured to return "
+        "detector-visible OpenAI SynthID on poster-scale manifests."
+    ),
+)
+
 
 _visible_backend_option = click.option(
     "--backend",
@@ -798,6 +808,7 @@ def cmd_erase(
 @_force_option
 @_cpu_offload_option
 @_text_manifest_option
+@_fidelity_anchor_option
 @click.pass_context
 def cmd_invisible(
     ctx: click.Context,
@@ -818,6 +829,7 @@ def cmd_invisible(
     force: bool,
     cpu_offload: bool,
     text_manifest: Path | None,
+    fidelity_anchor: bool,
 ) -> None:
     """Remove invisible AI watermarks (SynthID, StableSignature, TreeRing).
 
@@ -880,6 +892,7 @@ def cmd_invisible(
             tile_size=tile_size,
             tile_overlap=tile_overlap,
             text_manifest=text_manifest,
+            fidelity_anchor=fidelity_anchor,
         )
     except (OSError, RuntimeError, ValueError) as exc:
         console.print(f"  Error: {exc}")
@@ -1428,6 +1441,7 @@ def cmd_identify(ctx: click.Context, source: Path, no_visible: bool, as_json: bo
 @_force_option
 @_cpu_offload_option
 @_text_manifest_option
+@_fidelity_anchor_option
 @click.pass_context
 def cmd_all(
     ctx: click.Context,
@@ -1450,6 +1464,7 @@ def cmd_all(
     force: bool,
     cpu_offload: bool,
     text_manifest: Path | None,
+    fidelity_anchor: bool,
 ) -> None:
     """Remove ALL watermarks: visible + invisible + metadata.
 
@@ -1528,6 +1543,7 @@ def cmd_all(
                 tile_size=tile_size,
                 tile_overlap=tile_overlap,
                 text_manifest=text_manifest,
+                fidelity_anchor=fidelity_anchor,
             ),
             force=force,
             progress=progress,

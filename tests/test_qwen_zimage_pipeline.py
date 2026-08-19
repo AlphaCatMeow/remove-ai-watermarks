@@ -647,8 +647,16 @@ def test_no_face_path_still_runs_verified_text_restoration(monkeypatch):
     result = pipeline.run(source, strength=0.1, seed=0, text_manifest=manifest)
 
     assert result is restored
+    # Off by default since 0.27.1 (leak finding, docs/text-protection-research.md):
+    # no whole-frame donor blend; the raw global result feeds restoration.
+    blend.assert_not_called()
+    restore.assert_called_once_with(source, global_result, donor, manifest.lines)
+
+    result = pipeline.run(source, strength=0.1, seed=0, text_manifest=manifest, fidelity_anchor=True)
+
+    assert result is restored
     blend.assert_called_once_with(global_result, donor)
-    restore.assert_called_once_with(source, anchor, donor, manifest.lines)
+    restore.assert_called_with(source, anchor, donor, manifest.lines)
 
 
 def test_watermark_remover_dispatches_to_full_pipeline(tmp_path, monkeypatch):

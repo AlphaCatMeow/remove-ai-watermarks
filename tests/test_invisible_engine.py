@@ -73,6 +73,15 @@ class TestVerifiedTextMode:
                     **kwargs,
                 )
 
+    def test_rejects_fidelity_anchor_without_manifest(self, tmp_path):
+        import pytest
+
+        with pytest.raises(ValueError, match="fidelity_anchor requires a text manifest"):
+            self._engine().remove_watermark(
+                tmp_path / "unused.png",
+                fidelity_anchor=True,
+            )
+
     def test_loads_and_forwards_verified_manifest(self, tmp_path, monkeypatch):
         import json
 
@@ -111,6 +120,14 @@ class TestVerifiedTextMode:
         engine.remove_watermark(source, output, text_manifest=manifest)
 
         assert seen["text_manifest"].lines[0].text == "Exact"
+        # Leak-safe default since 0.27.1: the global 15% donor blend is OFF unless
+        # explicitly requested (measured to return detector-visible OpenAI SynthID
+        # on poster-scale manifests; see docs/text-protection-research.md).
+        assert seen["fidelity_anchor"] is False
+
+        engine.remove_watermark(source, output, text_manifest=manifest, fidelity_anchor=True)
+
+        assert seen["fidelity_anchor"] is True
 
 
 class TestNativeOutputSize:

@@ -343,3 +343,29 @@ The stable errors were punctuation: one lost English comma and an ideographic
 comma consistently replaced by ASCII. Thus crop agreement and confidence do
 not verify literal text. The helper is retained only to seed annotations; every
 proposal needs manual review before it can enter the restoration compositor.
+
+## Production-path anchor leak and fix (2026-08-19)
+
+The engine `text_manifest=` path (unlike the research compositor above) blends a
+15% Qwen-VAE fidelity anchor across the WHOLE frame before glyph restoration.
+Certified through the official OpenAI Content Provenance API on the exact
+production path (qwen-zimage, seed 0, no strength override, untiled, LANCZOS
+resize-back, metadata strip; library 0.27.0 @ 50d9f448):
+
+- controls (pixel-identical metadata-stripped sources): `synthid: detected` -
+  the pixel channel was proven live before every session;
+- base outputs: `clean` x6 (two 20-line posters, 3 attempts each);
+- text-restored WITH the anchor: `synthid: detected` x6, deterministic;
+- text-restored with `FIDELITY_BLEND_ALPHA = 0` (runtime ablation, base bytes
+  identical between runs): `clean` x6.
+
+The anchor was therefore the leak channel: a 15% global donor admixture over a
+scrubbed frame returns enough OpenAI SynthID for the provider detector. Fidelity
+cost of dropping it (source-referenced text-box MAE): 11.60->11.72, 7.79->7.86,
+and 7.57->8.13 across the two posters and the CJK sign - well under one point
+against base MAEs of 24.7/16.8/10.2. Since 0.27.1 the anchor is off by default
+(`fidelity_anchor` parameter on `remove_watermark` / `InvisibleOptions` /
+`--fidelity-anchor`); Google rows were not re-queried because the default
+strength leaves that fixture's base detected (the vendor-strength lane tracks
+that separately). Certification artifacts: raiw-app
+`data/certification/text-restoration-2026-08-19-A1/` (sha256-stamped rows).

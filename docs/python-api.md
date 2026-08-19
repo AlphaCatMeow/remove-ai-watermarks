@@ -614,6 +614,13 @@ postprocessing combinations that were not evaluated. `InvisibleOptions` exposes 
 same field for `remove_all`; after a visible-stage edit, the manifest must be built
 against the staged pixels rather than the pristine source.
 
+Since 0.27.1 the mode's global 15% Qwen-VAE fidelity-anchor blend is **off by
+default** (`fidelity_anchor=False`): that whole-frame blend was measured to
+return detector-visible OpenAI SynthID on poster-scale manifests (official
+Content Provenance API, 2026-08-19 - detected x6 with the anchor, clean x6
+without it, controls and base outputs validated in the same sessions). Pass
+`fidelity_anchor=True` to reproduce the 0.27.0 research behavior.
+
 `remove_watermark` takes strength, seed, tiling, resolution, and postprocessing
 controls. It takes no model id, step count or guidance scale, and neither does the
 constructor: each profile pins its model stack, its per-stage schedule and CFG
