@@ -609,8 +609,9 @@ engine.remove_watermark(
 
 Install `remove-ai-watermarks[text-restoration]`. The manifest schema and safety
 constraints are documented in the CLI guide. The engine verifies its decoded RGB
-hash before loading the diffusion models and rejects SDXL, tiling, downscaling, and
-postprocessing combinations that were not evaluated. `InvisibleOptions` exposes the
+hash before loading the diffusion models and rejects SDXL, downscaling, and
+postprocessing combinations that were not evaluated. Tiling is allowed: the VAE
+donor uses the same overlapping tiles as the global pass. `InvisibleOptions` exposes the
 same field for `remove_all`; after a visible-stage edit, the manifest must be built
 against the staged pixels rather than the pristine source.
 

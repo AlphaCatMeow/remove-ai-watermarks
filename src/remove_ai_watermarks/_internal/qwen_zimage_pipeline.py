@@ -1079,7 +1079,24 @@ class QwenZImagePipeline:
         donor = None
         if text_manifest is not None:
             self._progress("Reconstructing the verified text donor with the Qwen VAE...")
-            donor = self._qwen_vae_roundtrip(image)
+            if tile and max(image.size) > tile_size:
+                from remove_ai_watermarks._internal.tiling import run_tiled
+
+                donor = run_tiled(
+                    self._qwen_vae_roundtrip,
+                    image,
+                    tile_size,
+                    tile_overlap,
+                    lambda message: self._progress(
+                        message.replace(
+                            "Tiled diffusion",
+                            "Reconstructing the verified text donor",
+                            1,
+                        )
+                    ),
+                )
+            else:
+                donor = self._qwen_vae_roundtrip(image)
         global_strength = (
             resolution_adaptive_denoise(image.width, image.height) if strength is None else float(strength)
         )

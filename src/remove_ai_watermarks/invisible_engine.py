@@ -186,8 +186,10 @@ class InvisibleEngine:
             text_manifest: Operator-verified text lines bound to the decoded source
                 pixels. Enables the experimental Qwen-VAE ``vae-glyphs`` post-pass.
                 Requires the ``text-restoration`` extra and the ``qwen-zimage``
-                profile. Incompatible with tiling, downscaling, humanize, unsharp,
-                and adaptive polish because those combinations are not calibrated.
+                profile. Incompatible with downscaling, humanize, unsharp, and
+                adaptive polish. Tiling is supported: the VAE donor uses the same
+                overlapping tiles as the global pass, then glyph restore runs on
+                the blended full frame.
             fidelity_anchor: Blend 15% of the Qwen-VAE donor across the whole frame
                 before glyph restoration. OFF by default since 0.27.1: that global
                 blend was measured to return detector-visible OpenAI SynthID on
@@ -211,8 +213,6 @@ class InvisibleEngine:
                 raise ValueError("--text-manifest is supported only by the qwen-zimage profile")
             if max_resolution != 0:
                 raise ValueError("--text-manifest requires --max-resolution 0")
-            if tile:
-                raise ValueError("--text-manifest is not calibrated with --tile")
             if humanize > 0.0 or unsharp > 0.0 or adaptive_polish:
                 raise ValueError("--text-manifest requires humanize=0, unsharp=0, and adaptive polish disabled")
             from remove_ai_watermarks import region_eraser

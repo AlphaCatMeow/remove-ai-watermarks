@@ -659,6 +659,47 @@ def test_no_face_path_still_runs_verified_text_restoration(monkeypatch):
     restore.assert_called_with(source, anchor, donor, manifest.lines)
 
 
+def test_tiled_verified_text_runs_vae_donor_per_tile(monkeypatch):
+    from remove_ai_watermarks._internal import qwen_zimage_pipeline, text_restoration
+    from remove_ai_watermarks._internal.qwen_zimage_pipeline import QwenZImagePipeline
+    from remove_ai_watermarks._internal.text_restoration import VerifiedTextLine, VerifiedTextManifest
+
+    pipeline = object.__new__(QwenZImagePipeline)
+    pipeline.device = "cuda"
+    pipeline.progress_callback = None
+    source = Image.new("RGB", (96, 80), (10, 20, 30))
+    restored = Image.new("RGB", (96, 80), (130, 140, 150))
+    pipeline._qwen_vae_roundtrip = MagicMock(side_effect=lambda tile: tile)
+    pipeline._run_global = MagicMock(side_effect=lambda tile, _strength, _seed: tile)
+    monkeypatch.setattr(qwen_zimage_pipeline, "detect_faces", lambda _image: [])
+    restore = MagicMock(return_value=restored)
+    monkeypatch.setattr(text_restoration, "restore_verified_text", restore)
+    manifest = VerifiedTextManifest(
+        "0" * 64,
+        96,
+        80,
+        (VerifiedTextLine((4, 4, 20, 16), "Exact", "alphabetic"),),
+    )
+
+    result = pipeline.run(
+        source,
+        strength=0.1,
+        seed=0,
+        tile=True,
+        tile_size=64,
+        tile_overlap=16,
+        text_manifest=manifest,
+    )
+
+    assert result is restored
+    assert pipeline._qwen_vae_roundtrip.call_count > 1
+    assert pipeline._run_global.call_count > 1
+    restore.assert_called_once()
+    assert restore.call_args.args[0].size == (96, 80)
+    assert restore.call_args.args[1].size == (96, 80)
+    assert restore.call_args.args[2].size == (96, 80)
+
+
 def test_watermark_remover_dispatches_to_full_pipeline(tmp_path, monkeypatch):
     from remove_ai_watermarks._internal.watermark_remover import WatermarkRemover
 
