@@ -139,3 +139,20 @@ class TestDraftTextLines:
         (line,) = draft.accepted
         assert line.language == "ch"
         assert line.script == "cjk"
+
+    def test_unstable_geometry_draft_accepts_a_single_high_score_read(self, tmp_path: Path):
+        path = self._poster(tmp_path)
+        jitter = _JitterEngine(["Hello", "Hallo", "Hullo"])
+        stable = _FakeEngine("Hello")
+        # Probes disagree across engines so language is en; jitter would fail
+        # the stable gate. Geometry mode uses the one en probe and accepts.
+        draft = draft_text_lines(
+            path,
+            min_score=0.75,
+            stable=False,
+            detector=_FakeDetector([(20, 20, 200, 60)]),
+            engines={"en": jitter, "ru": stable, "ch": stable},
+        )
+        (line,) = draft.accepted
+        assert line.text == "Hello"
+        assert line.min_score >= 0.75

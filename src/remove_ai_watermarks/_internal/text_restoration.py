@@ -185,6 +185,20 @@ def restore_verified_text(
     return Image.fromarray(restored)
 
 
+def _glyph_crop_box(box: tuple[int, int, int, int], width: int, height: int) -> tuple[int, int, int, int]:
+    """Widen the detector box so descenders stay inside the silhouette crop.
+
+    Paddle line boxes sit 2-5 px above the true ink bottom on the poster
+    fixtures. The crop is the box itself, so those pixels never reached the
+    donor composite. Expand only on Y: 8% up, 25% down, clamped to the frame.
+    """
+    x1, y1, x2, y2 = box
+    line_h = max(1, y2 - y1)
+    pad_top = max(1, round(line_h * 0.08))
+    pad_bot = max(2, round(line_h * 0.25))
+    return max(0, x1), max(0, y1 - pad_top), min(width, x2), min(height, y2 + pad_bot)
+
+
 def source_silhouette_mask(
     source_rgb: NDArray[Any],
     box: tuple[int, int, int, int],
@@ -192,7 +206,7 @@ def source_silhouette_mask(
 ) -> NDArray[Any]:
     """Recover a thresholded glyph shape without retaining source amplitudes."""
     height, width = source_rgb.shape[:2]
-    x1, y1, x2, y2 = _clip_box(box, width, height)
+    x1, y1, x2, y2 = _glyph_crop_box(box, width, height)
     gray = cv2.cvtColor(source_rgb[y1:y2, x1:x2], cv2.COLOR_RGB2GRAY)
     support = np.ones(gray.shape, dtype=np.uint8)
     if angle:

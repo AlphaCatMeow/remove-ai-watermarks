@@ -223,15 +223,22 @@ def draft_text_lines(
     min_score: float = 0.85,
     detector: Any | None = None,
     engines: dict[str, Any] | None = None,
+    stable: bool = True,
 ) -> TextDraft:
     """Propose verified-text manifest lines for ``image``; never verified ones.
 
     Args:
         image: path of the source image (draft boxes are in ITS pixel space).
-        min_score: recognition confidence floor for every jittered read.
+        min_score: recognition confidence floor. With ``stable=True`` every
+            jittered read must clear it; with ``stable=False`` the single
+            probe for the chosen language must.
         detector/engines: injectable Paddle objects (tests use fakes); when
             None they are built from the ``text-draft`` extra, which must be
             installed (``draft_available()`` reports it).
+        stable: when True (default), accept a line only if three crop paddings
+            normalize identically. When False, take one recognition trio and
+            accept on score alone. Automatic restoration uses box/script only,
+            so the jitter gate is optional there.
 
     Returns:
         ``TextDraft`` with crop-stable ``accepted`` proposals and unstable
@@ -262,8 +269,14 @@ def draft_text_lines(
             probes[language] = _recognize(engine, source_rgb, box, script, 0.1)
         language = choose_language(probes)
         script = "cjk" if language == "ch" else "alphabetic"
-        reads = [_recognize(engines[language], source_rgb, box, script, ratio) for ratio in JITTER_RATIOS]
-        text = stable_recognition(reads, min_score)
+        if stable:
+            reads = [_recognize(engines[language], source_rgb, box, script, ratio) for ratio in JITTER_RATIOS]
+            text = stable_recognition(reads, min_score)
+        else:
+            text, score = probes[language]
+            reads = [(text, score)]
+            if not text.strip() or score < min_score:
+                text = None
         if text is None:
             rejected.append(
                 RejectedLine(

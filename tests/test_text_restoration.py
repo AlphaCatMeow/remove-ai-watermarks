@@ -15,6 +15,7 @@ from remove_ai_watermarks._internal.text_restoration import (
     load_verified_text_manifest,
     restore_verified_text,
     source_pixel_sha256,
+    source_silhouette_mask,
 )
 
 
@@ -126,3 +127,14 @@ def test_restoration_uses_lama_and_qwen_vae_core(monkeypatch) -> None:
     assert calls
     assert np.all(restored[16, 20] == donor[16, 20])
     assert np.all(restored[0, 0] == candidate[0, 0])
+
+
+def test_silhouette_includes_descender_below_the_detector_box() -> None:
+    source = np.full((40, 50, 3), 240, dtype=np.uint8)
+    source[10:22, 18:24] = 20
+    source[22:27, 18:22] = 20  # tail of a y / Cyrillic u, under the box
+
+    mask = source_silhouette_mask(source, (10, 10, 40, 22))
+
+    assert mask[24, 20] == 255
+    assert mask[16, 20] == 255
