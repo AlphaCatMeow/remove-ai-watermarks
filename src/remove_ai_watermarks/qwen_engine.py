@@ -1,4 +1,4 @@
-"""Qwen (Tongyi Qianwen, Alibaba) visible watermark detector/localizer.
+"""Qwen (Alibaba) visible watermark detector/localizer.
 
 Qwen stamps its generations with a visible "千问AI生成" text strip in the
 bottom-right corner -- the explicit AIGC label mandated by China's GB 45438-2025

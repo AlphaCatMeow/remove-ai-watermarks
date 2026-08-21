@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 import pytest
 
+from remove_ai_watermarks._internal.constants import C2PA_AI_VENDORS, C2PA_CLAIM_GENERATOR_PLATFORMS
 from remove_ai_watermarks.identify import (
     ProvenanceEvidence,
     ProvenanceReport,
@@ -1300,11 +1301,19 @@ class TestVendorOf:
     def test_registered_vendors_normalize(self):
         # Regression: these registered C2PA vendors returned None, so their claims never
         # entered clash detection (a coverage hole). They now normalize to one origin.
-        assert _vendor_of("ByteDance (Doubao / Jimeng / Volcano Engine)") == "ByteDance"
+        assert _vendor_of("Microsoft (Copilot / Designer)") == "Microsoft"
+        assert _vendor_of("Copilot") == "Microsoft"
+        assert _vendor_of("ByteDance (Doubao / Jimeng / Dreamina / Volcano Engine)") == "ByteDance"
         assert _vendor_of("Dreamina/1.2") == "ByteDance"
         assert _vendor_of("Canva (Magic Media)") == "Canva"
         assert _vendor_of("Black Forest Labs (FLUX)") == "Black Forest Labs"
         assert _vendor_of("Eleven Labs Inc.") == "ElevenLabs"
+
+    def test_bytedance_issuers_share_one_platform(self):
+        expected = "ByteDance (Doubao / Jimeng / Dreamina / Volcano Engine)"
+        platforms = {vendor.platform for vendor in C2PA_AI_VENDORS if vendor.needle == "ByteDance"}
+        assert platforms == {expected}
+        assert ("dreamina", expected) in C2PA_CLAIM_GENERATOR_PLATFORMS
 
 
 class TestIntegrityClashesHelper:

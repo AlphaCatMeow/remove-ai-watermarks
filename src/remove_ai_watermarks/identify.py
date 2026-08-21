@@ -770,6 +770,7 @@ _AI_VENDOR_TOKENS: tuple[tuple[str, str], ...] = (
     ("google", "Google"),
     ("firefly", "Adobe"),
     ("adobe", "Adobe"),
+    ("copilot", "Microsoft"),
     ("bing", "Microsoft"),
     ("designer", "Microsoft"),
     ("microsoft", "Microsoft"),

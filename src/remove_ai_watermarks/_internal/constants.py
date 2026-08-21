@@ -65,7 +65,7 @@ def _vendor(
 
 # Order is product priority when a manifest mentions more than one organization.
 C2PA_AI_VENDORS: tuple[C2paAiVendor, ...] = (
-    _vendor(b"Microsoft", "Microsoft", "Microsoft (Bing Image Creator / Designer)", "Microsoft"),
+    _vendor(b"Microsoft", "Microsoft", "Microsoft (Copilot / Designer)", "Microsoft"),
     _vendor(b"Adobe", "Adobe", "Adobe Firefly", "Adobe"),
     _vendor(
         b"OpenAI",
@@ -78,18 +78,25 @@ C2PA_AI_VENDORS: tuple[C2paAiVendor, ...] = (
     _vendor(b"Google", "Google LLC", "Google (Gemini / Imagen)", "Google", synthid=True),
     _vendor(b"Stability AI", "Stability AI", "Stability AI (Stable Image / DreamStudio)", "Stability AI"),
     _vendor(b"Black Forest Labs", "Black Forest Labs", "Black Forest Labs (FLUX)", "Black Forest Labs"),
-    _vendor(b"volcengine", "ByteDance (Volcano Engine)", "ByteDance (Doubao / Jimeng / Volcano Engine)", "ByteDance"),
+    _vendor(
+        b"volcengine",
+        "ByteDance (Volcano Engine)",
+        "ByteDance (Doubao / Jimeng / Dreamina / Volcano Engine)",
+        "ByteDance",
+    ),
     _vendor(
         "北京火山引擎科技有限公司",
         "ByteDance (Volcano Engine)",
-        "ByteDance (Doubao / Jimeng / Volcano Engine)",
+        "ByteDance (Doubao / Jimeng / Dreamina / Volcano Engine)",
         "ByteDance",
     ),
-    _vendor(b"Byteplus", "BytePlus (ByteDance)", "ByteDance (Doubao / Jimeng / Volcano Engine)", "ByteDance"),
+    _vendor(
+        b"Byteplus", "BytePlus (ByteDance)", "ByteDance (Doubao / Jimeng / Dreamina / Volcano Engine)", "ByteDance"
+    ),
     _vendor(
         b"Dreamina",
         "ByteDance (Dreamina)",
-        "ByteDance (Doubao / Jimeng / Volcano Engine)",
+        "ByteDance (Doubao / Jimeng / Dreamina / Volcano Engine)",
         "ByteDance",
         asserts_ai=True,
     ),
@@ -109,7 +116,7 @@ C2PA_IDENTITY_AI_ORGS = frozenset(vendor.org for vendor in C2PA_AI_VENDORS if ve
 C2PA_CLAIM_GENERATOR_PLATFORMS: tuple[tuple[str, str], ...] = (
     ("adobe_firefly", "Adobe Firefly"),
     ("firefly", "Adobe Firefly"),
-    ("dreamina", "ByteDance (Doubao / Jimeng / Volcano Engine)"),
+    ("dreamina", "ByteDance (Doubao / Jimeng / Dreamina / Volcano Engine)"),
     ("higgsfield ai", "Higgsfield AI"),
     ("topaz labs image api", "Topaz Labs"),
     ("tiktok ad creative toolbox", "TikTok Ad Creative Toolbox"),
