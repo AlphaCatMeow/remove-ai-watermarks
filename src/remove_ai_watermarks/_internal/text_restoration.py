@@ -25,6 +25,8 @@ TEXT_MANIFEST_SCHEMA = 2
 _SUPPORTED_TEXT_MANIFEST_SCHEMAS = frozenset({1, TEXT_MANIFEST_SCHEMA})
 FIDELITY_BLEND_ALPHA = 0.15
 GLYPH_FEATHER = 0.5
+GLYPH_SIDE_PAD_RATIO = 0.12
+GLYPH_SIDE_PAD_LIMIT = 1.0
 
 
 @dataclass(frozen=True)
@@ -194,28 +196,41 @@ def restore_verified_text(
     return Image.fromarray(restored)
 
 
-def _glyph_crop_box(box: tuple[int, int, int, int], width: int, height: int) -> tuple[int, int, int, int]:
-    """Widen the detector box so descenders stay inside the silhouette crop.
+def _glyph_crop_box(
+    box: tuple[int, int, int, int],
+    width: int,
+    height: int,
+    left_pad: int,
+    right_pad: int,
+) -> tuple[int, int, int, int]:
+    """Widen the detector box so glyph edges stay inside the silhouette crop.
 
-    Paddle line boxes sit 2-5 px above the true ink bottom on the poster
-    fixtures. The crop is the box itself, so those pixels never reached the
-    donor composite. Expand only on Y: 8% up, 25% down, clamped to the frame.
+    Detector boxes can stop inside a leading flourish or trailing punctuation,
+    and Paddle line boxes sit 2-5 px above the true ink bottom on the poster
+    fixtures. The crop is otherwise the box itself, so those pixels never reach
+    the donor composite. Start 12% sideways, expand each side independently
+    while foreground reaches its boundary, and pad 8% up and 25% down.
     """
     x1, y1, x2, y2 = box
     line_h = max(1, y2 - y1)
     pad_top = max(1, round(line_h * 0.08))
     pad_bot = max(2, round(line_h * 0.25))
-    return max(0, x1), max(0, y1 - pad_top), min(width, x2), min(height, y2 + pad_bot)
+    return (
+        max(0, x1 - left_pad),
+        max(0, y1 - pad_top),
+        min(width, x2 + right_pad),
+        min(height, y2 + pad_bot),
+    )
 
 
-def source_silhouette_mask(
+def _silhouette_crop_mask(
     source_rgb: NDArray[Any],
-    box: tuple[int, int, int, int],
-    angle: float = 0.0,
+    crop_box: tuple[int, int, int, int],
+    angle: float,
 ) -> NDArray[Any]:
-    """Recover a thresholded glyph shape without retaining source amplitudes."""
+    """Threshold one candidate crop so its horizontal boundaries can be tested."""
     height, width = source_rgb.shape[:2]
-    x1, y1, x2, y2 = _glyph_crop_box(box, width, height)
+    x1, y1, x2, y2 = crop_box
     gray = cv2.cvtColor(source_rgb[y1:y2, x1:x2], cv2.COLOR_RGB2GRAY)
     support = np.ones(gray.shape, dtype=np.uint8)
     if angle:
@@ -234,7 +249,7 @@ def source_silhouette_mask(
         background_luma = float(np.median(values))
     else:
         ring_pad = max(6, min(20, (y2 - y1) // 4))
-        rx1, ry1, rx2, ry2 = _clip_box((x1, y1, x2, y2), width, height, pad=ring_pad)
+        rx1, ry1, rx2, ry2 = _clip_box(crop_box, width, height, pad=ring_pad)
         context = cv2.cvtColor(source_rgb[ry1:ry2, rx1:rx2], cv2.COLOR_RGB2GRAY)
         ring = np.ones(context.shape, dtype=bool)
         ring[y1 - ry1 : y2 - ry1, x1 - rx1 : x2 - rx1] = False
@@ -248,6 +263,61 @@ def source_silhouette_mask(
     else:
         crop_mask = (gray.astype(np.float32) <= background_luma - threshold).astype(np.uint8) * 255
     crop_mask[support == 0] = 0
+    return crop_mask
+
+
+def _anchored_components_reach_sides(
+    crop_mask: NDArray[Any],
+    anchor_box: tuple[int, int, int, int],
+) -> tuple[bool, bool]:
+    """Whether anchored foreground reaches the left and right crop sides."""
+    count, labels, stats, _centroids = cv2.connectedComponentsWithStats(crop_mask, 8)
+    x1, y1, x2, y2 = anchor_box
+    anchor_counts = np.bincount(labels[y1:y2, x1:x2].reshape(-1), minlength=count)
+    anchor_counts[0] = 0
+
+    def reaches(edge_labels: NDArray[Any]) -> bool:
+        return any(
+            label != 0 and anchor_counts[label] >= max(3, round(stats[label, cv2.CC_STAT_AREA] * 0.1))
+            for label in np.unique(edge_labels)
+        )
+
+    return reaches(labels[y1:y2, :2]), reaches(labels[y1:y2, -2:])
+
+
+def source_silhouette_mask(
+    source_rgb: NDArray[Any],
+    box: tuple[int, int, int, int],
+    angle: float = 0.0,
+) -> NDArray[Any]:
+    """Recover a thresholded glyph shape without retaining source amplitudes."""
+    height, width = source_rgb.shape[:2]
+    box_x1, box_y1, box_x2, box_y2 = box
+    line_h = max(1, box_y2 - box_y1)
+    step = max(2, round(line_h * GLYPH_SIDE_PAD_RATIO))
+    limit = max(step, round(line_h * GLYPH_SIDE_PAD_LIMIT))
+    left_pad = right_pad = step
+    while True:
+        x1, y1, x2, y2 = _glyph_crop_box(box, width, height, left_pad, right_pad)
+        crop_mask = _silhouette_crop_mask(source_rgb, (x1, y1, x2, y2), angle)
+        core_y1 = max(0, box_y1 - y1)
+        core_y2 = min(y2 - y1, box_y2 - y1)
+        anchor_box = (max(0, box_x1 - x1), core_y1, min(x2 - x1, box_x2 - x1), core_y2)
+        can_expand_left = x1 > 0 and left_pad < limit
+        can_expand_right = x2 < width and right_pad < limit
+        left_anchored, right_anchored = (
+            _anchored_components_reach_sides(crop_mask, anchor_box)
+            if can_expand_left or can_expand_right
+            else (False, False)
+        )
+        left_touches = can_expand_left and left_anchored
+        right_touches = can_expand_right and right_anchored
+        if not left_touches and not right_touches:
+            break
+        if left_touches:
+            left_pad = min(limit, left_pad + step)
+        if right_touches:
+            right_pad = min(limit, right_pad + step)
     result = np.zeros((height, width), dtype=np.uint8)
     result[y1:y2, x1:x2] = crop_mask
     return result

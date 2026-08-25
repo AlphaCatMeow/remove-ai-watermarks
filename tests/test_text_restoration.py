@@ -183,3 +183,17 @@ def test_silhouette_includes_descender_below_the_detector_box() -> None:
 
     assert mask[24, 20] == 255
     assert mask[16, 20] == 255
+
+
+def test_silhouette_includes_glyph_edges_beside_the_detector_box() -> None:
+    source = np.full((40, 70, 3), 240, dtype=np.uint8)
+    source[10:22, 20:50] = 20
+    source[14:18, 10:20] = 20  # leading flourish, left of the detector box
+    source[14:18, 50:58] = 20  # punctuation or icon edge, right of the box
+    source[14:18, 2:5] = 20  # separate decoration must stay outside the crop
+
+    mask = source_silhouette_mask(source, (20, 10, 50, 22))
+
+    assert mask[16, 12] == 255
+    assert mask[16, 56] == 255
+    assert mask[16, 3] == 0

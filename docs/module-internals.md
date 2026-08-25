@@ -972,7 +972,12 @@ The compositor derives binary source and candidate silhouettes, groups nearby li
 uses LaMa for the initial and residual-glyph erase passes, paints fresh silhouette
 edges, then copies the Qwen-VAE core with a 0.5-pixel feather. The evaluation script
 imports these same mask and compositing helpers so the two implementations cannot
-silently drift.
+silently drift. Silhouette crops start 12% of line height beyond each horizontal
+side, then expand each side independently while a foreground component anchored
+inside the detector box still reaches that boundary, up to one line height. They
+extend 8% above and 25% below. The anchored-component gate covers clipped leading
+flourishes, trailing punctuation, icons, and descenders without walking into
+disconnected decoration or background texture.
 
 The stage is deliberately narrower than the engine: it rejects `sdxl-zimage`, tiles,
 resolution caps, humanize, unsharp, and adaptive polish. Those combinations change
