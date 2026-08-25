@@ -117,3 +117,9 @@ After publication, verify:
 - the distribution workflow completed successfully;
 - the ComfyUI Registry node requires the new library version;
 - a clean install can run `remove-ai-watermarks --version`.
+
+A clean-install check run immediately after publication can fail with "no
+version of remove-ai-watermarks==X.Y.Z" even though the simple index already
+lists it: uv serves its cached pre-release view of the index. Re-run with a
+fresh cache (`UV_CACHE_DIR=$(mktemp -d)`) before treating it as a release
+failure.
