@@ -447,7 +447,7 @@ container changes remain valid while a resized or edited source fails closed. Th
 experimental helper
 `remove_ai_watermarks._internal.text_restoration.source_pixel_sha256` computes it.
 
-This mode is supported only by `qwen-zimage` at native untiled geometry with
+This mode is supported only by `qwen-zimage` at native geometry with
 `humanize=0`, `unsharp=0`, and adaptive polish disabled. `all` also accepts the flag,
 but its manifest must match the pixels entering the invisible stage; if visible-mark
 removal changes those pixels, the hash check rejects the run. One oracle verdict does
