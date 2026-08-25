@@ -13,6 +13,7 @@ from PIL import Image
 from remove_ai_watermarks._internal.c2pa import (
     _parse_c2pa_chunk,
     c2pa_info_from_manifest_store,
+    c2pa_info_has_removal_hint,
     cbor_text_after,
     extract_c2pa_chunk,
     extract_c2pa_info,
@@ -208,6 +209,64 @@ class TestC2PA:
 
         assert info["ai_tool"] == "Dreamina"
         assert info["c2pa_identity_ai"] is True
+
+    def test_structured_invismark_exposes_algorithm_and_watermark_id(self):
+        watermark_id = "83424621-03cb-40e3-9808-a9fae837156d"
+        store = {
+            "active_manifest": "paint",
+            "manifests": {
+                "paint": {
+                    "assertions": [
+                        {
+                            "label": "c2pa.soft-binding",
+                            "data": {
+                                "alg": "com.microsoft.invismark.1",
+                                "blocks": [
+                                    {
+                                        "scope": "the entire image",
+                                        "value": watermark_id,
+                                    }
+                                ],
+                            },
+                        }
+                    ]
+                }
+            },
+        }
+
+        info = c2pa_info_from_manifest_store(store)
+
+        assert info["soft_binding"] == "Microsoft InvisMark"
+        assert info["soft_binding_algorithm"] == "com.microsoft.invismark.1"
+        assert info["soft_binding_value"] == watermark_id
+
+    def test_soft_binding_value_requires_its_algorithm(self):
+        store = {
+            "active_manifest": "broken",
+            "manifests": {
+                "broken": {
+                    "assertions": [
+                        {
+                            "label": "c2pa.soft-binding",
+                            "data": {"blocks": [{"value": "not-attributable"}]},
+                        }
+                    ]
+                }
+            },
+        }
+
+        assert "soft_binding_value" not in c2pa_info_from_manifest_store(store)
+
+    def test_soft_binding_keeps_invisible_removal_fail_safe(self):
+        assert c2pa_info_has_removal_hint({"soft_binding_vendors": ["Microsoft InvisMark"]}) is True
+
+    def test_content_fingerprint_does_not_trigger_invisible_removal(self):
+        info = {
+            "soft_binding": "Adobe (content fingerprint)",
+            "soft_binding_vendors": ["Adobe (content fingerprint)"],
+        }
+
+        assert c2pa_info_has_removal_hint(info) is False
 
     def test_invalid_ingredient_does_not_taint_active_validation_or_supply_claims(self):
         store = {

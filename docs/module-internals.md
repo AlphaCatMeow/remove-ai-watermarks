@@ -392,6 +392,15 @@ manifest names only `c2pa-tool` while a validated ingredient names Dreamina, and
 Firefly chains that identify `Adobe_Firefly` without repeating a digital source
 type. Unreachable manifests remain excluded.
 
+Reachable `c2pa.soft-binding*` assertions retain their exact `alg` and bounded,
+printable block `value` in addition to the normalized vendor label. A block value
+without its algorithm is not surfaced because it cannot be attributed to a
+decoder or registry entry. `com.microsoft.invismark.1` uses that value as the
+pixel-watermark identifier in Microsoft Paint output. An InvisMark soft binding
+keeps the invisible-removal gate fail-safe even when the C2PA asset binding has
+since become invalid, because metadata damage does not prove the pixel carrier
+disappeared. Content-fingerprint soft bindings do not trigger pixel regeneration.
+
 The SDK default enables trust verification but supplies no production trust
 anchors. Consequently, an installation without an explicitly maintained C2PA
 trust bundle reports otherwise valid signer chains as untrusted and keeps their

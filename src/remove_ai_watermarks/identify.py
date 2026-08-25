@@ -145,6 +145,10 @@ _C2PA_CLOUD_CAVEAT = (
     "It marks Content Credentials, not AI origin: the cloud manifest may describe a "
     "human edit, and reading it needs a network fetch this tool does not make."
 )
+_SOFT_BINDING_CAVEAT = (
+    "Removing the embedded C2PA manifest does not remove its soft binding: the named "
+    "watermark or fingerprint may remain in the pixels and re-link the asset to provenance."
+)
 _SAMSUNG_GENAI_CAVEAT = (
     "Samsung's genAIType marker shows a Galaxy AI editing tool (Generative Edit, "
     "Sketch to Image, ...) touched the image; it is an undocumented proprietary "
@@ -388,6 +392,8 @@ def evidence_from_metadata_record(
         "actions",
         "synthid_watermark",
         "soft_binding",
+        "soft_binding_algorithm",
+        "soft_binding_value",
     ):
         if key in c2pa_info:
             ai_metadata.setdefault(key, str(c2pa_info[key]))
@@ -1269,12 +1275,20 @@ def _identify_from_evidence(
     # the watermark itself can't be decoded; names whose watermark stamped the pixels.
     soft_binding = meta.get("soft_binding") or (", ".join(v) if (v := soft_binding_vendors_in(region)) else None)
     if soft_binding:
+        soft_binding_algorithm = meta.get("soft_binding_algorithm") or info.get("soft_binding_algorithm")
+        soft_binding_value = meta.get("soft_binding_value") or info.get("soft_binding_value")
+        soft_binding_details = "; ".join(
+            str(value) for value in (soft_binding, soft_binding_algorithm, soft_binding_value) if value
+        )
         signals.append(
             Signal(
-                "soft_binding", f"C2PA soft binding: {soft_binding}", "high" if c2pa_level == "verified" else "medium"
+                "soft_binding",
+                f"C2PA soft binding: {soft_binding_details}",
+                "high" if c2pa_level == "verified" else "medium",
             )
         )
-        watermarks.append(f"Forensic watermark soft binding ({soft_binding})")
+        watermarks.append(f"Forensic watermark soft binding ({soft_binding_details})")
+        caveats.append(_SOFT_BINDING_CAVEAT)
 
     # ── IPTC "Made with AI" (Meta etc.), only meaningful without C2PA ─
     iptc = any(m in head for m in IPTC_AI_MARKERS)

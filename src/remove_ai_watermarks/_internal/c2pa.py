@@ -307,7 +307,9 @@ def c2pa_info_has_invalid_credential(info: dict[str, Any]) -> bool:
 
 def c2pa_info_has_removal_hint(info: dict[str, Any]) -> bool:
     """Return whether a C2PA AI or watermark claim should keep removal fail-safe."""
-    return bool(info.get("ai_source_kind") or info.get("synthid_watermark"))
+    soft_bindings = info.get("soft_binding_vendors")
+    has_invismark = isinstance(soft_bindings, list) and "Microsoft InvisMark" in soft_bindings
+    return bool(info.get("ai_source_kind") or info.get("synthid_watermark") or has_invismark)
 
 
 def _has_suffix(codes: list[str], suffixes: tuple[str, ...]) -> bool:
@@ -390,6 +392,7 @@ def _structured_manifest_fields(store: dict[str, Any]) -> dict[str, Any]:
     actions: list[str] = []
     source_types: list[str] = []
     soft_binding_algorithms: list[str] = []
+    soft_binding_values: list[str] = []
     claim_generator_asserts_ai = False
 
     def add_tool_matches(value: str, *, asserts_ai: bool = False) -> None:
@@ -431,9 +434,18 @@ def _structured_manifest_fields(store: dict[str, Any]) -> dict[str, Any]:
             label = assertion.get("label")
             data = assertion.get("data")
             if isinstance(label, str) and label.startswith("c2pa.soft-binding") and isinstance(data, dict):
-                algorithm = cast("dict[object, object]", data).get("alg")
+                soft_binding = cast("dict[object, object]", data)
+                algorithm = soft_binding.get("alg")
                 if isinstance(algorithm, str):
                     soft_binding_algorithms.append(algorithm)
+                    blocks = soft_binding.get("blocks")
+                    if isinstance(blocks, list):
+                        for block_value in cast("list[object]", blocks):
+                            if not isinstance(block_value, dict):
+                                continue
+                            value = cast("dict[object, object]", block_value).get("value")
+                            if isinstance(value, str) and value.isprintable() and len(value) <= 256:
+                                soft_binding_values.append(value)
             if not (isinstance(label, str) and label.startswith("c2pa.actions") and isinstance(data, dict)):
                 continue
             action_values = cast("dict[object, object]", data).get("actions")
@@ -491,11 +503,15 @@ def _structured_manifest_fields(store: dict[str, Any]) -> dict[str, Any]:
             info["synthid_watermark"] = synthid_verdict(", ".join(synthid))
 
     if soft_binding_algorithms:
+        soft_binding_algorithms = list(dict.fromkeys(soft_binding_algorithms))
         algorithms = "\n".join(soft_binding_algorithms).encode()
         soft_bindings = soft_binding_vendors_in(algorithms)
         if soft_bindings:
             info["soft_binding_vendors"] = soft_bindings
             info["soft_binding"] = ", ".join(soft_bindings)
+        info["soft_binding_algorithm"] = ", ".join(soft_binding_algorithms)
+    if soft_binding_values:
+        info["soft_binding_value"] = ", ".join(dict.fromkeys(soft_binding_values))
     return info
 
 

@@ -1144,6 +1144,36 @@ class TestIdentifySoftBinding:
         assert any("Digimarc" in w for w in r.watermarks)
         assert any(s.name == "soft_binding" for s in r.signals)
 
+    def test_invismark_signal_lists_signed_watermark_id(self, tmp_path: Path):
+        watermark_id = "83424621-03cb-40e3-9808-a9fae837156d"
+        record = {
+            "c2pa_store": {
+                "active_manifest": "paint",
+                "manifests": {
+                    "paint": {
+                        "assertions": [
+                            {
+                                "label": "c2pa.soft-binding",
+                                "data": {
+                                    "alg": "com.microsoft.invismark.1",
+                                    "blocks": [{"scope": "the entire image", "value": watermark_id}],
+                                },
+                            }
+                        ]
+                    }
+                },
+            }
+        }
+        evidence = evidence_from_metadata_record(record, path=tmp_path / "paint.png")
+
+        report = identify_from_evidence(evidence)
+
+        assert evidence.ai_metadata["soft_binding_value"] == watermark_id
+        signal = next(signal for signal in report.signals if signal.name == "soft_binding")
+        assert "com.microsoft.invismark.1" in signal.detail
+        assert watermark_id in signal.detail
+        assert any("may remain in the pixels" in caveat for caveat in report.caveats)
+
 
 class TestIdentifyIptcAi:
     """IPTC 2025.1 AISystemUsed drives an AI verdict + platform attribution."""

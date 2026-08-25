@@ -43,7 +43,10 @@ is found, it reports the origin as unknown. It does not claim the image is
 clean. For C2PA files, the text report shows asset integrity, claim-signature,
 signer-trust, and signer-validity results separately. An intact claim from an
 untrusted or expired signer is reported at medium confidence; a failed asset
-binding or signature does not confirm the claimed origin.
+binding or signature does not confirm the claimed origin. When a structured
+C2PA soft binding is present, the report also names its exact algorithm and
+signed value; removing the manifest does not remove the referenced pixel
+watermark or content fingerprint.
 
 Machine readable output:
 

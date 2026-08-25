@@ -1160,6 +1160,8 @@ def get_ai_metadata(image_path: Path) -> dict[str, str]:
         "actions",
         "synthid_watermark",
         "soft_binding",
+        "soft_binding_algorithm",
+        "soft_binding_value",
         "c2pa_validation_source",
         "c2pa_validation_state",
         "c2pa_integrity",

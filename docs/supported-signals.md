@@ -138,6 +138,18 @@ all-media watermark policy, and current OpenAI C2PA carrying an explicit
 assert SynthID. After provenance metadata is removed, a local negative result
 is still inconclusive.
 
+Microsoft Paint can name `com.microsoft.invismark.1` in a C2PA soft-binding
+assertion. Inspection reports both that exact algorithm and its signed `value`,
+which Paint uses as the identifier carried by the pixel watermark. Photos has a
+parallel local writer path, but no public output sample was available for this
+work. Metadata stripping removes the embedded manifest, not the pixel carrier.
+The project has no validated local InvisMark decoder. Microsoft's official
+[Content Provenance Detection API](https://learn.microsoft.com/en-us/azure/ai-services/content-safety/how-to/how-to-provenance-detection)
+is the external oracle: it reports pixel `Watermark` and embedded `C2PA` results
+separately. The diffusion profiles have not been broadly certified against that
+oracle, so a control-positive, output-negative pair is still a per-file result,
+not a universal guarantee.
+
 For MP4, MOV, and M4V, `video invisible` or the explicit
 `video all --invisible` option can regenerate the video through a VAE and strip
 source metadata. The shipped profile is oracle-certified, but it is not a local
@@ -158,6 +170,7 @@ not a universal clean verdict.
 | Google Gemini | Sparkle | Diffusion regeneration for SynthID | C2PA and related source signals |
 | Google Veo video | Veo diamond and legacy text | Oracle-certified VAE removal for SynthID | C2PA and related source signals |
 | OpenAI image generators | None registered | Diffusion regeneration for supported invisible signals | C2PA and generator provenance |
+| Microsoft Paint and Photos | None registered | External Microsoft oracle for InvisMark; no validated local decoder | Paint C2PA soft-binding algorithm and identifier |
 | Stable Diffusion and SDXL | None registered | Diffusion regeneration; optional open decoder | Embedded parameters and text metadata |
 | FLUX | None registered | Diffusion regeneration; optional open decoder | C2PA for supported sources |
 | Adobe Firefly | None registered | Optional TrustMark Variant P decoder | C2PA |

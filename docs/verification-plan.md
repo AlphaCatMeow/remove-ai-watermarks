@@ -186,10 +186,14 @@ report recall from the detector-sampled set.
 
 ## Tier D -- external oracles (manual, not automatable here)
 
-SynthID removal cannot be verified locally by design -- no public decoder exists. Each
-vendor has its own oracle and it covers only that vendor's content: `openai.com/verify` for
-OpenAI (more accessible, the automation candidate), the Gemini app for Google (manual,
-rate-limited). A quiet metadata proxy is **not** proof the pixel watermark is gone.
+Proprietary watermark removal cannot be verified locally by design -- no public decoder
+exists. Each vendor has its own oracle and it covers only that vendor's content:
+`openai.com/verify` for OpenAI, the Gemini app for Google, and Microsoft's
+[Content Provenance Detection API](https://learn.microsoft.com/en-us/azure/ai-services/content-safety/how-to/how-to-provenance-detection)
+for InvisMark. The Microsoft API reports `Watermark` and `C2PA` separately. It therefore
+needs a pixel-identical metadata-stripped control: the control must lose `C2PA` while
+remaining `Watermark`-positive before a candidate's negative result can be attributed to
+pixel regeneration. A quiet metadata proxy is **not** proof the pixel watermark is gone.
 
 Scope honestly: this tier certifies strength floors on a handful of images per vendor, and
 that is all it can do. See `docs/synthid.md`.
