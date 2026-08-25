@@ -11,7 +11,7 @@ A release is complete only after all four published surfaces are verified:
 |---|---|---|
 | PyPI | The `remove-ai-watermarks` wheel and source distribution | `publish.yml` |
 | Homebrew | The `remove-ai-watermarks` formula in `wiltodelta/homebrew-tap` | `distribute.yml` |
-| Hugging Face Space | A factory rebuild of `wiltodelta/remove-ai-watermarks` against the new PyPI release | `distribute.yml` |
+| Hugging Face Space | The Space demo deployed on the new release through a requirements-pin bump in `wiltodelta/raiw-hf-space` | `raiw-hf-space` sync workflow; the pin bump is manual, `distribute.yml` only re-installs the pinned version |
 | ComfyUI Registry | A compatible release of `wiltodelta/ComfyUI-remove-ai-watermarks` with its own node version | `distribute.yml` and the node repository's workflows |
 
 The GitHub Release is the trigger and release record for this flow. Conda is
@@ -58,8 +58,16 @@ PyPI API token from the repository.
 waits for the matching source distribution to appear on PyPI, then:
 
 - updates the Homebrew tap formula URL and SHA-256;
-- triggers a factory rebuild of the Hugging Face Space;
+- triggers a factory rebuild of the Hugging Face Space: this re-installs the
+  version pinned in the Space repo, it does NOT upgrade the demo;
 - synchronizes, tests, versions, and publishes the ComfyUI nodes.
+
+Upgrading the Hugging Face Space is a separate, manual step: bump
+`remove-ai-watermarks[visible,heif]` in `wiltodelta/raiw-hf-space` (`pyproject.toml`,
+`uv lock`, and the re-exported `requirements.txt`), then push. That repository's
+`sync-to-hf.yml` mirrors the files onto the Space, which rebuilds on the new
+pin. Its callback smoke tests run in that repository's CI on every push; they
+are the scenario check for the demo surface.
 
 The workflow can also be started manually with an optional version input.
 
@@ -116,6 +124,10 @@ After publication, verify:
 - the Homebrew formula points to the new source distribution;
 - the distribution workflow completed successfully;
 - the ComfyUI Registry node requires the new library version;
+- the Hugging Face Space serves the new release: its `requirements.txt` pin
+  matches (raw file via the HF API), the runtime stage is `RUNNING` after the
+  rebuild, and one live `identify` and one live `visible` API call succeed
+  against the running Space;
 - a clean install can run `remove-ai-watermarks --version`.
 
 A clean-install check run immediately after publication can fail with "no
