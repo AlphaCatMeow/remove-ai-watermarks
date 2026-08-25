@@ -42,6 +42,10 @@ Important contracts:
 - `invisible` writes no output when no supported local signal is found, unless
   `--force` is supplied.
 - The two no-signal conditions currently share exit code `2`.
+- A quiet `metadata --check` and a successful `metadata --remove` (same for
+  `video metadata`) end by repeating the `identify` limit: the pixel channel is
+  untouched and a watermark such as SynthID has no local decoder once its
+  metadata proxy is gone, so neither outcome is a clean verdict.
 - Hard processing and write failures exit with code `1`.
 - `all` can still write the completed visible and metadata stages when the
   diffusion dependencies are unavailable, but exits with code `1` so the

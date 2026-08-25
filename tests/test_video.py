@@ -951,6 +951,7 @@ class TestVideoMetadataCli:
 
         assert result.exit_code == 0, result.output
         assert "AI metadata detected" in result.output
+        assert "not the same as 'clean'" not in result.output
 
     def test_remove_reports_output(self, tmp_path: Path):
         runner = CliRunner()
@@ -961,6 +962,7 @@ class TestVideoMetadataCli:
 
         assert result.exit_code == 0, result.output
         assert "AI metadata stripped" in result.output
+        assert "not the same as 'clean'" in result.output
         assert C2PA_UUID not in output.read_bytes()
 
     def test_rejects_image_input(self, tmp_clean_png: Path):

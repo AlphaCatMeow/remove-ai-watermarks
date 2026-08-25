@@ -904,10 +904,27 @@ def cmd_invisible(
 
 
 # ── Metadata operations ──
+def _print_metadata_not_a_clean_verdict() -> None:
+    """Repeat the identify empty-scan limit on metadata check and strip success.
+
+    ``metadata --check`` and ``metadata --remove`` answer a narrower question than
+    ``identify``: they report embedded AI metadata only. A quiet result used to
+    stop at "No AI metadata found" / "AI metadata stripped", which readers treat
+    as a clean-image verdict. The pixel channel is unchanged, and this project has
+    no local SynthID decoder, so the command must say so in the same words
+    ``identify`` already uses.
+    """
+    console.print(
+        "  This is not the same as 'clean': a pixel watermark such as SynthID cannot be\n"
+        "  detected here once its metadata proxy is absent."
+    )
+
+
 def _print_metadata_report(source: Path, has_ai: bool, metadata: dict[str, str]) -> None:
     """Render one metadata inspection result for the generic and video commands."""
     if not has_ai:
         console.print(f"  No AI metadata found in {source.name}")
+        _print_metadata_not_a_clean_verdict()
         return
 
     console.print(f"  Warning: AI metadata detected in {source.name}:")
@@ -974,6 +991,7 @@ def cmd_metadata(
         console.print("    the file could not be decoded, so it was copied through unchanged")
         raise SystemExit(1)
     console.print(f"  AI metadata stripped -> {out}")
+    _print_metadata_not_a_clean_verdict()
 
 
 # ── Video pipeline ──
@@ -1115,6 +1133,7 @@ def cmd_video_metadata(
         console.print(f"    still present: {', '.join(sorted(result.remaining))}")
         raise SystemExit(1)
     console.print(f"  AI metadata stripped -> {result.output}")
+    _print_metadata_not_a_clean_verdict()
 
 
 @cmd_video.command("invisible")

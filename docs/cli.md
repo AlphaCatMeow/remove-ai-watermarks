@@ -157,6 +157,11 @@ remove-ai-watermarks metadata image.png --remove -o clean.png
 When `-o` is omitted, removal overwrites the source. Standard metadata is kept
 unless you pass `--remove-all`.
 
+A quiet `--check` or a successful `--remove` is not a clean verdict. The command
+only inspects and strips embedded AI metadata; a pixel watermark such as SynthID
+has no local decoder once that metadata proxy is gone. `identify` reports the
+same limit.
+
 The command also supports the audio and video containers listed in
 [supported signals](supported-signals.md). ffmpeg must be available for the
 non-ISOBMFF audio and video path.
@@ -224,6 +229,10 @@ Metadata inspection and removal are also available as an isolated operation:
 remove-ai-watermarks video metadata input.mp4 --check
 remove-ai-watermarks video metadata input.mp4 --remove -o clean.mp4
 ```
+
+As with the generic `metadata` command, a quiet check or a successful strip is
+not a clean verdict: video SynthID is not decoded locally after the metadata
+proxy is gone.
 
 Supported containers are MP4, MOV, M4V, WebM, MKV, AVI, and FLV. The operation
 delegates to the same verified metadata scanner and stripper as the generic

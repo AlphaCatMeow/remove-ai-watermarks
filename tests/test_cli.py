@@ -629,11 +629,13 @@ class TestMetadataCommand:
         result = runner.invoke(main, ["metadata", str(tmp_clean_png), "--check"])
         assert result.exit_code == 0
         assert "No AI metadata" in result.output
+        assert "not the same as 'clean'" in result.output
 
     def test_metadata_check_ai(self, runner, tmp_png_with_ai_metadata):
         result = runner.invoke(main, ["metadata", str(tmp_png_with_ai_metadata), "--check"])
         assert result.exit_code == 0
         assert "AI metadata detected" in result.output
+        assert "not the same as 'clean'" not in result.output
 
     def test_metadata_remove(self, runner, tmp_png_with_ai_metadata, tmp_path):
         output = tmp_path / "stripped.png"
@@ -649,6 +651,7 @@ class TestMetadataCommand:
         )
         assert result.exit_code == 0
         assert "stripped" in result.output
+        assert "not the same as 'clean'" in result.output
 
     def test_metadata_remove_reports_failure_when_the_strip_was_a_no_op(self, runner, tmp_path):
         """A file PIL cannot decode is copied through UNCHANGED by the fail-safe.
