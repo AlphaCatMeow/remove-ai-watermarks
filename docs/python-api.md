@@ -615,6 +615,10 @@ donor uses the same overlapping tiles as the global pass. `InvisibleOptions` exp
 same field for `remove_all`; after a visible-stage edit, the manifest must be built
 against the staged pixels rather than the pristine source.
 
+Use manifest schema 1 for manually reviewed text plus script metadata. Automated
+operators that verify only text-region geometry should emit schema 2 lines with a
+`box` and optional `angle`; no placeholder transcription or script is required.
+
 Since 0.27.1 the mode's global 15% Qwen-VAE fidelity-anchor blend is **off by
 default** (`fidelity_anchor=False`): that whole-frame blend was measured to
 return detector-visible OpenAI SynthID on poster-scale manifests (official

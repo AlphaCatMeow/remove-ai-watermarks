@@ -960,9 +960,10 @@ requires the same provider-oracle and identity evaluation as a model change.
 
 [`_internal/text_restoration.py`](../src/remove_ai_watermarks/_internal/text_restoration.py)
 implements the opt-in `vae-glyphs` stage. A versioned manifest carries manually
-reviewed strings and source-space line boxes, plus a SHA-256 over decoded RGB width,
-height, and pixels. Validation happens before model loading. The product never treats
-OCR confidence as verification.
+reviewed strings and source-space line boxes in schema 1, or verified source-space
+geometry alone in schema 2, plus a SHA-256 over decoded RGB width, height, and pixels.
+Validation happens before model loading. The library never treats OCR confidence as
+verification, and geometry-only operators do not need to invent text or script fields.
 
 When enabled, `QwenZImagePipeline` reconstructs the source once through its already
 loaded Qwen VAE, runs the ordinary global and face stages, blends 15% of the VAE

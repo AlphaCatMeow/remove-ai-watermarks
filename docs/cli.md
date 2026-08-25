@@ -408,7 +408,7 @@ the source with the Qwen VAE, blends 15% of that reconstruction into the normal
 only the reconstructed glyph cores through source-derived silhouettes. It does not
 run OCR or choose which strings are correct.
 
-Install the combined extra and run only with a manually reviewed manifest:
+Install the combined extra and run only with an operator-verified manifest:
 
 ```bash
 uv tool install --force "remove-ai-watermarks[text-restoration]"
@@ -416,11 +416,10 @@ remove-ai-watermarks invisible image.png -o clean.png \
   --pipeline qwen-zimage --text-manifest verified-lines.json --force
 ```
 
-``verified: true`` may also be set by an automated operator (a service) that
-attests machine-verified geometry: stability-gated detector boxes inside sane
-caps. The restoration pipeline consumes box/script geometry only - the ``text``
-field is advisory metadata and never reaches the pixels - so what verification
-must guarantee is the geometry, and a machine gate can.
+``verified: true`` may also be set by an automated operator that attests
+machine-verified geometry: stability-gated detector boxes inside sane caps. Such
+operators should use the geometry-only schema 2, which carries no transcription
+or script metadata.
 
 Since 0.27.1 the global 15% Qwen-VAE fidelity-anchor blend is off by default: it
 was measured to return detector-visible OpenAI SynthID on poster-scale manifests
@@ -428,10 +427,12 @@ was measured to return detector-visible OpenAI SynthID on poster-scale manifests
 0.27.0 research behavior; text-box fidelity lost by the default is well under one
 MAE point on the measured fixtures.
 
-The manifest is a JSON object with `schema_version: 1`, `verified: true`, decoded
-RGB dimensions, `source_pixel_sha256`, and a non-empty `lines` array. Each line has
-an integer `[x1, y1, x2, y2]` box, exact `text`, a non-empty `script`, and an optional
-angle from -30 to 30 degrees. Lines must be in top-to-bottom, left-to-right order.
+The manifest is a JSON object with `verified: true`, decoded RGB dimensions,
+`source_pixel_sha256`, and a non-empty `lines` array. Schema 1 is retained for
+manually reviewed annotations: each line has an integer `[x1, y1, x2, y2]` box,
+exact `text`, a non-empty `script`, and an optional angle from -30 to 30 degrees.
+Schema 2 is geometry-only: each line has the box and optional angle, with no
+required `text` or `script`. Lines must be in top-to-bottom, left-to-right order.
 The hash binds the annotations to decoded RGB geometry and pixels, so metadata-only
 container changes remain valid while a resized or edited source fails closed. The
 experimental helper

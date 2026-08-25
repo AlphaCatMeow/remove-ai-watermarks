@@ -202,8 +202,9 @@ remove-ai-watermarks invisible image.png -o clean.png --force
 ```
 
 Typography-heavy images can opt into the experimental verified-text post-pass.
-It requires manually reviewed strings and line boxes; it never trusts OCR as ground
-truth or runs automatically:
+It accepts manually reviewed strings and line boxes or an operator-verified
+geometry-only manifest; it never treats raw OCR output as ground truth or runs
+automatically:
 
 ```bash
 uv tool install --force "remove-ai-watermarks[text-restoration]"

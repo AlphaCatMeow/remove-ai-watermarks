@@ -37,6 +37,17 @@ def _manifest(image: Image.Image) -> dict[str, object]:
     }
 
 
+def _geometry_manifest(image: Image.Image) -> dict[str, object]:
+    return {
+        "schema_version": 2,
+        "verified": True,
+        "source_pixel_sha256": source_pixel_sha256(image),
+        "width": image.width,
+        "height": image.height,
+        "lines": [{"box": [8, 8, 40, 24], "angle": 0.0}],
+    }
+
+
 def test_pixel_hash_ignores_container_metadata(tmp_path) -> None:
     image = Image.new("RGB", (48, 32), (10, 20, 30))
     plain = tmp_path / "plain.png"
@@ -61,6 +72,40 @@ def test_verified_manifest_is_bound_to_source_pixels(tmp_path) -> None:
     assert loaded.width == 48
     assert loaded.height == 32
     assert loaded.lines == (VerifiedTextLine((8, 8, 40, 24), "Exact text", "alphabetic", 0.0),)
+
+
+def test_geometry_manifest_needs_no_transcription_or_script(tmp_path) -> None:
+    source = Image.new("RGB", (48, 32), (10, 20, 30))
+    path = tmp_path / "regions.json"
+    path.write_text(json.dumps(_geometry_manifest(source)), encoding="utf-8")
+
+    loaded = load_verified_text_manifest(path, source)
+
+    assert loaded.lines == (VerifiedTextLine((8, 8, 40, 24), angle=0.0),)
+
+
+@pytest.mark.parametrize("field", ["text", "script"])
+def test_schema_one_still_requires_text_metadata(tmp_path, field) -> None:
+    source = Image.new("RGB", (48, 32), (10, 20, 30))
+    payload = _manifest(source)
+    del payload["lines"][0][field]
+    path = tmp_path / "lines.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=field):
+        load_verified_text_manifest(path, source)
+
+
+@pytest.mark.parametrize("schema_version", [True, 0, 3])
+def test_manifest_rejects_unsupported_schema_versions(tmp_path, schema_version) -> None:
+    source = Image.new("RGB", (48, 32), (10, 20, 30))
+    payload = _geometry_manifest(source)
+    payload["schema_version"] = schema_version
+    path = tmp_path / "lines.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Unsupported text manifest schema"):
+        load_verified_text_manifest(path, source)
 
 
 @pytest.mark.parametrize(
@@ -120,7 +165,7 @@ def test_restoration_uses_lama_and_qwen_vae_core(monkeypatch) -> None:
         Image.fromarray(source),
         Image.fromarray(candidate),
         Image.fromarray(donor),
-        (VerifiedTextLine((8, 8, 48, 28), "Exact text", "alphabetic"),),
+        (VerifiedTextLine((8, 8, 48, 28)),),
     )
 
     restored = np.asarray(result)

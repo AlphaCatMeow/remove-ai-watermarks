@@ -13,30 +13,33 @@ import cv2
 import numpy as np
 from PIL import Image
 
+from remove_ai_watermarks._internal.schema import require_schema_version
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from pathlib import Path
 
     from numpy.typing import NDArray
 
-TEXT_MANIFEST_SCHEMA = 1
+TEXT_MANIFEST_SCHEMA = 2
+_SUPPORTED_TEXT_MANIFEST_SCHEMAS = frozenset({1, TEXT_MANIFEST_SCHEMA})
 FIDELITY_BLEND_ALPHA = 0.15
 GLYPH_FEATHER = 0.5
 
 
 @dataclass(frozen=True)
 class VerifiedTextLine:
-    """One operator-verified source line in source-pixel coordinates."""
+    """One operator-verified source region in source-pixel coordinates."""
 
     box: tuple[int, int, int, int]
-    text: str
-    script: str
+    text: str | None = None
+    script: str | None = None
     angle: float = 0.0
 
 
 @dataclass(frozen=True)
 class VerifiedTextManifest:
-    """Text annotations cryptographically bound to one decoded RGB source."""
+    """Verified text regions cryptographically bound to one decoded RGB source."""
 
     source_pixel_sha256: str
     width: int
@@ -55,17 +58,20 @@ def source_pixel_sha256(image: Image.Image) -> str:
 
 
 def load_verified_text_manifest(path: Path, source: Image.Image) -> VerifiedTextManifest:
-    """Load and validate a manually verified manifest for exactly ``source``."""
+    """Load and validate an operator-verified manifest for exactly ``source``."""
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"Cannot read text manifest {path}: {exc}") from exc
     if not isinstance(payload, dict):
         raise ValueError("Text manifest must be a JSON object")
-    if payload.get("schema_version") != TEXT_MANIFEST_SCHEMA:
-        raise ValueError(f"Text manifest schema_version must be {TEXT_MANIFEST_SCHEMA}")
+    schema_version = require_schema_version(
+        payload.get("schema_version"),
+        contract="text manifest",
+        supported=_SUPPORTED_TEXT_MANIFEST_SCHEMAS,
+    )
     if payload.get("verified") is not True:
-        raise ValueError("Text manifest must contain verified=true after manual review")
+        raise ValueError("Text manifest must contain verified=true after operator verification")
 
     rgb = source.convert("RGB")
     width = _manifest_integer(payload, "width")
@@ -82,7 +88,7 @@ def load_verified_text_manifest(path: Path, source: Image.Image) -> VerifiedText
     raw_lines = payload.get("lines")
     if not isinstance(raw_lines, list) or not raw_lines:
         raise ValueError("Text manifest lines must be a non-empty list")
-    lines = tuple(_load_line(item, width, height, index) for index, item in enumerate(raw_lines))
+    lines = tuple(_load_line(item, width, height, index, schema_version) for index, item in enumerate(raw_lines))
     if list(lines) != sorted(lines, key=lambda line: (line.box[1], line.box[0])):
         raise ValueError("Text manifest lines must be in top-to-bottom, left-to-right reading order")
     return VerifiedTextManifest(actual_hash, width, height, lines)
@@ -95,7 +101,7 @@ def _manifest_integer(payload: dict[str, Any], key: str) -> int:
     return value
 
 
-def _load_line(item: Any, width: int, height: int, index: int) -> VerifiedTextLine:
+def _load_line(item: Any, width: int, height: int, index: int, schema_version: int) -> VerifiedTextLine:
     if not isinstance(item, dict):
         raise ValueError(f"Text manifest line {index} must be an object")
     raw_box = item.get("box")
@@ -109,12 +115,15 @@ def _load_line(item: Any, width: int, height: int, index: int) -> VerifiedTextLi
     x1, y1, x2, y2 = box
     if not (0 <= x1 < x2 <= width and 0 <= y1 < y2 <= height):
         raise ValueError(f"Text manifest line {index} box is outside the source dimensions")
-    text = item.get("text")
-    script = item.get("script")
-    if not isinstance(text, str) or not text.strip():
-        raise ValueError(f"Text manifest line {index} text must be non-empty")
-    if not isinstance(script, str) or not script.strip():
-        raise ValueError(f"Text manifest line {index} script must be non-empty")
+    text: str | None = None
+    script: str | None = None
+    if schema_version == 1:
+        text = item.get("text")
+        script = item.get("script")
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError(f"Text manifest line {index} text must be non-empty")
+        if not isinstance(script, str) or not script.strip():
+            raise ValueError(f"Text manifest line {index} script must be non-empty")
     angle_value = item.get("angle", 0.0)
     if isinstance(angle_value, bool) or not isinstance(angle_value, int | float):
         raise ValueError(f"Text manifest line {index} angle must be numeric")
