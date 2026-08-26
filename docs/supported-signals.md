@@ -88,9 +88,11 @@ The inspection and stripping code handles signals in these groups:
 unknown when evidence is absent. It never treats missing metadata as proof that
 an image is human made. C2PA presence alone is not a verified identity: the
 report distinguishes asset binding, claim signature, signer trust, and signer
-validity. High-confidence C2PA attribution requires all four; intact but
-untrusted or fallback claims are medium-confidence, while a failed binding or
-signature contributes no origin verdict.
+validity. High-confidence C2PA attribution requires an intact asset binding and
+claim signature; signer trust and certificate expiry are reported as their own
+dimensions and as caveats, since no trust anchor list ships to evaluate them.
+Fallback claims, which validate nothing, remain medium-confidence, while a failed
+binding or signature or a revoked credential contributes no origin verdict.
 
 ## File and container formats
 

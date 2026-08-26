@@ -65,6 +65,15 @@ that is what actually happened.
 
 Use availability checks only for paths that actually load large models.
 
+A verdict branch must be reachable with the dependency stack as shipped. High-confidence
+C2PA attribution required `signingCredential.trusted`, a code the reader emits only when a
+trust anchor list is loaded, and none ships -- so the branch was dead in production for
+every vendor while a hand-built info dict stamping that code kept it green from 0.27.0
+through 0.30.0. Assert reachability against the committed fixtures rather than a synthesized
+status set; `TestIdentifyRealSamples::test_no_committed_fixture_reports_a_trusted_signer`
+is that guard. Read a capability the stack does not have as a missing input, never as a
+negative finding.
+
 ## One measurement, one gate seam
 
 A detector is split into a trust-level-blind scan and a verdict that applies the
@@ -97,6 +106,11 @@ over a local sample first and diff them after. A refactor here is only correct i
 record is byte-identical, and a green test suite does not establish that on its own. A
 change that is meant to FIX detection is the exception that proves the rule: the diff
 must then be exactly the files you intended to change, named in advance.
+
+When the baseline is a published release rather than the previous commit, get it with
+`uv run --isolated --no-project --with 'remove-ai-watermarks[heif]==<version>' python <script>`:
+it resolves that release from PyPI without touching the working tree or the editable
+install. Quote the extra -- bare `pkg[extra]` is a glob in zsh.
 
 Two corollaries in `dwt_dct.py`, where "close enough" has an exact meaning. The bit test
 is `peak % 36 > 18.0` and for uint8 input the exact Haar value is a multiple of 0.5, so it

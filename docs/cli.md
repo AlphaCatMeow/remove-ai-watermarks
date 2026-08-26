@@ -41,9 +41,11 @@ remove-ai-watermarks identify image.png
 it also evaluates supported visible and invisible pixel signals. When no signal
 is found, it reports the origin as unknown. It does not claim the image is
 clean. For C2PA files, the text report shows asset integrity, claim-signature,
-signer-trust, and signer-validity results separately. An intact claim from an
-untrusted or expired signer is reported at medium confidence; a failed asset
-binding or signature does not confirm the claimed origin. When a structured
+signer-trust, and signer-validity results separately. Confidence follows the
+binding: an intact asset binding and claim signature is high confidence, and an
+unanchored or expired signer is reported as a caveat rather than a lower score,
+because no trust anchor list ships with the reader. A failed asset binding or
+signature, or a revoked signing credential, does not confirm the claimed origin. When a structured
 C2PA soft binding is present, the report also names its exact algorithm and
 signed value; removing the manifest does not remove the referenced pixel
 watermark or content fingerprint.

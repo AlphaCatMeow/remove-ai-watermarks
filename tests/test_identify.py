@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 import pytest
 
+from remove_ai_watermarks._internal.c2pa import c2pa_info_from_manifest_store
 from remove_ai_watermarks._internal.constants import C2PA_AI_VENDORS, C2PA_CLAIM_GENERATOR_PLATFORMS
 from remove_ai_watermarks.identify import (
     ProvenanceEvidence,
@@ -72,10 +73,77 @@ class TestProvenanceEvidence:
         report = identify_from_evidence(evidence)
 
         assert report.is_ai_generated is True
-        assert report.confidence == "medium"
+        # Intact binding and signature. The signer is not anchored, which is a missing
+        # input here (no trust bundle ships), not a finding against the credential.
+        assert report.confidence == "high"
         assert report.platform == "Adobe Firefly"
 
-    def test_fully_validated_c2pa_claim_is_high_confidence(self, tmp_path: Path):
+    def test_revoked_signing_credential_is_disqualifying(self, tmp_path: Path):
+        """A credential the issuer disowned cannot establish origin.
+
+        Revocation arrives on its own dimension, not as a binding or signature failure,
+        so a check that reads only those two returned an AI verdict off a dead cert with
+        an empty ``integrity_clashes`` -- quieter than a hash mismatch on the same file.
+
+        The evidence comes from :func:`c2pa_info_from_manifest_store`, not a hand-written
+        dict of what it is believed to emit, so the assertion follows the producer when
+        its contract changes.
+        """
+        path = tmp_path / "revoked.png"
+        info = c2pa_info_from_manifest_store(
+            {
+                "active_manifest": "created",
+                "validation_results": {
+                    "activeManifest": {
+                        "success": [
+                            {"code": "assertion.dataHash.match"},
+                            {"code": "claimSignature.validated"},
+                        ],
+                        "failure": [{"code": "signingCredential.ocsp.revoked"}],
+                    }
+                },
+                "manifests": {
+                    "created": {
+                        "signature_info": {"issuer": "OpenAI"},
+                        "assertions": [
+                            {
+                                "label": "c2pa.actions.v2",
+                                "data": {
+                                    "actions": [
+                                        {
+                                            "action": "c2pa.created",
+                                            "digitalSourceType": "trainedAlgorithmicMedia",
+                                        }
+                                    ]
+                                },
+                            }
+                        ],
+                    }
+                },
+            }
+        )
+        assert info["c2pa_signer_validity"] == "invalid"
+        evidence = ProvenanceEvidence(
+            path=path,
+            c2pa_info=info,
+            ai_metadata={},
+            scan=b"jumb c2pa OpenAI trainedAlgorithmicMedia",
+            iptc_ai_system=None,
+            aigc_label=None,
+            exif_generator=None,
+            xai_signature=False,
+            huggingface_job=None,
+            samsung_genai=None,
+        )
+
+        report = identify_from_evidence(evidence)
+
+        assert report.is_ai_generated is None
+        assert report.platform is None
+        assert report.confidence == "none"
+        assert any("revoked" in clash for clash in report.integrity_clashes)
+
+    def test_anchored_signer_is_also_high_confidence(self, tmp_path: Path):
         path = tmp_path / "validated.png"
         info = {
             "has_c2pa": True,
@@ -83,7 +151,7 @@ class TestProvenanceEvidence:
             "source_type": "trainedAlgorithmicMedia (AI-generated)",
             "ai_source_kind": "generated",
             "c2pa_validation_source": "reader",
-            "c2pa_validation_state": "Valid",
+            "c2pa_validation_state": "Trusted",
             "c2pa_integrity": "valid",
             "c2pa_signature": "valid",
             "c2pa_signer_trust": "trusted",
@@ -112,6 +180,7 @@ class TestProvenanceEvidence:
         assert report.is_ai_generated is True
         assert report.confidence == "high"
         assert report.platform == "OpenAI (ChatGPT / gpt-image / DALL-E / Sora)"
+        assert not any("not anchored" in caveat for caveat in report.caveats)
 
     def test_external_metadata_record_builds_equivalent_evidence(self, tmp_path: Path):
         path = tmp_path / "external.jpg"
@@ -553,7 +622,7 @@ class TestIdentifyRealSamples:
     def test_openai_chatgpt(self):
         r = identify(SAMPLES_DIR / "chatgpt-1.png", check_visible=False)
         assert r.is_ai_generated is True
-        assert r.confidence == "medium"
+        assert r.confidence == "high"
         assert r.platform
         assert "OpenAI" in r.platform
         assert any("C2PA" in w for w in r.watermarks)
@@ -622,15 +691,14 @@ class TestIdentifyRealSamples:
         # both invisible/metadata targets, so the diffusion scrub should run.
         assert has_invisible_target(SAMPLES_DIR / "chatgpt-1.png") is True
         assert has_invisible_target(SAMPLES_DIR / "mj-1.png") is True
-        # ai_from_metadata records scrub intent even when an untrusted signer
-        # makes the provenance verdict medium-confidence.
+        # ai_from_metadata records scrub intent independently of the confidence string.
         assert identify(SAMPLES_DIR / "chatgpt-1.png", check_visible=False).ai_from_metadata is True
 
-    def test_untrusted_but_intact_c2pa_is_medium_confidence(self):
+    def test_untrusted_but_intact_c2pa_is_high_confidence_with_a_caveat(self):
         report = identify(SAMPLES_DIR / "chatgpt-1.png", check_visible=False, check_invisible=False)
 
         assert report.is_ai_generated is True
-        assert report.confidence == "medium"
+        assert report.confidence == "high"
         assert report.ai_from_metadata is True
         assert report.c2pa_validation is not None
         assert report.c2pa_validation["source"] == "reader"
@@ -640,7 +708,30 @@ class TestIdentifyRealSamples:
         assert report.c2pa_validation["signer_trust"] == "untrusted"
         assert report.c2pa_validation["signer_validity"] == "expired"
         assert "assertion.dataHash.match" in report.c2pa_validation["codes"]
-        assert any("not anchored" in caveat for caveat in report.caveats)
+        # What was not established is said, not folded into the confidence string.
+        assert any("never checked against one" in caveat for caveat in report.caveats)
+        assert any("only the signing time is unproven" in caveat for caveat in report.caveats)
+
+    def test_no_committed_fixture_reports_a_trusted_signer(self):
+        """The reachability guard for :func:`_c2pa_credential_level`.
+
+        The SDK ships no production trust anchors, so ``signingCredential.trusted``
+        appears in no default installation. Gating high confidence on it made that branch
+        dead in production for every vendor while a hand-built dict kept it green in the
+        suite. These fixtures are the producer; if one ever comes back trusted, a bundle
+        got configured and the confidence mapping needs re-reading, not this assertion
+        deleted.
+        """
+        checked = 0
+        for path in sorted(SAMPLES_DIR.iterdir()):
+            report = identify(path, check_visible=False, check_invisible=False)
+            if report.c2pa_validation is None:
+                continue
+            checked += 1
+            assert report.c2pa_validation["signer_trust"] != "trusted"
+            if report.c2pa_validation["integrity"] == "valid" and report.c2pa_validation["signature"] == "valid":
+                assert report.confidence == "high", path.name
+        assert checked >= 3
 
     def test_hash_mismatch_does_not_confirm_origin_but_keeps_scrub_fail_safe(self, tampered_chatgpt_png: Path):
         report = identify(tampered_chatgpt_png, check_visible=False, check_invisible=False)

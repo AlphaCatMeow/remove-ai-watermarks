@@ -160,9 +160,26 @@ print(report.c2pa_validation)
 
 `c2pa_validation`, when present, reports `integrity`, `signature`,
 `signer_trust`, and `signer_validity` independently, plus the reader status
-codes. A valid hash and signature with an untrusted or expired signer is a
-medium-confidence signed claim. A hash or signature failure does not confirm the
-claimed platform or AI origin. Fallback parsing reports unknown validation
+codes. A valid hash and signature is a high-confidence signed claim; an
+unanchored or expired signer appears in `caveats` and in these fields, not as a
+lower confidence, because the reader ships no trust anchors to check against and
+`signer_trust` is therefore a missing input rather than a finding. A hash or
+signature failure, or a revoked signing credential, does not confirm the claimed
+platform or AI origin.
+
+A consumer must read `integrity_clashes`. When a credential fails validation,
+`is_ai_generated` becomes `None`, because a claim that cannot be tied to these
+bytes cannot establish origin -- the manifest may have been transplanted from a
+real AI image onto anything -- and the failure is reported in
+`integrity_clashes` instead. That is a different question from whether an AI
+watermark is physically present in the pixels, which is what
+`has_invisible_target` answers, and it stays fail-safe `True` on the same file.
+Reading only `is_ai_generated` turns a broken vendor manifest into silence.
+
+`c2pa_validation["state"]` is the reader's own aggregate and is carried for
+diagnostics only; no verdict is derived from it, because it collapses a
+transplanted manifest and a merely expired certificate into one `Invalid`, and
+its `Trusted` level depends on anchors no default installation has. Fallback parsing reports unknown validation
 dimensions, while a raw marker in an unsupported or malformed container can
 leave `c2pa_validation` as `None`.
 

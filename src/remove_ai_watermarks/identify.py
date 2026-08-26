@@ -118,8 +118,13 @@ _SYNTHID_CAVEAT = (
     "decoded (proprietary decoder). Confirm via the Gemini app or openai.com/verify."
 )
 _C2PA_UNTRUSTED_CAVEAT = (
-    "The C2PA claim signature and asset binding validate, but the signer identity is not anchored "
-    "to a trusted credential here; treat the named platform as a signed claim, not a verified identity."
+    "The C2PA claim signature and asset binding validate, but no trust anchor list is configured here, "
+    "so the signer identity was never checked against one; treat the named platform as a signed claim, "
+    "not a verified identity."
+)
+_C2PA_EXPIRED_CAVEAT = (
+    "The C2PA signing certificate has expired and no trusted timestamp establishes when the claim was "
+    "signed. The binding to these bytes still holds; only the signing time is unproven."
 )
 _C2PA_UNVALIDATED_CAVEAT = (
     "The C2PA marker was parsed without cryptographic validation; treat its origin and watermark "
@@ -474,17 +479,20 @@ class ProvenanceReport:
     # an open DWT-DCT decode) -- as opposed to a visible mark, provenance-only
     # TrustMark, or a weak medium-confidence hint (hf-job, Samsung genAIType). This
     # is the set of signals an invisible/diffusion scrub targets: a visible-only
-    # or no-signal image has it False. An intact C2PA AI claim from an untrusted
-    # signer is deliberately medium-confidence while this remains True; callers
-    # should gate on intent, not on the confidence string.
+    # or no-signal image has it False. Callers should gate on intent, not on the
+    # confidence string.
     ai_from_metadata: bool = False
     watermarks: list[str] = field(default_factory=list[str])
     signals: list[Signal] = field(default_factory=list["Signal"])
     caveats: list[str] = field(default_factory=list[str])
     # Contradictions between independent provenance signals (e.g. two different
     # AI vendors both claiming the image, or camera-capture credentials next to
-    # AI-generation markers). Non-empty means the provenance is internally
-    # inconsistent -- a strong tell of spoofed, transplanted, or laundered metadata.
+    # AI-generation markers), and credentials that failed validation. Non-empty means
+    # the provenance is internally inconsistent -- a strong tell of spoofed,
+    # transplanted, or laundered metadata. A failed credential sends
+    # ``is_ai_generated`` to None and lands here instead, so a consumer that reads
+    # only the verdict field turns a broken AI manifest into silence; see the
+    # ``integrity_clashes`` note in docs/python-api.md.
     integrity_clashes: list[str] = field(default_factory=list[str])
     # Orthogonal C2PA checks. A valid content binding does not make an untrusted
     # signer identity trusted, and an expired credential does not by itself mean the
@@ -547,15 +555,16 @@ def _c2pa_validation(info: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _c2pa_credential_level(info: dict[str, Any]) -> str:
-    """Return invalid, verified, or unverified for provenance attribution."""
+    """Return invalid, verified, or unverified for provenance attribution.
+
+    ``verified`` means the reader tied this manifest to these bytes: the hard binding
+    matched and the claim signature validated. Signer trust is deliberately NOT a
+    condition -- no trust anchors ship, so gating on it made this branch unreachable.
+    Read the trust-anchor paragraph in docs/module-internals.md before changing this.
+    """
     if c2pa_info_has_invalid_credential(info):
         return "invalid"
-    if (
-        info.get("c2pa_integrity") == "valid"
-        and info.get("c2pa_signature") == "valid"
-        and info.get("c2pa_signer_trust") == "trusted"
-        and info.get("c2pa_signer_validity") == "valid"
-    ):
+    if info.get("c2pa_integrity") == "valid" and info.get("c2pa_signature") == "valid":
         return "verified"
     return "unverified"
 
@@ -1148,11 +1157,9 @@ def _identify_from_evidence(
     c2pa_validation = _c2pa_validation(info)
     c2pa_level = _c2pa_credential_level(info)
     c2pa_usable = c2pa_level != "invalid"
-    failed_c2pa_codes = [
-        str(code)
-        for code in cast("list[object]", info.get("c2pa_validation_codes", []))
-        if "mismatch" in str(code) or "invalid" in str(code)
-    ]
+    # The reader already named which failures moved a dimension; re-deriving that here
+    # by substring made the displayed reason a second, looser rule than the verdict.
+    failed_c2pa_codes = [str(code) for code in cast("list[object]", info.get("c2pa_failed_codes", []))]
     issuers = [info["issuer"]] if info.get("issuer") else _issuers_in(region)
     # Full AI generation (trainedAlgorithmicMedia) vs an AI-enhanced real photo
     # (compositeWithTrainedAlgorithmicMedia). The structured kind is parsed once in
@@ -1208,12 +1215,14 @@ def _identify_from_evidence(
                 Signal("c2pa", detail or "C2PA manifest present", "high" if c2pa_level == "verified" else "medium")
             )
             watermarks.append(f"C2PA Content Credentials ({', '.join(issuers) or 'unknown signer'})")
-            if c2pa_level == "unverified":
-                caveats.append(
-                    _C2PA_UNTRUSTED_CAVEAT
-                    if info.get("c2pa_integrity") == "valid" and info.get("c2pa_signature") == "valid"
-                    else _C2PA_UNVALIDATED_CAVEAT
-                )
+            if c2pa_level == "verified":
+                # A missing trust bundle is not a signer that failed against one.
+                if info.get("c2pa_signer_trust") != "trusted":
+                    caveats.append(_C2PA_UNTRUSTED_CAVEAT)
+                if info.get("c2pa_signer_validity") == "expired":
+                    caveats.append(_C2PA_EXPIRED_CAVEAT)
+            else:
+                caveats.append(_C2PA_UNVALIDATED_CAVEAT)
         # Record the AI-origin vendor for clash detection only when the source is
         # actually AI -- classify the issuer attribution / generator, NOT the
         # resolved `platform` (which may be a camera device token whose label,

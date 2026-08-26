@@ -272,7 +272,18 @@ class TestC2PA:
 
         assert c2pa_info_has_removal_hint(info) is False
 
-    def test_invalid_ingredient_does_not_taint_active_validation_or_supply_claims(self):
+    @pytest.mark.parametrize(
+        "ingredient_failure",
+        [
+            # One exclusion rule, reached through two different dimensions: a broken
+            # binding and a credential the issuer disowned. The walk classified only the
+            # first for a while, so a revoked child manifest stayed reachable and kept
+            # donating its claim generator to the parent's attribution.
+            "assertion.dataHash.mismatch",
+            "signingCredential.ocsp.revoked",
+        ],
+    )
+    def test_invalid_ingredient_does_not_taint_active_validation_or_supply_claims(self, ingredient_failure: str):
         store = {
             "active_manifest": "update",
             "validation_results": {
@@ -283,13 +294,7 @@ class TestC2PA:
                     ],
                     "failure": [{"code": "signingCredential.untrusted"}],
                 },
-                "ingredientDeltas": [
-                    {
-                        "validationDeltas": {
-                            "failure": [{"code": "assertion.dataHash.mismatch"}],
-                        }
-                    }
-                ],
+                "ingredientDeltas": [{"validationDeltas": {"failure": [{"code": ingredient_failure}]}}],
             },
             "manifests": {
                 "update": {
@@ -297,11 +302,7 @@ class TestC2PA:
                     "ingredients": [
                         {
                             "active_manifest": "created",
-                            "validation_results": {
-                                "activeManifest": {
-                                    "failure": [{"code": "assertion.dataHash.mismatch"}],
-                                }
-                            },
+                            "validation_results": {"activeManifest": {"failure": [{"code": ingredient_failure}]}},
                         }
                     ],
                     "assertions": [],

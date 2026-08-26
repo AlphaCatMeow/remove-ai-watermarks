@@ -62,6 +62,16 @@ _SIGNATURE_FAILURES = frozenset(
         "claimSignature.outsideValidity",
     }
 )
+# A credential the issuer itself has disowned, disqualifying like a hash mismatch.
+# ``signingCredential.expired`` is deliberately absent: an expired certificate does not
+# imply the signed bytes changed, and a signature actually made outside validity already
+# arrives as ``claimSignature.outsideValidity`` above.
+_CREDENTIAL_FAILURES = frozenset(
+    {
+        "signingCredential.invalid",
+        "signingCredential.ocsp.revoked",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -293,16 +303,24 @@ def _status_codes(store: dict[str, Any]) -> tuple[list[str], list[str], list[str
 
 
 def _store_has_invalid_credential(store: dict[str, Any]) -> bool:
-    """Return whether this store's own active credential failed validation."""
-    _, _, failures = _status_codes(store)
-    return any(marker in code for code in failures for marker in _CONTENT_BINDING_FAILURE_MARKERS) or any(
-        code in _SIGNATURE_FAILURES for code in failures
-    )
+    """Return whether this store's own active credential failed validation.
+
+    Deliberately routed through the same codes -> dimensions -> disqualified path the
+    report uses, rather than re-testing the raw codes here. When this walk classified
+    failures on its own, adding one rule meant editing it and
+    :func:`c2pa_info_has_invalid_credential` in lockstep, and the ingredient
+    reachability walk was free to drift away from the verdict it feeds.
+    """
+    return c2pa_info_has_invalid_credential(_validation_fields(store))
 
 
 def c2pa_info_has_invalid_credential(info: dict[str, Any]) -> bool:
-    """Return whether parsed C2PA info reports a failed binding or signature."""
-    return info.get("c2pa_integrity") == "invalid" or info.get("c2pa_signature") == "invalid"
+    """Return whether parsed C2PA info reports a failed binding, signature, or credential."""
+    return (
+        info.get("c2pa_integrity") == "invalid"
+        or info.get("c2pa_signature") == "invalid"
+        or info.get("c2pa_signer_validity") == "invalid"
+    )
 
 
 def c2pa_info_has_invismark(info: dict[str, Any]) -> bool:
@@ -324,9 +342,16 @@ def _validation_fields(store: dict[str, Any]) -> dict[str, Any]:
     successes, informationals, failures = _status_codes(store)
     all_codes = list(dict.fromkeys([*successes, *informationals, *failures]))
 
-    binding_failed = any(marker in code for code in failures for marker in _CONTENT_BINDING_FAILURE_MARKERS)
+    disqualifying = [
+        code
+        for code in failures
+        if any(marker in code for marker in _CONTENT_BINDING_FAILURE_MARKERS)
+        or code in _SIGNATURE_FAILURES
+        or code in _CREDENTIAL_FAILURES
+    ]
+    binding_failed = any(marker in code for code in disqualifying for marker in _CONTENT_BINDING_FAILURE_MARKERS)
     binding_matched = _has_suffix(successes, _CONTENT_BINDING_MATCHES)
-    signature_failed = any(code in _SIGNATURE_FAILURES for code in failures)
+    signature_failed = any(code in _SIGNATURE_FAILURES for code in disqualifying)
     signature_validated = "claimSignature.validated" in successes
 
     if binding_failed:
@@ -349,7 +374,7 @@ def _validation_fields(store: dict[str, Any]) -> dict[str, Any]:
     else:
         signer_trust = "unknown"
 
-    if any(code in failures for code in ("signingCredential.invalid", "signingCredential.ocsp.revoked")):
+    if any(code in _CREDENTIAL_FAILURES for code in disqualifying):
         signer_validity = "invalid"
     elif "signingCredential.expired" in failures:
         signer_validity = "expired"
@@ -367,6 +392,10 @@ def _validation_fields(store: dict[str, Any]) -> dict[str, Any]:
         "c2pa_signer_trust": signer_trust,
         "c2pa_signer_validity": signer_validity,
         "c2pa_validation_codes": all_codes,
+        # The subset of failures that actually drove a dimension to invalid. Callers
+        # rendering "why" must use this rather than re-classifying the full code list,
+        # or the reason shown and the verdict reached stop being the same rule.
+        "c2pa_failed_codes": disqualifying,
     }
 
 
@@ -610,6 +639,7 @@ def _base_info(byte_count: int, *, fallback: bool = False) -> dict[str, Any]:
             c2pa_signer_trust="unknown",
             c2pa_signer_validity="unknown",
             c2pa_validation_codes=[],
+            c2pa_failed_codes=[],
         )
     return info
 

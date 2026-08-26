@@ -379,12 +379,30 @@ Structured extraction is limited to the active manifest and the ingredient
 manifests reachable from it. Validation is preserved as separate dimensions:
 asset binding integrity, claim signature, signer trust, and signer certificate
 validity. A matching asset hash and valid claim signature do not make an
-untrusted or expired signer trusted. `identify` therefore assigns high confidence
-only when all four dimensions validate, medium confidence to an intact but
-untrusted or unvalidated claim, and no origin verdict to a hash/signature failure.
-The failed claim remains in the marker inventory and keeps the removal gate
-fail-safe because a post-signing container edit can invalidate C2PA without
+untrusted or expired signer trusted, so those stay separate fields and separate
+caveats -- but they do not lower confidence. `identify` assigns high confidence
+when the asset binding and the claim signature both validate, medium confidence
+to a claim that validated nothing (fallback parsing, unknown dimensions), and no
+origin verdict to a binding failure, a signature failure, or a revoked signing
+credential. The failed claim remains in the marker inventory and keeps the removal
+gate fail-safe because a post-signing container edit can invalidate C2PA without
 removing a declared pixel watermark.
+
+Revocation reaches the disqualifying branch through `signer_validity`, not through
+binding or signature. A check that read only the latter two returned a confident AI
+verdict off a credential the issuer had disowned, with an empty `integrity_clashes`
+-- quieter than a hash mismatch on the same file. Certificate expiry is deliberately
+not disqualifying: an expired certificate does not imply the signed bytes changed,
+and a signature actually made outside validity already arrives as
+`claimSignature.outsideValidity`.
+
+One rule, one place. `_validation_fields` maps status codes to the four dimensions
+and also emits `c2pa_failed_codes`, the subset of failures that actually drove a
+dimension to invalid; `c2pa_info_has_invalid_credential` maps those dimensions to
+disqualified, and both the ingredient-reachability walk and the report consume that
+single path. The displayed reason comes from `c2pa_failed_codes` rather than a
+substring rescan of the full code list, so what a caller is shown as the cause
+cannot become a looser rule than the verdict it explains.
 
 The structured walk also treats an exact known AI product in a reachable
 `claim_generator` as an AI assertion. This covers update chains where the active
@@ -405,8 +423,24 @@ Content-fingerprint soft bindings do not trigger pixel regeneration.
 
 The SDK default enables trust verification but supplies no production trust
 anchors. Consequently, an installation without an explicitly maintained C2PA
-trust bundle reports otherwise valid signer chains as untrusted and keeps their
-attribution at medium confidence. Shipping or fetching an official trust bundle
+trust bundle reports every otherwise valid signer chain as untrusted --
+`signingCredential.trusted` appears in no default installation, from any vendor.
+Confidence therefore must not depend on it. It did from 0.27.0 through 0.30.0, which made
+the high-confidence branch unreachable in production while a hand-built fixture
+stamping `signingCredential.trusted` kept it green in the suite; measured on the
+committed provenance fixtures, every C2PA file from OpenAI, Adobe and Black Forest
+Labs came back untrusted, and an intact manifest scored the same medium as a
+fallback parse that validated nothing. That collapsed the one distinction the
+official reader exists to draw.
+`tests/test_identify.py::TestIdentifyRealSamples::test_no_committed_fixture_reports_a_trusted_signer`
+is the reachability guard: it asserts the fixtures really are untrusted and still
+reach high confidence.
+
+Read `untrusted` here as a missing input, not a finding: nothing was checked,
+because there was nothing to check against. If a maintained trust bundle is ever
+configured, that stops being true and the confidence mapping in
+`_c2pa_credential_level` must be re-read, because only then does a failed trust
+check mean the signer was rejected. Shipping or fetching an official trust bundle
 requires a separate update, provenance, and availability policy; do not silently
 convert `signingCredential.untrusted` into trusted based on a vendor-name match.
 
