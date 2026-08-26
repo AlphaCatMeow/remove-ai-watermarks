@@ -69,17 +69,33 @@ SDXL_ZIMAGE_OPENAI_STRENGTH = 0.15
 SDXL_ZIMAGE_GEMINI_STRENGTH = 0.25
 SDXL_ZIMAGE_UNKNOWN_STRENGTH = SDXL_ZIMAGE_GEMINI_STRENGTH
 
-# qwen-zimage keeps its resolution curve for openai/unknown content, but Google
-# content takes this flat oracle-measured floor instead of the curve (whose top,
-# 0.154, left a 4.33 MP CJK-sign fixture detected x3 on the full production path
-# with a valid pixel control, 2026-08-18). 0.30 anchors measured clean in Gemini
-# across two fixtures and two work accounts (CJK sign + 18-face, 3/3 checks each,
-# 2026-08 research) and stayed clean under the vae-glyphs donor layer on top.
-QWEN_ZIMAGE_GOOGLE_STRENGTH = 0.30
+# qwen-zimage keeps its resolution curve for unknown content, but measured vendor
+# cohorts bypass it. Google remained detectable through 0.24375; 0.25 cleared all
+# three valid sources and 0.27 was separately repeated clean across them and three
+# accounts, so the independently checked 0.27 candidate is the operating floor.
+QWEN_ZIMAGE_GOOGLE_STRENGTH = 0.27
+
+# The two OpenAI sources first cleared at 0.06225 and 0.0695. Add one full observed
+# cross-source spread (0.00725) to the worst clean boundary: 0.0695 + 0.00725.
+QWEN_ZIMAGE_OPENAI_STRENGTH = 0.07675
+
+# Microsoft's public detector returned Inconclusive rather than an API-level
+# watermark-negative verdict. Three valid Paint sources first cleared at 0.04125,
+# 0.055, and 0.095. Add one full observed cross-source spread to the worst clean
+# boundary: 0.095 + (0.095 - 0.04125) = 0.14875, rounded up to 0.15. This is a
+# measured corpus margin, not a universal InvisMark threshold.
+QWEN_ZIMAGE_MICROSOFT_STRENGTH = 0.15
+
+_QWEN_ZIMAGE_FLAT_STRENGTH_BY_VENDOR: dict[str, float] = {
+    "google": QWEN_ZIMAGE_GOOGLE_STRENGTH,
+    "openai": QWEN_ZIMAGE_OPENAI_STRENGTH,
+    "microsoft": QWEN_ZIMAGE_MICROSOFT_STRENGTH,
+}
 
 
-# sdxl-zimage picks its strength from the VENDOR (unlike qwen-zimage, which derives it
-# from image area). An unlisted or unknown vendor falls back to the Gemini value.
+# sdxl-zimage always picks its strength from the vendor. qwen-zimage instead uses
+# the vendor only for measured cohorts and image area for unknown content. An
+# unlisted or unknown SDXL vendor falls back to the Gemini value.
 _SDXL_ZIMAGE_STRENGTH_BY_VENDOR: dict[str, float] = {
     "openai": SDXL_ZIMAGE_OPENAI_STRENGTH,
     "google": SDXL_ZIMAGE_GEMINI_STRENGTH,
@@ -112,7 +128,8 @@ def strength_default_help() -> str:
     """Describe the live default policy without duplicating its values."""
     return (
         "profile-adaptive (qwen-zimage uses resolution-adaptive denoise, with a "
-        f"flat oracle-measured Google floor of {QWEN_ZIMAGE_GOOGLE_STRENGTH}; sdxl-zimage "
+        f"flat OpenAI {QWEN_ZIMAGE_OPENAI_STRENGTH} / Google {QWEN_ZIMAGE_GOOGLE_STRENGTH} / "
+        f"Microsoft InvisMark {QWEN_ZIMAGE_MICROSOFT_STRENGTH} floors; sdxl-zimage "
         f"uses OpenAI {SDXL_ZIMAGE_OPENAI_STRENGTH} / Google {SDXL_ZIMAGE_GEMINI_STRENGTH} / "
         f"unknown {SDXL_ZIMAGE_UNKNOWN_STRENGTH}, from the C2PA issuer)"
     )
@@ -131,10 +148,10 @@ def resolve_strength(
     from the vendor, so it needs ``size``; returning ``None`` for it instead would push that
     branch onto every caller and move one of the two strength policies outside this
     module. ``size`` is required for qwen-zimage without an explicit strength.
-    One measured exception since 0.27.2: Google-provenance content on qwen-zimage
-    takes the flat ``QWEN_ZIMAGE_GOOGLE_STRENGTH`` floor instead of the area curve
-    (the curve's 0.154 top left a 4.33 MP fixture oracle-detected on the full
-    production path; see the constant's comment).
+    Measured vendor exceptions bypass the area curve: OpenAI and Microsoft use one
+    additional observed cross-source spread over their worst clean boundaries, while
+    Google uses a separately repeated cross-source candidate. See the constants'
+    comments for the exact derivations.
     """
     if strength is not None:
         return strength
@@ -142,23 +159,32 @@ def resolve_strength(
         return _SDXL_ZIMAGE_STRENGTH_BY_VENDOR.get((vendor or "").casefold(), SDXL_ZIMAGE_UNKNOWN_STRENGTH)
     if size is None:
         raise ValueError("qwen-zimage resolves strength from image area, so size is required")
-    if (vendor or "").casefold() == "google":
-        return QWEN_ZIMAGE_GOOGLE_STRENGTH
+    vendor_strength = _QWEN_ZIMAGE_FLAT_STRENGTH_BY_VENDOR.get((vendor or "").casefold())
+    if vendor_strength is not None:
+        return vendor_strength
     from remove_ai_watermarks._internal.qwen_zimage_pipeline import resolution_adaptive_denoise
 
     return resolution_adaptive_denoise(*size)
 
 
-def vendor_for_strength(image_path: Path) -> Literal["openai", "google"] | None:
-    """Select the strength cohort using the input's SynthID provenance evidence."""
+def vendor_for_strength(image_path: Path) -> Literal["openai", "google", "microsoft"] | None:
+    """Select the strength cohort from non-invalid pixel-watermark provenance."""
     try:
+        from remove_ai_watermarks._internal.c2pa import (
+            c2pa_info_has_invalid_credential,
+            c2pa_info_has_invismark,
+            extract_c2pa_info,
+        )
         from remove_ai_watermarks.metadata import synthid_source
 
-        evidence = (synthid_source(image_path) or "").casefold()
+        info = extract_c2pa_info(image_path)
+        evidence = (synthid_source(image_path, c2pa_info=info) or "").casefold()
     except Exception:
         return None
     if "google" in evidence:
         return "google"
     if "openai" in evidence:
         return "openai"
+    if not c2pa_info_has_invalid_credential(info) and c2pa_info_has_invismark(info):
+        return "microsoft"
     return None

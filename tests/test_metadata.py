@@ -596,6 +596,19 @@ class TestSynthIDSourceNonPng:
         )
         assert synthid_source(path) == "OpenAI"
 
+    def test_preextracted_c2pa_is_reused(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """A caller classifying another claim must not parse the manifest twice."""
+        from remove_ai_watermarks._internal import c2pa
+
+        path = self._c2pa_jpeg(tmp_path, "chatgpt-reused.jpg", b"OpenAI")
+        info = {"synthid_vendors": ["OpenAI"]}
+
+        def unexpected_extract(_path: Path):
+            pytest.fail("synthid_source reparsed pre-extracted C2PA")
+
+        monkeypatch.setattr(c2pa, "extract_c2pa_info", unexpected_extract)
+        assert synthid_source(path, c2pa_info=info) == "OpenAI"
+
     def test_legacy_openai_c2pa_without_watermark_action_is_none(self, tmp_path: Path):
         path = self._c2pa_jpeg(tmp_path, "legacy-chatgpt.jpg", b"OpenAI")
         assert synthid_source(path) is None

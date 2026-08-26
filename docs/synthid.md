@@ -537,8 +537,8 @@ study (section 2.2) gives empirical floors:
 > were removed, and `OPENAI_STRENGTH` / `GEMINI_STRENGTH` / `UNKNOWN_STRENGTH` went
 > with them. Everything from here to the end of this section is a record of what was
 > measured on those profiles, kept because the oracle verdicts are still the evidence
-> base. For the strength policy in force now see `module-internals.md`: `qwen-zimage`
-> uses `resolution_adaptive_denoise`, `sdxl-zimage` a flat vendor ladder.
+> base. For the strength policy in force now see
+> [`known-limitations.md`](known-limitations.md#strength-is-content-and-seed-dependent).
 
 The default was **vendor-adaptive** (`watermark_profiles.resolve_strength` +
 `vendor_for_strength`): the tool read the C2PA issuer on the original input and picked
@@ -691,9 +691,9 @@ solid at 0.10 but at 0.15 it is near-threshold noise; (2) for reliable removal p
 a strength with MARGIN above the borderline (controlnet >= 0.20), not exactly on
 it; (3) **historical engineering conclusion:** this dated run argued for a
 higher ControlNet strength than the then-current default. That proposal was
-later superseded. The current resolver intentionally shares the 0.10/0.15
-ladder between SDXL and ControlNet and uses a separate Qwen ladder; see
-`_internal/watermark_profiles.py`.
+later superseded. The resolver of that period shared the 0.10/0.15 ladder between
+SDXL and ControlNet; the current policies are recorded in
+[`known-limitations.md`](known-limitations.md#strength-is-content-and-seed-dependent).
 Source images are private (faces / product shots), not committed; reproduce on any
 photoreal + flat-graphic gpt-image pair, varying the seed, and re-checking the
 oracle.
@@ -770,14 +770,14 @@ reproducible verification requires a fixed seed.
    Watermarking.** arXiv:2505.21620.
    https://arxiv.org/abs/2505.21620
 
-**Google floor on qwen-zimage (0.27.2, 2026-08-19).** The bracket above did not
+**Google floor on qwen-zimage (0.27.2, remeasured 2026-08-25).** The bracket above did not
 survive the full production path: on the 4.33 MP CJK-sign fixture (visible-stage
 sparkle removal -> qwen-zimage seed 0 at the curve's 0.154 top -> resize-back ->
 metadata strip), the Gemini verifier detected SynthID x3 with a valid
 pixel-identical stripped control in the same session. Google-provenance content
-now takes a flat `QWEN_ZIMAGE_GOOGLE_STRENGTH = 0.30` floor instead of the area
-curve - 0.30 anchors measured clean in Gemini on two fixtures (CJK sign +
-18-face) at 3/3 checks across two work accounts, and stayed clean with the
-vae-glyphs donor layer on top; openai/unknown content keeps the resolution
-curve. An explicit strength still wins. Certification artifacts: raiw-app
+initially took a flat `0.30` floor instead of the area curve. The later provider
+remeasurement established a common pass at `0.25` across three valid sources and
+separately repeated `QWEN_ZIMAGE_GOOGLE_STRENGTH = 0.27` across those sources and
+three accounts. OpenAI now has its own measured flat operating point; unknown
+content keeps the resolution curve. An explicit strength still wins. Certification artifacts: raiw-app
 `data/certification/text-restoration-2026-08-18/` (the failing re-baseline).

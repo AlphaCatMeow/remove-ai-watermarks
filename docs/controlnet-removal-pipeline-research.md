@@ -521,7 +521,7 @@ held by its masked ArcFace vector -- no original pixel copied.
   drift, NOT a perfect face swap. Set expectations; PuLID/InstantID are the higher-fidelity (heavier)
   paths if needed.
 - **Value scales with strength:** at low strength (OpenAI 0.10) faces barely drift, so FaceID is
-  marginal; at the higher strength a hard vendor (Google 0.30) needs, FaceID earns its keep.
+  marginal; at the higher strength then used for a hard vendor (Google 0.30), FaceID earned its keep.
 
 ### Build plan (staged)
 

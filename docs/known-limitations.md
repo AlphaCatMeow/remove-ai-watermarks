@@ -177,13 +177,14 @@ path has not yet answered.
 The two profiles resolve an unset strength differently, because different things
 were measured for each.
 
-`qwen-zimage` reads it from image area, through the resolution-adaptive denoise
-curve. The vendor is deliberately ignored for openai/unknown content: the curve,
-not the issuer, is what was calibrated. One measured exception (0.27.2):
-Google-provenance content takes the flat `QWEN_ZIMAGE_GOOGLE_STRENGTH` 0.30 floor
-- the curve's 0.154 top left a 4.33 MP fixture oracle-detected on the full
-production path (2026-08-18), while 0.30 anchors measured clean on two fixtures
-in two accounts.
+`qwen-zimage` reads unknown content from the resolution-adaptive denoise curve.
+Measured provider cohorts instead take flat operating points: OpenAI `0.07675`,
+Google `0.27`, and Microsoft InvisMark `0.15`. OpenAI and Microsoft add one full
+observed cross-source boundary spread to the worst clean source; Microsoft's three
+first-clean boundaries were `0.04125`, `0.055`, and `0.095`, giving `0.14875` before
+rounding up. Google's candidate was separately repeated across three valid sources
+and three accounts. The small corpora make these operating points, not universal
+thresholds.
 
 `sdxl-zimage` reads it from the C2PA issuer, on a flat ladder:
 

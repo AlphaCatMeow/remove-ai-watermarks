@@ -15,6 +15,7 @@ from remove_ai_watermarks._internal.utils import get_image_format, is_supported_
 from remove_ai_watermarks._internal.watermark_profiles import (
     PROFILE_CHOICES,
     QWEN_ZIMAGE_GOOGLE_STRENGTH,
+    QWEN_ZIMAGE_OPENAI_STRENGTH,
     REMOVAL_MODULES,
     SDXL_ZIMAGE_GEMINI_STRENGTH,
     SDXL_ZIMAGE_OPENAI_STRENGTH,
@@ -198,19 +199,19 @@ class TestNoReembeddedWatermark:
 
 
 class TestResolveStrength:
-    """resolve_strength answers for sdxl-zimage and defers for qwen-zimage."""
+    """resolve_strength owns the qwen-zimage and sdxl-zimage policies."""
 
     def test_qwen_zimage_answers_from_the_resolution_curve(self):
         """The function is total: it owns both policies rather than returning None.
 
-        qwen-zimage picks strength from image area, so it takes the size. Returning
-        None for it would push that branch onto every caller and leave one of the two
-        strength policies living outside this module. Google content is the one
-        measured exception since 0.27.2: it takes the flat oracle-measured floor
-        instead of the curve (the curve's 0.154 top left a 4.33 MP fixture
-        oracle-detected on the full production path).
+        qwen-zimage picks unknown content's strength from image area, so it takes the
+        size. Returning None would push that branch onto every caller and leave one of
+        the two strength policies living outside this module. Measured providers take
+        flat corpus-derived operating points instead.
         """
-        assert resolve_strength(None, "openai", "qwen-zimage", size=(2000, 1850)) == pytest.approx(0.154)
+        assert resolve_strength(None, "openai", "qwen-zimage", size=(2000, 1850)) == pytest.approx(
+            QWEN_ZIMAGE_OPENAI_STRENGTH
+        )
         assert resolve_strength(None, None, "qwen-zimage", size=(600, 500)) == pytest.approx(0.084)
         assert resolve_strength(None, "google", "qwen-zimage", size=(600, 500)) == QWEN_ZIMAGE_GOOGLE_STRENGTH
         # The floor holds at every size, not only above the curve's top rung.
@@ -220,6 +221,12 @@ class TestResolveStrength:
         """A missing size must not silently fall back to some vendor value."""
         with pytest.raises(ValueError, match="size is required"):
             resolve_strength(None, "openai", "qwen-zimage")
+
+    @pytest.mark.parametrize(("vendor", "expected"), [("microsoft", 0.15), ("openai", 0.07675)])
+    def test_qwen_zimage_measured_vendors_use_flat_cross_source_margins(self, vendor, expected):
+        """Measured providers must not fall below their operating points on small files."""
+        assert resolve_strength(None, vendor, "qwen-zimage", size=(600, 500)) == pytest.approx(expected)
+        assert resolve_strength(None, vendor, "qwen-zimage", size=(4000, 3000)) == pytest.approx(expected)
 
     def test_sdxl_zimage_uses_its_flat_vendor_ladder(self):
 
@@ -253,7 +260,7 @@ class TestResolveStrength:
 
 
 class TestVendorForStrength:
-    """vendor_for_strength normalizes SynthID provenance to openai/google/None."""
+    """Normalize supported invisible-watermark provenance to a removal profile."""
 
     @staticmethod
     def _patch(value):
@@ -270,6 +277,22 @@ class TestVendorForStrength:
 
         with self._patch("Google"):
             assert vendor_for_strength(Path("x.png")) == "google"
+
+    @pytest.mark.parametrize(("integrity", "expected"), [("valid", "microsoft"), ("invalid", None)])
+    def test_only_valid_microsoft_invismark_selects_the_removal_floor(self, integrity, expected):
+        from remove_ai_watermarks._internal.watermark_profiles import vendor_for_strength
+
+        info = {
+            "soft_binding_vendors": ["Microsoft InvisMark"],
+            "c2pa_integrity": integrity,
+            "c2pa_signature": "valid",
+            "c2pa_signer_validity": "valid",
+        }
+        with (
+            self._patch(None),
+            patch("remove_ai_watermarks._internal.c2pa.extract_c2pa_info", return_value=info),
+        ):
+            assert vendor_for_strength(Path("x.png")) == expected
 
     def test_both_issuers_google_wins(self):
         # The more-robust watermark wins -> safer (higher) strength.

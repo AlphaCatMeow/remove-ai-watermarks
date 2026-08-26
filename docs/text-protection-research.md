@@ -20,8 +20,8 @@ filter applied to every candidate below.
 ## Problem recap
 
 The `invisible` pipeline is SDXL base 1.0 img2img to defeat SynthID. The default
-strength has risen over time as Google hardens SynthID (0.05 -> 0.10 -> **~0.30**, the
-current threshold for fresh Gemini output); higher strength deforms text more, which is
+strength rose over time as Google hardened SynthID (0.05 -> 0.10 -> **~0.30** in
+this experiment; the later measured operating point is 0.27); higher strength deforms text more, which is
 exactly why text protection matters. Text is protected via Differential Diffusion with a
 per-pixel change map (`preserve` ~0.9) driven by the PP-OCRv3 DB detector
 (`text_protector.py`). Large text survives; **small text (sub ~8 px strokes) softens or

@@ -876,6 +876,11 @@ are CUDA-only. `controlnet`, `sdxl`, `qwen` and `default` were removed rather th
 kept as a CPU path, and are rejected rather than aliased onward. There is no
 content-dependent automatic router.
 
+`qwen-zimage` normally resolves global denoise from image area for unknown content.
+Measured provider cohorts bypass that curve with flat operating points. The values,
+measurement derivations, and corpus limits are canonical in
+[`known-limitations.md`](known-limitations.md#strength-is-content-and-seed-dependent).
+
 For serverless cold starts, `InvisibleEngine.preload(global_only=True)` loads the
 mandatory global stage and YuNet while leaving the optional Z-Image and SAM face
 stack lazy until a face is detected. The default `preload()` still loads every

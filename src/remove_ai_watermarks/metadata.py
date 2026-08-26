@@ -792,7 +792,7 @@ def _iptc_ai_system_impl(image_path: Path) -> str | None:
     return iptc_ai_system_in(scan_head(image_path))
 
 
-def synthid_source(image_path: Path) -> str | None:
+def synthid_source(image_path: Path, *, c2pa_info: dict[str, Any] | None = None) -> str | None:
     """Return the vendor name(s) when provenance establishes SynthID.
 
     This is provenance-based, not a local pixel decode. Google states that all
@@ -808,6 +808,8 @@ def synthid_source(image_path: Path) -> str | None:
 
     Args:
         image_path: Path to the image (PNG, JPEG, WebP, or ISOBMFF container).
+        c2pa_info: Already extracted normalized C2PA info, for callers that also need
+            another claim from the same manifest.
 
     Returns:
         Comma-joined vendor name(s) (e.g. ``"OpenAI"``) or None.
@@ -821,7 +823,7 @@ def synthid_source(image_path: Path) -> str | None:
     # Prefer the official reader's structured result. A failed asset binding or
     # signature cannot establish the claim, and the raw fallback below must not
     # resurrect it from the same damaged manifest bytes.
-    c2pa = extract_c2pa_info(image_path)
+    c2pa = extract_c2pa_info(image_path) if c2pa_info is None else c2pa_info
     if c2pa_info_has_invalid_credential(c2pa):
         return None
     vendors = c2pa.get("synthid_vendors")
