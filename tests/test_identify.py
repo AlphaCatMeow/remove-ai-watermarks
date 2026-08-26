@@ -1172,6 +1172,9 @@ class TestIdentifySoftBinding:
         signal = next(signal for signal in report.signals if signal.name == "soft_binding")
         assert "com.microsoft.invismark.1" in signal.detail
         assert watermark_id in signal.detail
+        invismark = next(signal for signal in report.signals if signal.name == "invismark")
+        assert "com.microsoft.invismark.1" in invismark.detail
+        assert watermark_id in invismark.detail
         assert any("may remain in the pixels" in caveat for caveat in report.caveats)
 
 

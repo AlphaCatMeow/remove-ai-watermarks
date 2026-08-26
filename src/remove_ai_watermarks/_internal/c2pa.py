@@ -305,11 +305,15 @@ def c2pa_info_has_invalid_credential(info: dict[str, Any]) -> bool:
     return info.get("c2pa_integrity") == "invalid" or info.get("c2pa_signature") == "invalid"
 
 
+def c2pa_info_has_invismark(info: dict[str, Any]) -> bool:
+    """Return whether parsed C2PA info declares Microsoft InvisMark."""
+    soft_bindings = info.get("soft_binding_vendors")
+    return isinstance(soft_bindings, list) and "Microsoft InvisMark" in soft_bindings
+
+
 def c2pa_info_has_removal_hint(info: dict[str, Any]) -> bool:
     """Return whether a C2PA AI or watermark claim should keep removal fail-safe."""
-    soft_bindings = info.get("soft_binding_vendors")
-    has_invismark = isinstance(soft_bindings, list) and "Microsoft InvisMark" in soft_bindings
-    return bool(info.get("ai_source_kind") or info.get("synthid_watermark") or has_invismark)
+    return bool(info.get("ai_source_kind") or info.get("synthid_watermark") or c2pa_info_has_invismark(info))
 
 
 def _has_suffix(codes: list[str], suffixes: tuple[str, ...]) -> bool:

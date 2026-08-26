@@ -140,15 +140,17 @@ is still inconclusive.
 
 Microsoft Paint can name `com.microsoft.invismark.1` in a C2PA soft-binding
 assertion. Inspection reports both that exact algorithm and its signed `value`,
-which Paint uses as the identifier carried by the pixel watermark. Photos has a
-parallel local writer path, but no public output sample was available for this
-work. Metadata stripping removes the embedded manifest, not the pixel carrier.
-The project has no validated local InvisMark decoder. Microsoft's official
+which Paint uses as the identifier carried by the pixel watermark, and emits an
+additive `invismark` signal so callers can select pixel removal without parsing
+the generic `soft_binding` detail. Photos uses a parallel local writer path.
+Metadata stripping removes only the embedded manifest; `invisible` and `all`
+guarantee the supported InvisMark removal contract by regenerating the pixel
+layer as well. The project has no validated local InvisMark decoder, so local
+inspection cannot independently verify the output. Microsoft's official
 [Content Provenance Detection API](https://learn.microsoft.com/en-us/azure/ai-services/content-safety/how-to/how-to-provenance-detection)
 is the external oracle: it reports pixel `Watermark` and embedded `C2PA` results
-separately. The diffusion profiles have not been broadly certified against that
-oracle, so a control-positive, output-negative pair is still a per-file result,
-not a universal guarantee.
+separately; a control-positive, output-negative pair is the available per-file
+verification path.
 
 For MP4, MOV, and M4V, `video invisible` or the explicit
 `video all --invisible` option can regenerate the video through a VAE and strip

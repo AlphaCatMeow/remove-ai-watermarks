@@ -13,6 +13,7 @@ from PIL import Image
 from remove_ai_watermarks._internal.c2pa import (
     _parse_c2pa_chunk,
     c2pa_info_from_manifest_store,
+    c2pa_info_has_invismark,
     c2pa_info_has_removal_hint,
     cbor_text_after,
     extract_c2pa_chunk,
@@ -258,7 +259,10 @@ class TestC2PA:
         assert "soft_binding_value" not in c2pa_info_from_manifest_store(store)
 
     def test_soft_binding_keeps_invisible_removal_fail_safe(self):
-        assert c2pa_info_has_removal_hint({"soft_binding_vendors": ["Microsoft InvisMark"]}) is True
+        info = {"soft_binding_vendors": ["Microsoft InvisMark"]}
+
+        assert c2pa_info_has_invismark(info) is True
+        assert c2pa_info_has_removal_hint(info) is True
 
     def test_content_fingerprint_does_not_trigger_invisible_removal(self):
         info = {

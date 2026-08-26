@@ -399,7 +399,9 @@ decoder or registry entry. `com.microsoft.invismark.1` uses that value as the
 pixel-watermark identifier in Microsoft Paint output. An InvisMark soft binding
 keeps the invisible-removal gate fail-safe even when the C2PA asset binding has
 since become invalid, because metadata damage does not prove the pixel carrier
-disappeared. Content-fingerprint soft bindings do not trigger pixel regeneration.
+disappeared. `identify` retains the generic `soft_binding` signal for schema-1
+compatibility and adds `invismark` as the stable pixel-removal signal.
+Content-fingerprint soft bindings do not trigger pixel regeneration.
 
 The SDK default enables trust verification but supplies no production trust
 anchors. Consequently, an installation without an explicitly maintained C2PA

@@ -44,6 +44,10 @@ removal.
 | Run visible, invisible, and metadata removal | `all` | Recommended |
 | Process a directory | `batch` | Depends on mode |
 
+Microsoft Paint and Photos InvisMark declarations are routed automatically to
+pixel regeneration. The `all` command removes both the hidden pixel watermark and
+its linked C2PA manifest; metadata stripping alone removes only the manifest.
+
 ## Installation modes
 
 | Need | Install |

@@ -233,6 +233,11 @@ the schema 1 serializer remains available for rolling upgrades. Asking a release
 an unsupported schema raises `ValueError` rather than silently returning another
 shape.
 
+Microsoft InvisMark declarations emit both the compatible generic `soft_binding`
+signal and the additive `invismark` signal. Consumers should use `invismark` to route
+the image through pixel removal; the generic signal also covers content fingerprints
+that must not trigger regeneration.
+
 A record carries metadata regions, not the primary coded-pixel stream: marker
 segments before the JPEG scan, every PNG chunk except `IDAT`, RIFF chunks except the
 coded image, the ISOBMFF provenance boxes, the container's trailer, the parsed EXIF tags the

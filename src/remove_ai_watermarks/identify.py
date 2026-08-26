@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any, cast
 from remove_ai_watermarks._internal.c2pa import (
     c2pa_info_from_manifest_store,
     c2pa_info_has_invalid_credential,
+    c2pa_info_has_invismark,
     c2pa_info_has_removal_hint,
     cbor_text_after,
     extract_c2pa_info,
@@ -1287,6 +1288,17 @@ def _identify_from_evidence(
                 "high" if c2pa_level == "verified" else "medium",
             )
         )
+        if c2pa_info_has_invismark(info):
+            # Keep the generic soft-binding row for schema-1 compatibility, and add
+            # the pixel-removal target as its own stable signal for clients that need
+            # to select diffusion without parsing human-readable detail.
+            signals.append(
+                Signal(
+                    "invismark",
+                    f"Microsoft InvisMark pixel watermark: {soft_binding_details}",
+                    "high" if c2pa_level == "verified" else "medium",
+                )
+            )
         watermarks.append(f"Forensic watermark soft binding ({soft_binding_details})")
         caveats.append(_SOFT_BINDING_CAVEAT)
 
