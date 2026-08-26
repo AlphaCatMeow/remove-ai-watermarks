@@ -135,3 +135,9 @@ version of remove-ai-watermarks==X.Y.Z" even though the simple index already
 lists it: uv serves its cached pre-release view of the index. Re-run with a
 fresh cache (`UV_CACHE_DIR=$(mktemp -d)`) before treating it as a release
 failure.
+
+The ComfyUI sync run can fail the same way on its own: it resolves the version
+from the PyPI JSON API (which updates first) but installs the test dependency
+with pip against the simple index, whose CDN edges lag by minutes. Rerun the
+failed `distribute.yml` comfyui job once the simple index lists the release;
+nothing about the release itself is wrong.
