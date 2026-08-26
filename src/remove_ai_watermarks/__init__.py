@@ -32,7 +32,7 @@ _os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
 _warnings.filterwarnings("ignore", message=r".*ImageProcessorFast.*")
 
 
-__version__ = "0.30.1"
+__version__ = "0.31.0"
 
 __all__ = [
     "BatchSummary",
