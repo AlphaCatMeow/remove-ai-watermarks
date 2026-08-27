@@ -1356,11 +1356,16 @@ def _identify_from_evidence(
             # the edit with photoshop:Credit / IPTC "Apple Photos Clean Up"
             # next to compositeWithTrainedAlgorithmicMedia. It was detected but
             # previously never attributed.
-            platform = (
-                "Apple Photos (Clean Up AI edit)"
-                if b"Apple Photos Clean Up" in head
-                else "Made-with-AI tag (e.g. Meta AI); platform not specified"
-            )
+            if b"Apple Photos Clean Up" in head:
+                platform = "Apple Photos (Clean Up AI edit)"
+            else:
+                # The platform line follows the same measured bet the seal signal
+                # and the strength router make: Muse Image is the tag writer whose
+                # outputs this profile targets, so a hedged Muse attribution is
+                # more useful than "platform not specified" while the panel below
+                # already prices the Content Seal removal. The hedge stays in the
+                # wording - it names the attribution basis, not a detection.
+                platform = "Meta Muse Image (attributed by the standalone AI digital-source tag)"
 
     # ── IPTC 2025.1 AI-disclosure fields (Iptc4xmpExt:AISystemUsed etc.) ─
     iptc_ai = any(m in head for m in IPTC_AI_FIELD_MARKERS)
