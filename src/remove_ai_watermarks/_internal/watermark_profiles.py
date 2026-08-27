@@ -79,8 +79,9 @@ QWEN_ZIMAGE_GOOGLE_STRENGTH = 0.27
 # cross-source spread (0.00725) to the worst clean boundary: 0.0695 + 0.00725.
 QWEN_ZIMAGE_OPENAI_STRENGTH = 0.07675
 
-# Microsoft's public detector returned Inconclusive rather than an API-level
-# watermark-negative verdict. Three valid Paint sources first cleared at 0.04125,
+# Microsoft's public detector (https://ai.azure.com/nextgen/validate) returned
+# Inconclusive rather than an API-level watermark-negative verdict. Three valid
+# Paint sources first cleared at 0.04125,
 # 0.055, and 0.095. Add one full observed cross-source spread to the worst clean
 # boundary: 0.095 + (0.095 - 0.04125) = 0.14875, rounded up to 0.15. This is a
 # measured corpus margin, not a universal InvisMark threshold.

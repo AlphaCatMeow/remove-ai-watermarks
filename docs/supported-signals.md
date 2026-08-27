@@ -152,7 +152,11 @@ inspection cannot independently verify the output. Microsoft's official
 [Content Provenance Detection API](https://learn.microsoft.com/en-us/azure/ai-services/content-safety/how-to/how-to-provenance-detection)
 is the external oracle: it reports pixel `Watermark` and embedded `C2PA` results
 separately; a control-positive, output-negative pair is the available per-file
-verification path.
+verification path. The API needs Azure credentials; the page a human can check
+without an account is <https://ai.azure.com/nextgen/validate>. Its verdict is
+weaker than the API's: it collapses watermark and C2PA into one rendered result
+and tops out at `Inconclusive` rather than a watermark-negative, so treat
+`Inconclusive` on a processed file as "not confirmed", not as "detected still".
 
 Meta Muse Image stamps every output with Content Seal, a proprietary invisible
 pixel watermark, and ships no visible mark (the legacy `Imagined with AI`
