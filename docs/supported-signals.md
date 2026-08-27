@@ -165,7 +165,12 @@ This project has no local Content Seal decoder. Meta Model API outputs and
 Meta CDN copies carry an XMP `iptcExt:DigitalSourceType =
 trainedAlgorithmicMedia` companion tag, which `identify` reports through the
 existing Made-with-AI path; that IPTC code is a standard, not a Meta-exclusive
-signal, so it cannot key a strength cohort the way the C2PA issuer does. The
+signal, so it cannot key a strength cohort the way the C2PA issuer does. Since
+0.33.0 a standalone AI digital-source tag (no C2PA manifest) additionally emits
+the additive `content_seal` signal - the strength router's Meta bet as evidence,
+medium confidence, with the same caveat - so clients select pixel removal from
+the signal list exactly the way InvisMark is additive over `soft_binding`. It
+is an attribution, never a decode. The
 external oracle is `https://meta.ai/identification`: anonymous, no login,
 accepts image, video, and audio, enforces an unspecified daily identification
 limit, and answers with model attribution (`Muse Image 1 - Meta`) plus a

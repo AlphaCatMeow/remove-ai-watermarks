@@ -666,6 +666,35 @@ class TestIdentifyRealSamples:
         assert r.is_ai_generated is True
         assert r.ai_source_kind == "enhanced"
 
+    def test_standalone_ai_tag_attributes_the_content_seal(self, tmp_path: Path):
+        """A standalone AI digital-source tag emits the seal as its own signal.
+
+        Muse Image outputs carry no C2PA; this tag is their only provenance, and
+        Muse stamps every output with the invisible Content Seal. The signal is
+        the strength router's Meta bet as evidence - an attribution, not a decode
+        (no public decoder exists), so its confidence is medium and the caveat
+        still points at the oracle.
+        """
+        p = tmp_path / "muse-tag.jpg"
+        p.write_bytes(
+            b'\xff\xd8\xff\xe1<x:xmpmeta Iptc4xmpExt:DigitalSourceType="trainedAlgorithmicMedia"></x:xmpmeta>\xff\xd9'
+        )
+
+        r = identify(p, check_visible=False, check_invisible=False)
+
+        names = [s.name for s in r.signals]
+        assert "iptc" in names
+        assert "content_seal" in names
+        seal = next(s for s in r.signals if s.name == "content_seal")
+        assert seal.confidence == "medium"
+        assert "Invisible Content Seal watermark (Meta Muse attribution)" in r.watermarks
+        assert any("meta.ai/identification" in c for c in r.caveats)
+
+    def test_c2pa_backed_file_gets_no_content_seal_attribution(self):
+        """C2PA issuers win first: a manifest-backed file is not Meta-routed."""
+        r = identify(SAMPLES_DIR / "flux-1.png", check_visible=False, check_invisible=False)
+        assert "content_seal" not in [s.name for s in r.signals]
+
     def test_flux_bfl_c2pa_png(self):
         # flux-1.png: real Black Forest Labs FLUX.2 Playground output (signed C2PA).
         r = identify(SAMPLES_DIR / "flux-1.png", check_visible=False)

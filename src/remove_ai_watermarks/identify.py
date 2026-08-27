@@ -1278,12 +1278,12 @@ def _identify_from_evidence(
     # vendor-token inference must not add a second, differently-attributed
     # invisible watermark (Microsoft Designer: "Azure OpenAI ImageGen" agent +
     # the InvisMark watermarked action read as "SynthID per OpenAI").
-
+    soft_binding_vendors = soft_binding_vendors_in(region)
     if (
         not synthid
         and trained_source
         and c2pa_marker_in(head)
-        and not soft_binding_vendors_in(region)
+        and not soft_binding_vendors
         and (vendors := synthid_evidence_vendors_in(region))
     ):
         synthid = synthid_verdict(", ".join(vendors))
@@ -1300,7 +1300,7 @@ def _identify_from_evidence(
     # ── C2PA soft-binding: a named forensic/third-party watermark vendor ─
     # (Adobe TrustMark, Digimarc, Imatag, ...). Present in the manifest even when
     # the watermark itself can't be decoded; names whose watermark stamped the pixels.
-    soft_binding = meta.get("soft_binding") or (", ".join(v) if (v := soft_binding_vendors_in(region)) else None)
+    soft_binding = meta.get("soft_binding") or (", ".join(soft_binding_vendors) if soft_binding_vendors else None)
     if soft_binding:
         soft_binding_algorithm = meta.get("soft_binding_algorithm") or info.get("soft_binding_algorithm")
         soft_binding_value = meta.get("soft_binding_value") or info.get("soft_binding_value")
@@ -1334,6 +1334,21 @@ def _identify_from_evidence(
     if standalone_iptc:
         signals.append(Signal("iptc", "digitalSourceType (Made with AI)", "high"))
         watermarks.append("IPTC digitalSourceType (Made with AI)")
+        # Muse Image stamps every output with the invisible Content Seal, and this
+        # tag is the only provenance such a file carries - the same measured bet
+        # the strength router makes (vendor_for_strength -> "meta"). Emit the seal
+        # as its own stable signal, the way InvisMark is additive over
+        # soft_binding, so clients select pixel removal from the signal list
+        # instead of parsing caveats. It is an attribution, not a decode: no
+        # public Content Seal decoder exists, hence "medium".
+        signals.append(
+            Signal(
+                "content_seal",
+                "Meta Muse Content Seal pixel watermark (attributed by the standalone AI digital-source tag)",
+                "medium",
+            )
+        )
+        watermarks.append("Invisible Content Seal watermark (Meta Muse attribution)")
         caveats.append(_IPTC_ONLY_CAVEAT)
         caveats.append(_CONTENT_SEAL_CAVEAT)
         if platform is None:
