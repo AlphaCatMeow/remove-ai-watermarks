@@ -111,6 +111,14 @@ For important outputs:
 Provider systems can change, so a result verified on one file, seed, or version
 is not a permanent certification.
 
+Meta Content Seal (Muse Image) is in the same family: no local decoder, presence
+recognizable only through the XMP `trainedAlgorithmicMedia` companion tag while
+that metadata survives, and removal verifiable only through the anonymous
+`meta.ai/identification` oracle, which rate-limits by IP per day. The oracle's
+negative is weaker than its positive: Reuters measured it missing 55% of cropped
+Muse images, so treat a negative on a cropped or heavily edited file as
+inconclusive rather than clean.
+
 ### Video SynthID removal is lossy and content-dependent
 
 The `video invisible` command and `remove_video_invisible` API regenerate video

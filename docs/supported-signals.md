@@ -154,6 +154,31 @@ is the external oracle: it reports pixel `Watermark` and embedded `C2PA` results
 separately; a control-positive, output-negative pair is the available per-file
 verification path.
 
+Meta Muse Image stamps every output with Content Seal, a proprietary invisible
+pixel watermark, and ships no visible mark (the legacy `Imagined with AI`
+corner mark belongs to the pre-2026 Imagine pipeline and is not registered).
+This project has no local Content Seal decoder. Meta Model API outputs and
+Meta CDN copies carry an XMP `iptcExt:DigitalSourceType =
+trainedAlgorithmicMedia` companion tag, which `identify` reports through the
+existing Made-with-AI path; that IPTC code is a standard, not a Meta-exclusive
+signal, so it cannot key a strength cohort the way the C2PA issuer does. The
+external oracle is `https://meta.ai/identification`: anonymous, no login,
+accepts image, video, and audio, enforces an unspecified daily identification
+limit, and answers with model attribution (`Muse Image 1 - Meta`) plus a
+per-generation ID and creation timestamp read from the watermark payload. No
+identification endpoint exists in the Meta Model API itself (the reference at
+dev.meta.ai documents only generation and edits for images), and the official
+documentation never mentions the seal. The
+default `qwen-zimage` profile clears Content Seal at the default
+resolution-adaptive strength (oracle-verified on 2.56 MP generations); measured
+strength boundaries are recorded in `data/contentseal/manifest.csv` and
+[module internals](module-internals.md#meta-content-seal-boundaries-for-qwen-zimage)
+(derived Meta floor 0.1 by the standard spread method, not shipped as a constant
+because no provenance signal can route Muse output onto a vendor cohort).
+The seal survives resizing, JPEG recompression, and metadata stripping; it dies
+to center crops of a third to a half, matching the Reuters 2026-07-11 finding
+that Meta's detector missed 55% of cropped Muse images.
+
 For MP4, MOV, and M4V, `video invisible` or the explicit
 `video all --invisible` option can regenerate the video through a VAE and strip
 source metadata. The shipped profile is oracle-certified, but it is not a local
@@ -174,6 +199,7 @@ not a universal clean verdict.
 | Google Gemini | Sparkle | Diffusion regeneration for SynthID | C2PA and related source signals |
 | Google Veo video | Veo diamond and legacy text | Oracle-certified VAE removal for SynthID | C2PA and related source signals |
 | OpenAI image generators | None registered | Diffusion regeneration for supported invisible signals | C2PA and generator provenance |
+| Meta Muse Image | None on Muse output (legacy `Imagined with AI` unregistered) | Diffusion regeneration for Content Seal, oracle-verified on the default profile | XMP IPTC `trainedAlgorithmicMedia` companion tag; no local Content Seal decoder |
 | Microsoft Paint and Photos | None registered | External Microsoft oracle for InvisMark; no validated local decoder | Paint C2PA soft-binding algorithm and identifier |
 | Stable Diffusion and SDXL | None registered | Diffusion regeneration; optional open decoder | Embedded parameters and text metadata |
 | FLUX | None registered | Diffusion regeneration; optional open decoder | C2PA for supported sources |

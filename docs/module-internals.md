@@ -1149,6 +1149,40 @@ sizes the curve's own values verify clean, which is what a resolution-scaled
 requirement would predict. There is no measured size at which the shipped curve fails,
 so it is left alone.
 
+### Meta Content Seal boundaries for qwen-zimage
+
+Measured 2026-08-26 against the anonymous oracle `meta.ai/identification`
+(verdicts read from the settled page text; corpus and full row-level provenance in
+`data/contentseal/manifest.csv`). Muse Image carries no C2PA, so
+`vendor_for_strength` returns None for it and these images ride the default
+resolution-adaptive curve; there is deliberately no `meta` entry in the flat vendor
+map, because no provenance signal can establish that cohort automatically and an
+unreachable constant would be dead code.
+
+| source (2.56 MP generation) | detected at | clean from |
+|---|---|---|
+| gen_lighthouse_watercolor | 0.0525 | 0.06 |
+| gen_fox_forest | 0.03 | 0.0375 |
+| gen_night_city | 0.03 | 0.0375 |
+| gen_studio_mug | -- | 0.03 |
+| gen_text_poster | -- | 0.015 |
+
+Full spread: worst first-clean boundary (0.0525, 0.06] on lighthouse, easiest
+source already clean at 0.015. Following the same derivation as the OpenAI and
+Microsoft floors (worst clean boundary plus one full observed cross-source
+spread): 0.06 + (0.0525 - 0.015) = 0.0975, rounded up to **0.1**. This is a
+candidate `meta` floor, not yet a shipped constant: Muse outputs carry no C2PA,
+so `vendor_for_strength` has no signal that could route them onto the flat
+vendor map automatically. Encoding 0.1 as `QWEN_ZIMAGE_META_STRENGTH` makes
+sense only once the tool gains an explicit way to opt into a Meta cohort (for
+example a CLI `--vendor meta` override); the default resolution-adaptive curve
+(~0.1305 at 2.56 MP) already clears every measured source, so default behavior
+needs no change. Oracle verdicts carry a per-generation ID and creation timestamp
+embedded in the watermark payload; both survived the 512 px resize and JPEG q85
+rows, so payload recovery outlives the detection threshold. Oracle session
+limits are per-IP, server-side, and sliding-window: clearing cookies and storage
+does not reset them, and a burst exhausts the window minutes after it reopens.
+
 ### Static prompt embeddings
 
 Both stages prompt with module constants, and at CFG 1.0 DiffSynth's
