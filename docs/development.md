@@ -1,5 +1,9 @@
 # Development
 
+Standalone evaluation, calibration, and release utilities are catalogued in
+[`scripts/README.md`](../scripts/README.md). They are maintainer tools rather than
+installed commands, and their local data inputs remain outside the repository.
+
 Read this reference for environment setup, dependency recovery, CI behavior, and fixture policy. The always-loaded invariants remain in [`.claude/rules/development.md`](../.claude/rules/development.md).
 
 ## Local environment

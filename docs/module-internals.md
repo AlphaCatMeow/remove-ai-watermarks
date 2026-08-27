@@ -746,9 +746,9 @@ capture-less pill is too weak to attribute.
 
 The set of marks that veto the pill is DERIVED from the registry rows: every mark
 under the same label regime (`tc260`) belonging to a different product. It used to
-be a hand-written list of keys, and that list drifted -- LibLibAI was registered
-alongside RunningHub and Baidu, both of which were added to it, and LibLibAI was
-not, so a confident LibLibAI detection did not suppress the pill the way its two
+be a hand-written list of keys, and that list drifted -- LiblibAI was registered
+alongside RunningHub and Baidu, both of which were added to it, and LiblibAI was
+not, so a confident LiblibAI detection did not suppress the pill the way its two
 siblings did. Marks outside the TC260 regime (Gemini, Samsung) are deliberately
 not vetoers: neither can put `jimeng` into `provenance`, so neither can enable the
 arm it would be vetoing.
@@ -818,7 +818,7 @@ were briefly skipped there for exactly that reason.
 A mark whose removable footprint differs from what the detector localizes
 overrides `_footprint_rect` (which policy) and `_extend_match_box` (how far the
 box grows), not the whole `footprint_mask`. Baidu extends right to the corner tag
-and LibLibAI extends left to the triangle logo; both inherit every guard around
+and LiblibAI extends left to the triangle logo; both inherit every guard around
 that arithmetic.
 
 Yuanbao uses the polarity-independent `contrast` front end because its standard
@@ -1020,11 +1020,13 @@ Validation happens before model loading. The library never treats OCR confidence
 verification, and geometry-only operators do not need to invent text or script fields.
 
 When enabled, `QwenZImagePipeline` reconstructs the source once through its already
-loaded Qwen VAE, runs the ordinary global and face stages, blends 15% of the VAE
-reconstruction into that clean result, and calls the shared restoration compositor.
-The compositor derives binary source and candidate silhouettes, groups nearby lines,
-uses LaMa for the initial and residual-glyph erase passes, paints fresh silhouette
-edges, then copies the Qwen-VAE core with a 0.5-pixel feather. The evaluation script
+loaded Qwen VAE, runs the ordinary global and face stages, and calls the shared
+restoration compositor. The optional fidelity anchor first blends 15% of the VAE
+reconstruction into the clean result; it is off by default because the blend returned
+detector-visible OpenAI SynthID in the measured poster fixtures. The compositor derives
+binary source and candidate silhouettes, groups nearby lines, uses LaMa for the initial
+and residual-glyph erase passes, paints fresh silhouette edges, then copies the Qwen-VAE
+core with a 0.5-pixel feather. The evaluation script
 imports these same mask and compositing helpers so the two implementations cannot
 silently drift. Silhouette crops start 12% of line height beyond each horizontal
 side, then expand each side independently while a foreground component anchored

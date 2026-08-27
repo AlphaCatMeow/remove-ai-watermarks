@@ -34,7 +34,10 @@ DESIGNER_STORE = {
                 },
                 {
                     "label": "c2pa.soft-binding",
-                    "data": {"alg": "com.microsoft.invismark.1", "blocks": [{"value": "bf7a2993-cc1f-47e1-b1f0-cd8839aabb22"}]},
+                    "data": {
+                        "alg": "com.microsoft.invismark.1",
+                        "blocks": [{"value": "bf7a2993-cc1f-47e1-b1f0-cd8839aabb22"}],
+                    },
                 },
             ],
         }

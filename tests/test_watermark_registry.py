@@ -529,7 +529,7 @@ class TestMarkKnowledgeIsOnTheRow:
 
     Product family, label regime, the platform sentence and the metadata signals that
     confirm the vendor all used to live in separate hand-maintained tables across
-    ``watermark_registry``, ``identify`` and ``api``. That is how LibLibAI ended up
+    ``watermark_registry``, ``identify`` and ``api``. That is how LiblibAI ended up
     registered but absent from the pill veto.
     """
 
@@ -563,7 +563,7 @@ class TestMarkKnowledgeIsOnTheRow:
 class TestPillSuppressors:
     """The pill veto is derived from the registry, not hand-listed.
 
-    The hand-written list drifted: LibLibAI was registered in the same commit as
+    The hand-written list drifted: LiblibAI was registered in the same commit as
     RunningHub and Baidu, both of which were added to the veto, and it was not. A
     derived set cannot be forgotten by the next registration.
     """
@@ -581,7 +581,7 @@ class TestPillSuppressors:
         assert not reg._keep_pill({"liblib"}, provenance=frozenset({"jimeng"}), footprint_flat=1.0)
 
     def test_pill_dropped_on_liblib_even_with_the_jimeng_wordmark(self):
-        """The veto precedes the wordmark arm, so a co-firing LibLibAI wins.
+        """The veto precedes the wordmark arm, so a co-firing LiblibAI wins.
 
         This is the broader half of the change: it needs neither TC260 provenance nor
         a flat footprint, so it is reachable on more inputs than the metadata arm.

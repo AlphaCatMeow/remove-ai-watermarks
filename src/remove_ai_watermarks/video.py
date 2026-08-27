@@ -179,8 +179,8 @@ _VISIBLE_PLATFORM = {
     "veo": "Google Veo",
     "seedance": "ByteDance Seedance",
     "dola": "ByteDance Dola",
-    "hailuo": "MiniMax Hailuo",
-    "kling": "Kuaishou Kling",
+    "hailuo": "MiniMax Hailuo AI",
+    "kling": "Kuaishou Kling AI",
 }
 
 

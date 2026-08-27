@@ -60,6 +60,7 @@ class TestVerifiedTextMode:
         manifest.write_text("{}", encoding="utf-8")
         cases = (
             ("sdxl-zimage", {}, "qwen-zimage"),
+            ("qwen-zimage", {"tile": True}, "not calibrated with --tile"),
             ("qwen-zimage", {"max_resolution": 1024}, "max-resolution 0"),
             ("qwen-zimage", {"humanize": 1.0}, "humanize=0"),
             ("qwen-zimage", {"adaptive_polish": True}, "polish disabled"),
@@ -127,10 +128,6 @@ class TestVerifiedTextMode:
         engine.remove_watermark(source, output, text_manifest=manifest, fidelity_anchor=True)
 
         assert seen["fidelity_anchor"] is True
-
-        engine.remove_watermark(source, output, text_manifest=manifest, tile=True)
-
-        assert seen["tile"] is True
 
 
 class TestNativeOutputSize:

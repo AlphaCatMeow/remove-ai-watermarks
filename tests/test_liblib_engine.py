@@ -1,4 +1,4 @@
-"""Tests for the LibLibAI ("LibLibAI" wordmark) visible-watermark engine.
+"""Tests for the LiblibAI ("LiblibAI" wordmark) visible-watermark engine.
 
 Every tuned constant in ``liblib_engine`` was measured on the 15-frame vendor
 cohort (2026-07-22); these tests pin the load-bearing ones: the bottom-CENTER
@@ -24,7 +24,7 @@ _MARK_FRAC = 0.10  # measured wordmark width, fraction of the frame WIDTH
 
 
 def _compose(w: int, h: int, bg: float = 100.0):
-    """Composite a triangle logo + the LibLibAI wordmark, bottom-center."""
+    """Composite a triangle logo + the LiblibAI wordmark, bottom-center."""
     img = np.full((h, w, 3), bg, np.float32)
     at = _alpha_template()
     gw = int(_MARK_FRAC * w)
@@ -112,8 +112,8 @@ class TestDetectAndMask:
         assert eng.footprint_mask(img) is None
 
     def test_confident_liblib_detection_suppresses_the_jimeng_pill(self):
-        # A LibLibAI image is TC260 too but is not Jimeng-basic: like Doubao/Qwen/
-        # Kling/RunningHub/Baidu, a confident LibLibAI detection must veto the pill.
+        # A LiblibAI image is TC260 too but is not Jimeng-basic: like Doubao/Qwen/
+        # Kling/RunningHub/Baidu, a confident LiblibAI detection must veto the pill.
         # It was the one mark the hand-written veto list in ``_keep_pill`` missed.
         from remove_ai_watermarks.watermark_registry import _keep_pill
 

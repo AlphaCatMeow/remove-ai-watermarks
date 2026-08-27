@@ -624,16 +624,16 @@ def _populate_registry_fields(buffer: bytes, info: dict[str, Any]) -> bool:
 
     if b"c2pa.watermarked" in buffer:
         info["watermarked"] = True
+    soft_bindings = soft_binding_vendors_in(buffer)
     synthid = (
         []
-        if soft_binding_vendors_in(buffer)
+        if soft_bindings
         else synthid_evidence_vendors_in(buffer, has_watermark_action=info.get("watermarked", False))
     )
     if ai_source and synthid:
         info["synthid_vendors"] = synthid
         info["synthid_watermark"] = synthid_verdict(", ".join(synthid))
 
-    soft_bindings = soft_binding_vendors_in(buffer)
     if soft_bindings:
         info["soft_binding_vendors"] = soft_bindings
         info["soft_binding"] = ", ".join(soft_bindings)

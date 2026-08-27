@@ -4,7 +4,7 @@ name: Distribute on release
 # PyPI is handled by publish.yml. This workflow event-drives the three channels
 # that would otherwise be manual:
 #   - Homebrew tap: rewrite the formula's url + sha256 to the new sdist.
-#   - HF Space: factory-rebuild so it reinstalls the latest sdist from PyPI.
+#   - HF Space: factory-rebuild the version already pinned in the Space repo.
 #   - ComfyUI: sync, test, and publish the node against the exact library release.
 # All wait for the freshly published sdist to appear on PyPI first, since the
 # Release event fires in parallel with publish.yml's upload.

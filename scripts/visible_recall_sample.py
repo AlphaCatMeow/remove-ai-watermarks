@@ -22,10 +22,10 @@ Design decisions that matter:
 
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 import random
-import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -34,6 +34,8 @@ import numpy as np
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
+
+import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from remove_ai_watermarks.image_io import imread
@@ -63,10 +65,16 @@ def corner_strip(img: NDArray[Any]) -> NDArray[Any] | None:
 
 
 def main() -> None:
-    scan = Path(sys.argv[1])
-    out = Path(sys.argv[2])
-    n_tc260 = int(sys.argv[3]) if len(sys.argv) > 3 else 160
-    n_google = int(sys.argv[4]) if len(sys.argv) > 4 else 80
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("scan", type=Path, help="JSONL corpus scan produced by the visible evaluation harness")
+    parser.add_argument("output", type=Path, help="Directory for contact sheets and the blinded manifest")
+    parser.add_argument("--tc260", type=int, default=160, help="Number of TC260 carriers to sample")
+    parser.add_argument("--google", type=int, default=80, help="Number of Google-provenance carriers to sample")
+    args = parser.parse_args()
+    scan = args.scan
+    out = args.output
+    n_tc260 = args.tc260
+    n_google = args.google
     out.mkdir(parents=True, exist_ok=True)
 
     recs = [json.loads(line) for line in scan.open() if '"marks"' in line]

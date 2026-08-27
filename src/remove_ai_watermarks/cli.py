@@ -307,7 +307,7 @@ _seed_option = click.option(
     help="Random seed for reproducibility. Default 0: both profiles are certified "
     "at a fixed seed, because SynthID removal near the strength floor is seed-dependent.",
 )
-_hf_token_option = click.option("--hf-token", type=str, default=None, help="HuggingFace API token.")
+_hf_token_option = click.option("--hf-token", type=str, default=None, help="Hugging Face API token.")
 _humanize_option = click.option(
     "--humanize", type=float, default=0.0, help="Analog Humanizer film grain intensity (0 = off, typical: 2.0-6.0)."
 )
@@ -859,7 +859,7 @@ def cmd_invisible(
     text_manifest: Path | None,
     fidelity_anchor: bool,
 ) -> None:
-    """Remove invisible AI watermarks (SynthID, StableSignature, TreeRing).
+    """Attempt to disrupt invisible AI watermarks through pixel regeneration.
 
     Regenerates the pixels with the two-stage diffusion profile. CUDA-only:
     pip install 'remove-ai-watermarks[qwen-zimage]'
@@ -1001,8 +1001,8 @@ def cmd_metadata(
     Strips EXIF AI tags, PNG text chunks, C2PA provenance manifests, and the
     China TC260 AIGC label. Beyond images (PNG/JPEG/WebP/AVIF/HEIF/JXL) it also
     strips provenance metadata from MP4/MOV/M4V/M4A containers and, via ffmpeg,
-    from WebM/MKV/AVI/FLV/MP3/WAV/FLAC/OGG. The coded image, audio, and video
-    data are left untouched.
+    from WebM/MKV/MKA/AVI/FLV/MP3/WAV/FLAC/OGG/OGA/Opus/AAC. The coded image,
+    audio, and video data are left untouched.
     """
     from remove_ai_watermarks.metadata import get_ai_metadata, has_ai_metadata, strip_and_verify
 

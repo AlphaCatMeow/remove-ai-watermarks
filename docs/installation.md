@@ -114,6 +114,7 @@ application actually uses:
 | `lama` | big-LaMa ONNX fill backend | `visible`, ONNX Runtime | Model download, no Torch |
 | `qwen-zimage` | Invisible image-watermark removal, both CUDA-only profiles | `diffusion`, DiffSynth | Yes |
 | `text-restoration` | Opt-in verified Qwen-VAE glyph restoration | `qwen-zimage`, `lama` | Yes |
+| `text-draft` | Draft OCR proposals for operator verification | PaddleOCR, PaddlePaddle | Model download, no Torch |
 | `all` | Every production feature available on the active Python | All compatible rows above | Yes |
 | `dev` | Tests, linting, typing, and upstream parity checks | `video`, `detect`, upstream invisible-watermark | Yes, for parity tests |
 
@@ -130,12 +131,15 @@ flowchart LR
     qwen["qwen-zimage"] --> diffusion
     text["text-restoration"] --> qwen
     text --> lama
+    draft["text-draft"]
     heif
     trustmark
 ```
 
-`heif` and `trustmark` are independent branches. Combine them explicitly with
-another feature when required. TrustMark requires NumPy 1.x, which has no
+`heif`, `trustmark`, and `text-draft` are independent branches. Combine them
+explicitly with another feature when required. `text-draft` is excluded from
+`all` because it proposes unverified OCR annotations and is not a production
+removal path. TrustMark requires NumPy 1.x, which has no
 CPython 3.13 or 3.14 wheels, so that branch is available only on Python
 3.11-3.12. The `all` bundle contains every production branch compatible with
 the active Python and never includes `dev`.

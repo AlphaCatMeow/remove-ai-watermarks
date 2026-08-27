@@ -58,7 +58,7 @@ defines two more native serializations. AVI stores an `AIGC` child in
 bounded RIFF and FLV readers validate the JSON field set and skip media
 payloads. Removal remuxes either container through ffmpeg with stream copy.
 
-- **HuggingFace-hosted job (caught by `metadata.huggingface_job`, surfaced by `identify` as the `hf_job` signal, MEDIUM confidence):** HuggingFace Jobs / Spaces can stamp generated PNGs with an `hf-job-id` tEXt chunk holding the job UUID. It marks the *hosting job*, not a model, so it lifts an Unknown verdict to a tentative AI via `hf_only` but never overrides a hard metadata signal. `_HF_JOB_CAVEAT` states the limit. Removal drops the chunk through the PNG metadata whitelist.
+- **Hugging Face-hosted job (caught by `metadata.huggingface_job`, surfaced by `identify` as the `hf_job` signal, MEDIUM confidence):** Hugging Face Jobs / Spaces can stamp generated PNGs with an `hf-job-id` tEXt chunk holding the job UUID. It marks the *hosting job*, not a model, so it lifts an Unknown verdict to a tentative AI via `hf_only` but never overrides a hard metadata signal. `_HF_JOB_CAVEAT` states the limit. Removal drops the chunk through the PNG metadata whitelist.
 - **No detectable signal on some downloads:** Recraft exports and some hosted
   FLUX surfaces can arrive without a supported local signal. Midjourney samples
   may carry IPTC metadata but no registered C2PA or pixel watermark. The open

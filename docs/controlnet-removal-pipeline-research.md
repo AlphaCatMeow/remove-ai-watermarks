@@ -641,7 +641,7 @@ photo only).
 
 **Sources.** https://arxiv.org/abs/2206.11253 (CodeFormer) · https://github.com/sczhou/CodeFormer ·
 https://arxiv.org/pdf/2401.07519 (InstantID) ·
-https://openaccess.thecvf.com/content/WACV2024/papers/Suin_Diffuse_and_Restore... (region-adaptive) ·
+https://openaccess.thecvf.com/content/WACV2024/html/Suin_Diffuse_and_Restore_A_Region-Adaptive_Diffusion_Model_for_Identity-Preserving_Blind_WACV_2024_paper.html (region-adaptive) ·
 https://arxiv.org/pdf/2504.12809 (saliency-aware watermark removal)
 
 ## Provenance

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import csv
+import math
 import sys
 import threading
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
+import numpy as np
 import pytest
 
 from remove_ai_watermarks import optional_deps, video_encoding, video_invisible
@@ -90,6 +92,50 @@ def test_regeneration_rejects_noise_outside_unit_interval(tmp_path: Path) -> Non
             tmp_path / "candidate.mp4",
             noise_std=1.01,
         )
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"fps": 0.0}, "fps must be at least 1"),
+        ({"batch_size": 0}, "batch_size must be at least 1"),
+        ({"duration": 0.0}, "duration must be positive"),
+        ({"device": "tpu"}, "device must be auto, cuda, mps, or cpu"),
+    ],
+)
+def test_regeneration_rejects_invalid_controls_before_probing(
+    tmp_path: Path,
+    kwargs: dict[str, Any],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        video_invisible.regenerate_video_candidate(
+            tmp_path / "source.mp4",
+            tmp_path / "candidate.mp4",
+            **kwargs,
+        )
+
+
+def test_fit_size_and_paired_psnr_validate_geometry() -> None:
+    assert video_invisible._fit_size(1920, 1080, 512) == (512, 288)
+    with pytest.raises(ValueError, match="positive"):
+        video_invisible._fit_size(0, 1080, 512)
+    with pytest.raises(ValueError, match="at least"):
+        video_invisible._fit_size(1920, 1080, 4)
+
+    frame = np.zeros((2, 2, 3), dtype=np.uint8)
+    assert video_invisible.paired_psnr(frame, frame) == math.inf
+    with pytest.raises(ValueError, match="matching shapes"):
+        video_invisible.paired_psnr(frame, frame[:1])
+
+
+def test_load_runtime_rejects_invalid_device_and_missing_extra(monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(ValueError, match="device must be"):
+        video_invisible.load_video_vae_runtime(device="tpu")
+
+    monkeypatch.setattr(video_invisible, "is_available", lambda: False)
+    with pytest.raises(RuntimeError, match="diffusion extra"):
+        video_invisible.load_video_vae_runtime()
 
 
 def test_encoder_and_mux_commands_separate_streaming_frames_from_source_audio(
@@ -298,8 +344,9 @@ def test_shipped_defaults_match_a_certified_manifest_row() -> None:
     rate now fails here until a ``not_detected`` row exists for that exact triple.
 
     The tuple stops at three fields because the model is a fourth thing the oracle
-    was shown and neither tracked row records it. That omission is data-driven: add
-    ``vae`` here in the same commit as the first row that records one.
+    was shown and neither historical row recorded it. The manifest says
+    ``unrecorded`` rather than leaving an ambiguous empty field. Add ``vae`` here in
+    the same commit as the first row that records one.
     """
     with ORACLE_MANIFEST.open(newline="", encoding="utf-8") as stream:
         certified = {
@@ -318,6 +365,15 @@ def test_shipped_defaults_match_a_certified_manifest_row() -> None:
         f"shipped (noise_std, long_side, fps)={shipped} has no certified row in "
         f"{ORACLE_MANIFEST.name}; certified: {sorted(certified)}"
     )
+
+
+def test_oracle_manifest_marks_missing_vae_identity_explicitly() -> None:
+    with ORACLE_MANIFEST.open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
+
+    assert rows
+    assert all(row["vae"] for row in rows)
+    assert all(row["vae"] == "unrecorded" or "/" in row["vae"] for row in rows)
 
 
 def test_stream_batches_consumes_only_one_batch_ahead() -> None:

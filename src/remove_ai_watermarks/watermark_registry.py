@@ -17,17 +17,17 @@ localizer stays cheap (cv2/numpy, CPU) so a memory-tight caller can run it on a
 small worker; the heavy fill (MI-GAN / LaMa) is opt-in and chosen by the caller.
 
 Entries:
-  - ``gemini`` -- Google Gemini / Nano Banana sparkle, bottom-right.
+  - ``gemini`` -- Google Gemini / Nano Banana visible watermark (sparkle), bottom-right.
   - ``doubao`` -- ByteDance Doubao "豆包AI生成" text strip, bottom-right.
   - ``jimeng`` -- ByteDance Jimeng / Dreamina "★ 即梦AI" wordmark, bottom-right.
   - ``qwen`` -- Alibaba Qwen "千问AI生成" text strip, bottom-right.
-  - ``kling`` -- Kuaishou Kling "可灵AI 3.0" text strip, bottom-right.
+  - ``kling`` -- Kuaishou Kling AI "可灵AI 3.0" text strip, bottom-right.
   - ``yuanbao`` -- Tencent Yuanbao "元宝 / AI生成" two-line mark, bottom-right.
   - ``samsung`` -- Samsung Galaxy AI "Contenuti generati dall'AI" strip, bottom-left.
   - ``jimeng_pill`` -- Jimeng-basic "AI生成" pill, top-left (capture-less).
   - ``runninghub`` -- RunningHub "RunningHub AI生成" text, top-left (gray front-end).
   - ``baidu`` -- Baidu "百度 AI生成" text + white tag, bottom-right.
-  - ``liblib`` -- LibLibAI "LibLibAI" wordmark, bottom-center.
+  - ``liblib`` -- LiblibAI "LiblibAI" wordmark, bottom-center.
 """
 
 from __future__ import annotations
@@ -620,7 +620,7 @@ _REGISTRY: tuple[KnownMark, ...] = (
     # is None so it can never act as a TC260 sibling in _keep_pill.
     KnownMark(
         "gemini",
-        "Google Gemini sparkle",
+        "Google Gemini visible watermark (sparkle)",
         "bottom-right",
         True,
         "gemini",
@@ -656,9 +656,9 @@ _REGISTRY: tuple[KnownMark, ...] = (
     ),
     _text_mark(
         "kling",
-        "Kling 可灵AI 3.0 text",
+        "Kling AI 可灵AI 3.0 text",
         "bottom-right",
-        platform="Kuaishou Kling (visible 可灵AI 3.0 mark detected)",
+        platform="Kuaishou Kling AI (visible 可灵AI 3.0 mark detected)",
         tc260_producer_codes=("91110108335469089C",),
     ),
     _text_mark(
@@ -693,9 +693,9 @@ _REGISTRY: tuple[KnownMark, ...] = (
     ),
     _text_mark(
         "liblib",
-        "LibLibAI wordmark",
+        "LiblibAI wordmark",
         "bottom-center",
-        platform="LibLibAI (visible LibLibAI mark detected)",
+        platform="LiblibAI (visible LiblibAI mark detected)",
         tc260_producer_codes=("91110105MACJ6K1C8A",),
     ),
     # Same product as the Jimeng wordmark -- the one pair that cross-relaxes.
@@ -794,7 +794,7 @@ def tc260_producer_vendors() -> dict[str, str]:
 def _pill_suppressors() -> set[str]:
     """Marks whose detection vetoes the capture-less pill: same label regime as the
     pill, different product. Derived so a newly registered TC260 mark cannot be
-    forgotten here -- which is exactly how LibLibAI ended up missing."""
+    forgotten here -- which is exactly how LiblibAI ended up missing."""
     pill = get_mark("jimeng_pill")
     return {
         m.key
@@ -822,9 +822,9 @@ def _keep_pill(keys: set[str], *, provenance: frozenset[str], footprint_flat: bo
     No confirmation at all -> never remove (blocks false fires on non-Jimeng content).
 
     The suppressor set is DERIVED from the registry (same label regime, different
-    product), not hand-listed. The hand-written list had drifted: LibLibAI was
+    product), not hand-listed. The hand-written list had drifted: LiblibAI was
     registered alongside RunningHub and Baidu but never added to it, so a confident
-    LibLibAI detection did not veto the pill the way its two siblings did. Marks
+    LiblibAI detection did not veto the pill the way its two siblings did. Marks
     outside the TC260 regime (Gemini, Samsung) are deliberately NOT suppressors --
     neither can put ``"jimeng"`` into ``provenance``, so neither can enable the arm
     they would be vetoing."""

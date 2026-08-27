@@ -33,7 +33,7 @@ warnings.filterwarnings("ignore", category=UserWarning, module="huggingface_hub"
 warnings.filterwarnings("ignore", category=UserWarning, module="diffusers")
 warnings.filterwarnings("ignore", module="transformers")
 
-# Suppress HuggingFace internal logging
+# Suppress Hugging Face internal logging
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 os.environ["DIFFUSERS_VERBOSITY"] = "error"
 
@@ -104,7 +104,7 @@ class InvisibleEngine:
                 global pass, vendor-adaptive strength because an SDXL global stage
                 needs more of it). BOTH ARE CUDA-ONLY -- there is no CPU or MPS path
                 for invisible-watermark removal.
-            hf_token: HuggingFace API token.
+            hf_token: Hugging Face API token.
             progress_callback: Optional callback for progress messages.
             controlnet_conditioning_scale: Canny ControlNet structure-preservation
                 strength on the global stage of both profiles.
@@ -187,9 +187,8 @@ class InvisibleEngine:
                 pixels. Enables the experimental Qwen-VAE ``vae-glyphs`` post-pass.
                 Requires the ``text-restoration`` extra and the ``qwen-zimage``
                 profile. Incompatible with downscaling, humanize, unsharp, and
-                adaptive polish. Tiling is supported: the VAE donor uses the same
-                overlapping tiles as the global pass, then glyph restore runs on
-                the blended full frame.
+                adaptive polish. Tiling is rejected because that combination has
+                no provider-oracle calibration.
             fidelity_anchor: Blend 15% of the Qwen-VAE donor across the whole frame
                 before glyph restoration. OFF by default since 0.27.1: that global
                 blend was measured to return detector-visible OpenAI SynthID on
@@ -211,6 +210,8 @@ class InvisibleEngine:
         if text_manifest is not None:
             if self._remover.model_profile != QWEN_ZIMAGE_PROFILE:
                 raise ValueError("--text-manifest is supported only by the qwen-zimage profile")
+            if tile:
+                raise ValueError("--text-manifest is not calibrated with --tile")
             if max_resolution != 0:
                 raise ValueError("--text-manifest requires --max-resolution 0")
             if humanize > 0.0 or unsharp > 0.0 or adaptive_polish:

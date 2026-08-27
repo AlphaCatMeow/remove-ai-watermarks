@@ -1,13 +1,13 @@
-"""LibLibAI visible watermark detector/localizer.
+"""LiblibAI visible watermark detector/localizer.
 
-LibLibAI (哩布哩布AI, USCC 91110105MACJ6K1C8A) stamps its generations with a
-white triangle logo + "LibLibAI" latin wordmark at **bottom-center** (not a
+LiblibAI (哩布哩布AI, USCC 91110105MACJ6K1C8A) stamps its generations with a
+white triangle logo + "LiblibAI" Latin wordmark at **bottom-center** (not a
 corner -- the locate box is horizontally centered). Detection matches the
-bundled font-rendered "LibLibAI" silhouette (the triangle logo is NOT rendered
+bundled font-rendered "LiblibAI" silhouette (the triangle logo is NOT rendered
 -- logos vary, the wordmark discriminates); removal is the shared **localize ->
 fill** (the glyph blob covers logo + wordmark, both bright).
 
-This module supplies only LibLibAI's tuned :class:`TextMarkConfig`
+This module supplies only LiblibAI's tuned :class:`TextMarkConfig`
 (``assets/liblib_alpha.png`` from ``scripts/render_vendor_silhouettes.py``,
 never cut from an upload).
 
@@ -64,7 +64,7 @@ _ALPHA_HEIGHT_FRAC = 0.026
 _LADDER = (0.9, 1.0, 1.1)
 
 _CONFIG = TextMarkConfig(
-    name="LibLibAI",
+    name="LiblibAI",
     asset_name="liblib_alpha.png",
     corner="bc",
     margin_floor=4,
@@ -90,12 +90,12 @@ _CONFIG = TextMarkConfig(
 
 
 def _alpha_template() -> NDArray[Any] | None:
-    """The bundled LibLibAI alpha template (float [0,1]), or None."""
+    """The bundled LiblibAI alpha template (float [0,1]), or None."""
     return _text_mark_engine.load_alpha_template(_CONFIG.asset_name)
 
 
 class LibLibEngine(TextMarkEngine):
-    """Detect/localize the visible LibLibAI wordmark (bottom-center; localize -> fill)."""
+    """Detect/localize the visible LiblibAI wordmark (bottom-center; localize -> fill)."""
 
     # Per-mark size floor prevents small generic icons from matching the wordmark.
     _MIN_SHORT_SIDE = 480

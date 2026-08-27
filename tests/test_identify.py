@@ -703,7 +703,8 @@ class TestIdentifyRealSamples:
         )
         apple = tmp_path / "apple.jpg"
         apple.write_bytes(
-            b'\xff\xd8\xff\xe1<x:xmpmeta Iptc4xmpExt:DigitalSourceType="compositeWithTrainedAlgorithmicMedia" photoshop:Credit="Apple Photos Clean Up"></x:xmpmeta>\xff\xd9'
+            b'\xff\xd8\xff\xe1<x:xmpmeta Iptc4xmpExt:DigitalSourceType="compositeWithTrainedAlgorithmicMedia" '
+            b'photoshop:Credit="Apple Photos Clean Up"></x:xmpmeta>\xff\xd9'
         )
 
         assert identify(muse, check_visible=False, check_invisible=False).platform == (

@@ -434,10 +434,10 @@ user can act on rather than after a model load.
 ### Restore operator-verified text
 
 `--text-manifest` enables the experimental `vae-glyphs` post-pass. It reconstructs
-the source with the Qwen VAE, blends 15% of that reconstruction into the normal
-`qwen-zimage` result, erases the annotated candidate glyphs with LaMa, and composites
-only the reconstructed glyph cores through source-derived silhouettes. It does not
-run OCR or choose which strings are correct.
+the source with the Qwen VAE, erases the annotated candidate glyphs with LaMa, and
+composites only the reconstructed glyph cores through source-derived silhouettes. It
+does not run OCR or choose which strings are correct. The optional `--fidelity-anchor`
+described below additionally blends 15% of the reconstruction across the full frame.
 
 Install the combined extra and run only with an operator-verified manifest:
 

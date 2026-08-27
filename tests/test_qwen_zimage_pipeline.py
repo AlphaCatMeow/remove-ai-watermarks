@@ -659,8 +659,7 @@ def test_no_face_path_still_runs_verified_text_restoration(monkeypatch):
     restore.assert_called_with(source, anchor, donor, manifest.lines)
 
 
-def test_tiled_verified_text_runs_vae_donor_per_tile(monkeypatch):
-    from remove_ai_watermarks._internal import qwen_zimage_pipeline, text_restoration
+def test_tiled_verified_text_is_rejected_before_model_work():
     from remove_ai_watermarks._internal.qwen_zimage_pipeline import QwenZImagePipeline
     from remove_ai_watermarks._internal.text_restoration import VerifiedTextLine, VerifiedTextManifest
 
@@ -668,12 +667,6 @@ def test_tiled_verified_text_runs_vae_donor_per_tile(monkeypatch):
     pipeline.device = "cuda"
     pipeline.progress_callback = None
     source = Image.new("RGB", (96, 80), (10, 20, 30))
-    restored = Image.new("RGB", (96, 80), (130, 140, 150))
-    pipeline._qwen_vae_roundtrip = MagicMock(side_effect=lambda tile: tile)
-    pipeline._run_global = MagicMock(side_effect=lambda tile, _strength, _seed: tile)
-    monkeypatch.setattr(qwen_zimage_pipeline, "detect_faces", lambda _image: [])
-    restore = MagicMock(return_value=restored)
-    monkeypatch.setattr(text_restoration, "restore_verified_text", restore)
     manifest = VerifiedTextManifest(
         "0" * 64,
         96,
@@ -681,23 +674,16 @@ def test_tiled_verified_text_runs_vae_donor_per_tile(monkeypatch):
         (VerifiedTextLine((4, 4, 20, 16), "Exact", "alphabetic"),),
     )
 
-    result = pipeline.run(
-        source,
-        strength=0.1,
-        seed=0,
-        tile=True,
-        tile_size=64,
-        tile_overlap=16,
-        text_manifest=manifest,
-    )
-
-    assert result is restored
-    assert pipeline._qwen_vae_roundtrip.call_count > 1
-    assert pipeline._run_global.call_count > 1
-    restore.assert_called_once()
-    assert restore.call_args.args[0].size == (96, 80)
-    assert restore.call_args.args[1].size == (96, 80)
-    assert restore.call_args.args[2].size == (96, 80)
+    with pytest.raises(ValueError, match="not calibrated with tiled diffusion"):
+        pipeline.run(
+            source,
+            strength=0.1,
+            seed=0,
+            tile=True,
+            tile_size=64,
+            tile_overlap=16,
+            text_manifest=manifest,
+        )
 
 
 def test_watermark_remover_dispatches_to_full_pipeline(tmp_path, monkeypatch):
@@ -755,6 +741,29 @@ def test_watermark_remover_dispatches_qwen_tiling_to_full_pipeline(tmp_path, mon
     assert kwargs["tile_size"] == 64
     assert kwargs["tile_overlap"] == 16
     assert output.exists()
+
+
+def test_watermark_remover_rejects_tiled_verified_text_before_pipeline(tmp_path, monkeypatch):
+    from remove_ai_watermarks._internal.text_restoration import VerifiedTextLine, VerifiedTextManifest
+    from remove_ai_watermarks._internal.watermark_remover import WatermarkRemover
+
+    _mock_watermark_runtime_deps(monkeypatch)
+    source = tmp_path / "source.png"
+    Image.new("RGB", (96, 80), (20, 30, 40)).save(source)
+    manifest = VerifiedTextManifest(
+        "0" * 64,
+        96,
+        80,
+        (VerifiedTextLine((4, 4, 20, 16), "Exact", "alphabetic"),),
+    )
+    remover = WatermarkRemover(device="cuda", pipeline="qwen-zimage")
+    runtime = MagicMock()
+    monkeypatch.setattr(remover, "_load_qwen_zimage_pipeline", lambda: runtime)
+
+    with pytest.raises(ValueError, match="not calibrated with tiled diffusion"):
+        remover.remove_watermark(source, text_manifest=manifest, tile=True)
+
+    runtime.run.assert_not_called()
 
 
 def test_qwen_tiling_runs_global_tiles_then_one_full_frame_face_stage(monkeypatch):

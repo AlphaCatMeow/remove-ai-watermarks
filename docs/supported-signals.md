@@ -19,7 +19,7 @@ The `visible` command registers these mark keys:
 | `samsung` | `✦ Contenuti generati dall'AI` | Bottom left | Calibrated for the Italian text variant. |
 | `runninghub` | `RunningHub AI生成` | Top left | Strict visual and position gates. |
 | `baidu` | `百度 AI生成` | Bottom right | Detector and extended removal footprint. |
-| `liblib` | `LibLibAI` | Bottom center | Includes a minimum image size gate. |
+| `liblib` | `LiblibAI` | Bottom center | Includes a minimum image size gate. |
 | `jimeng_pill` | `AI生成` pill | Top left | Weak detector with additional product and background gates. |
 
 `--mark auto` evaluates all registered marks and removes every selected match.
@@ -226,7 +226,7 @@ not a universal clean verdict.
 | Kling | Kling image and video marks | No registered pixel decoder | TC260 AIGC |
 | Hailuo / MiniMax video | Hailuo composite video label | No registered pixel decoder | TC260 AIGC where present |
 | Baidu | Baidu mark | No registered pixel decoder | TC260 AIGC |
-| LibLibAI | LibLibAI mark | No registered pixel decoder | TC260 AIGC |
+| LiblibAI | LiblibAI mark | No registered pixel decoder | TC260 AIGC |
 | RunningHub | RunningHub mark | No registered pixel decoder | TC260 AIGC |
 | Samsung Galaxy AI | One locale specific mark | No registered pixel decoder | C2PA and Samsung markers |
 

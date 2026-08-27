@@ -48,16 +48,17 @@ runtime assets.
 video removal profile works, so it is also the source of truth for three shipped
 defaults: `tests/test_video_invisible.py` asserts that `noise_std`, `long_side`,
 and `fps` together match a row this manifest records as certified. Changing one
-of those three without adding the row that certifies it fails the suite. `vae` is
-deliberately outside that check because neither tracked row records one; add it
-to the assertion in the same commit as the first row that does.
+of those three without adding the row that certifies it fails the suite. Both
+historical rows mark `vae` as `unrecorded`: the repository must not infer a model
+identity from the current default. Add it to the assertion in the same commit as
+the first oracle row that records and verifies one.
 
 | Column | Meaning |
 | --- | --- |
 | `date`, `source_url`, `source_sha256` | Identify the carrier. |
 | `source_width`, `source_height`, `source_fps` | Carrier geometry. Without it the actual downscale factor of a row cannot be recovered later. |
 | `duration_seconds`, `source_verdict` | Clip length submitted and the verifier's reading of the untouched carrier. |
-| `vae`, `noise_std`, `long_side`, `fps`, `seed` | The full run configuration. |
+| `vae`, `noise_std`, `long_side`, `fps`, `seed` | The run configuration. `unrecorded` means the historical run did not preserve the VAE identity. |
 | `output_sha256` | Identifies the exact submitted file. |
 | `output_verdict` | One of `detected`, `not_detected`, `indeterminate`, `refused`. |
 | `output_verdict_text` | The verifier's wording, verbatim. |

@@ -90,7 +90,7 @@ class TextMarkConfig:
     asset_name: str  # bundled alpha PNG under assets/ (e.g. "doubao_alpha.png")
     corner: Literal[
         "br", "bl", "tl", "bc"
-    ]  # bottom-right (Doubao/Jimeng), bottom-left (Samsung), top-left (RunningHub), bottom-center (LibLibAI)
+    ]  # bottom-right (Doubao/Jimeng), bottom-left (Samsung), top-left (RunningHub), bottom-center (LiblibAI)
     margin_floor: int  # min margin in px for locate (4 for br marks, 2 for Samsung)
     # locate geometry (fraction of scale_base -- see scale_base())
     width_frac: float
@@ -695,7 +695,7 @@ class TextMarkEngine:
 
         OVERRIDABLE, and the override contract is specifically the DETECTOR'S MATCH BOX:
         a mark whose removable footprint reaches beyond what the NCC localizes -- Baidu's
-        flat white tag right of the text run, LibLibAI's triangle logo left of the
+        flat white tag right of the text run, LiblibAI's triangle logo left of the
         wordmark -- supplies its own extension here and inherits the rest of the
         footprint path. The blob-bbox branch never routes through an override.
         """
@@ -771,7 +771,7 @@ class TextMarkEngine:
         """Footprint policy for a mark whose fill must be bounded by the DETECTOR's match
         box and never by the binary glyph blob.
 
-        Baidu's white tag has a flat interior a top-hat cannot answer, and LibLibAI's
+        Baidu's white tag has a flat interior a top-hat cannot answer, and LiblibAI's
         blob bleeds up into background structure; in both cases the blob bbox is
         measurably wrong and the NCC match box is right. ``force`` takes priority here,
         unlike the default policy: a ``--no-detect`` caller named the mark, so the whole

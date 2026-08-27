@@ -12,6 +12,7 @@ Each sheet mixes three strata in shuffled order:
 The two control strata are what make a low measured precision trustworthy.
 """
 
+import argparse
 import csv
 import json
 import random
@@ -62,9 +63,13 @@ def crop(path: str, region: tuple[int, int, int, int] | None, pad_factor: float 
 
 
 def main() -> None:
-    with open(sys.argv[1]) as fh:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("input", type=Path, help="JSON candidate list")
+    parser.add_argument("output", type=Path, help="Directory for blinded contact sheets")
+    args = parser.parse_args()
+    with args.input.open() as fh:
         items = json.load(fh)  # [{uid,path,key,stratum,conf}]
-    outdir = Path(sys.argv[2])
+    outdir = args.output
     outdir.mkdir(parents=True, exist_ok=True)
     random.Random(1234).shuffle(items)  # noqa: S311 -- sheet ordering, not cryptography
 

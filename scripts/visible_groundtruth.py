@@ -21,9 +21,9 @@ honest doubt never becomes a fabricated data point.
 
 from __future__ import annotations
 
+import argparse
 import csv
 import json
-import sys
 from pathlib import Path
 
 SEEN_TO_MARK = {
@@ -77,7 +77,15 @@ def metadata_provenance(path: str) -> list[str]:
 
 
 def main() -> None:
-    root = Path(sys.argv[1] if len(sys.argv) > 1 else ".local-eval/textmark-relaxation")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "root",
+        type=Path,
+        nargs="?",
+        default=Path(".local-eval/textmark-relaxation"),
+        help="Directory containing the blinded labelling rounds",
+    )
+    root = parser.parse_args().root
     out = root / "groundtruth.jsonl"
     rows: dict[str, dict] = {}
     stats: dict[str, int] = {}

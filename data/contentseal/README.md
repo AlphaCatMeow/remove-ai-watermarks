@@ -16,9 +16,12 @@ plus hash and is not stored.
   embedded in the watermark payload. Both survived a 512 px LANCZOS resize and
   a full-size JPEG q85 re-encode (same ID returned), so the payload is more
   robust than the detection threshold.
-- Center crops lose the seal: 50% and 33% linear center crops of two different
-  images all returned "No AI signatures from Meta were found", consistent with
-  the Reuters 2026-07-11 analysis (55% missed after cropping).
+- Three checked center crops lost the seal: 50% and 33% linear crops of the fox
+  and the 50% crop of the text poster returned "No AI signatures from Meta were
+  found". The text poster's 33% crop was not checked because the daily oracle
+  limit was reached, so its empty verdict is not evidence either way. The checked
+  results are consistent with the Reuters 2026-07-11 analysis (55% missed after
+  cropping).
 - API outputs carry XMP `iptcExt:DigitalSourceType =
   trainedAlgorithmicMedia`, so local `identify` flags them via the existing
   Made-with-AI path. Metadata-stripping transforms fall back to unknown, and
@@ -62,8 +65,8 @@ the calibration rows below is the race-free variant.
 
 The library resolves strength per vendor with measured floors (OpenAI
 0.07675 / Google 0.27 / Microsoft InvisMark 0.15 in
-`_internal/watermark_profiles.py`). Meta Content Seal has no floor yet; the
-goal of these rows is to measure one by that same methodology: independent
+`_internal/watermark_profiles.py`). Meta Content Seal had no floor before this
+calibration; these rows measure one by the same methodology: independent
 generations, each one's first-clean boundary, floor = worst boundary plus the
 observed cross-source spread.
 
@@ -83,7 +86,16 @@ Measured (2026-08-26/27, oracle `meta.ai/identification`):
   names it explicitly on stripped files (implying the scrub runs).
 ## Regeneration
 
-API key is not stored in this repository. Regenerate with the script pattern
-from the session (env `MUSE_API_KEY`, endpoint
-`https://api.meta.ai/v1/images/generations`, model `muse-image-1.0`); prompts
-are recorded per file in `manifest.csv`.
+The eight deterministic crop, resize, and JPEG variants can be reproduced and
+hash-checked from the tracked originals:
+
+```bash
+uv run python scripts/contentseal_transforms.py /tmp/contentseal-derived
+```
+
+The Meta API generations and remote GPU outputs are not reproducible from this
+repository alone. Their prompts, exact output hashes, model/profile settings,
+and oracle results are recorded in `manifest.csv`, but the generation API is
+stochastic and the private worker environment is not tracked. `MUSE_API_KEY` and
+the anonymous detector session are deliberately absent. A new calibration must
+therefore create new manifest rows rather than claiming to recreate these bytes.

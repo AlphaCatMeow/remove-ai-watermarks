@@ -160,7 +160,7 @@ sparkle; the SynthID *pixel* itself has no local detector (oracle only).
 
 Key takeaways:
 - The same model differs by *surface*: Gemini app wraps C2PA, AI Studio (API/playground) emits none -- only the pixel + sparkle survive.
-- Microsoft Designer's DALL-E backend inherits OpenAI's C2PA+SynthID (issuer "OpenAI, Microsoft"); Bing now runs Microsoft's own **MAI-Image** and signs C2PA as "Microsoft" (not OpenAI/DALL-E).
+- Microsoft Designer's DALL·E backend inherits OpenAI's C2PA+SynthID (issuer "OpenAI, Microsoft"); Bing now runs Microsoft's own **MAI-Image** and signs C2PA as "Microsoft" (not OpenAI/DALL·E).
 - Meta uses the IPTC `digitalSourceType` marker, not C2PA or SynthID.
 - The open imwatermark fires only on *pristine* output from a pipeline that runs the encoder (diffusers default, official BFL) -- not from re-hosts (Krea, Stability hosted SDXL) or re-encoded design exports (Recraft, Canva). Ideogram's only signal is the EXIF `Make` tag.
 - Bing and Grok web UIs are uncooperative for autonomous capture (no document_idle for screenshots; blob downloads intermittently no-op; low-res in-chat previews). Use their native download button manually if a full-res sample is needed.

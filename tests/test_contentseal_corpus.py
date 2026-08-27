@@ -58,3 +58,12 @@ def test_default_pipeline_clearance_is_recorded() -> None:
     rows = {row["name"]: row for row in _manifest_rows()}
     for name in ("fox_modal_invisible", "text_modal_invisible"):
         assert rows[name]["oracle_verdict"] == "not_detected", name
+
+
+def test_deterministic_transforms_reproduce_recorded_hashes(tmp_path: Path) -> None:
+    from scripts.contentseal_transforms import reproduce_transforms
+
+    outputs = reproduce_transforms(tmp_path)
+
+    assert len(outputs) == 8
+    assert all(path.is_file() for path in outputs)

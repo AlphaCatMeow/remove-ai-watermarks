@@ -145,7 +145,7 @@ _INVISIBLE_WM_CAVEAT = (
     "or resizing, so it confirms origin only on a pristine (un-re-encoded) file."
 )
 _HF_JOB_CAVEAT = (
-    "The hf-job-id tag marks a HuggingFace-hosted job (commonly diffusion "
+    "The hf-job-id tag marks a Hugging Face-hosted job (commonly diffusion "
     "generation) but names neither the model nor the content type, so it is a "
     "medium-confidence signal, not proof the pixels are AI-generated."
 )
@@ -445,7 +445,7 @@ def evidence_from_metadata_record(
     if iptc_system:
         ai_metadata.setdefault("ai_system", f"IPTC 2025.1 AI disclosure ({iptc_system})")
     if hf_job:
-        ai_metadata.setdefault("huggingface_job", f"HuggingFace-hosted job ({hf_job})")
+        ai_metadata.setdefault("huggingface_job", f"Hugging Face-hosted job ({hf_job})")
     if samsung is not None:
         ai_metadata.setdefault("samsung_genai", f"Samsung Galaxy AI editing marker (genAIType={samsung})")
 
@@ -953,7 +953,7 @@ def _visible_sparkle(image_path: Path, *, image: NDArray[Any] | None = None) -> 
 # metadata label); the per-engine detection thresholds live in the registry.
 # Text mark -> the platform sentence this report prints when that mark is the strongest
 # evidence, DERIVED from the registry rows so registering a mark is one edit. It was a
-# hand-maintained copy, and that class of copy is how LibLibAI ended up registered but
+# hand-maintained copy, and that class of copy is how LiblibAI ended up registered but
 # missing from the pill veto. Insertion order is the registry's, which is what fixes the
 # scan order below. The Gemini sparkle and the capture-less pill carry no platform of
 # their own (`KnownMark.platform is None`) and are excluded here: the sparkle has its
@@ -1426,17 +1426,17 @@ def _identify_from_evidence(
             platform = "xAI (Grok / Aurora)"
         ai_vendor_claims["xai"] = "xAI"
 
-    # ── HuggingFace-hosted job marker (hf-job-id PNG text chunk) ─────
+    # ── Hugging Face-hosted job marker (hf-job-id PNG text chunk) ─────
     # Marks the hosting job, not a model -- medium confidence (commonly diffusion
     # output). Like the visible sparkle, it lifts an otherwise-Unknown verdict to
     # a tentative AI, but never overrides a high-confidence metadata signal.
     hf_job = evidence.huggingface_job
     if hf_job:
-        signals.append(Signal("hf_job", f"HuggingFace job {hf_job}", "medium"))
-        watermarks.append("HuggingFace-hosted job (hf-job-id)")
+        signals.append(Signal("hf_job", f"Hugging Face job {hf_job}", "medium"))
+        watermarks.append("Hugging Face-hosted job (hf-job-id)")
         caveats.append(_HF_JOB_CAVEAT)
         if platform is None:
-            platform = "HuggingFace-hosted job (model not identified)"
+            platform = "Hugging Face-hosted job (model not identified)"
 
     # ── Samsung Galaxy AI editing marker (genAIType) ─────────────────
     # Galaxy AI tools stamp a proprietary genAIType in PhotoEditor_Re_Edit_Data.
