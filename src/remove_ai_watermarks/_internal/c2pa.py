@@ -426,6 +426,11 @@ def _structured_manifest_fields(store: dict[str, Any]) -> dict[str, Any]:
     source_types: list[str] = []
     soft_binding_algorithms: list[str] = []
     soft_binding_values: list[str] = []
+    # Raw signer/generator identity strings, used to scope SynthID evidence to
+    # the vendor that actually asserted the manifest. A vendor token appearing
+    # anywhere else in the chain (e.g. Microsoft Designer's "Azure OpenAI
+    # ImageGen" softwareAgent) is a service name, not that vendor's provenance.
+    identity_strings: list[str] = []
     claim_generator_asserts_ai = False
 
     def add_tool_matches(value: str, *, asserts_ai: bool = False) -> None:
@@ -443,9 +448,11 @@ def _structured_manifest_fields(store: dict[str, Any]) -> dict[str, Any]:
                 value = signature.get(key)
                 if isinstance(value, str):
                     issuers.extend(_ordered_matches(value.encode(), C2PA_ISSUERS))
+                    identity_strings.append(value)
 
         direct_generator = manifest.get("claim_generator")
         if isinstance(direct_generator, str):
+            identity_strings.append(direct_generator)
             add_tool_matches(direct_generator, asserts_ai=True)
 
         candidates = manifest.get("claim_generator_info")
@@ -456,6 +463,7 @@ def _structured_manifest_fields(store: dict[str, Any]) -> dict[str, Any]:
                 name = cast("dict[object, object]", candidate_value).get("name")
                 if isinstance(name, str):
                     add_tool_matches(name, asserts_ai=True)
+                    identity_strings.append(name)
 
         assertions = manifest.get("assertions")
         if not isinstance(assertions, list):
@@ -528,9 +536,14 @@ def _structured_manifest_fields(store: dict[str, Any]) -> dict[str, Any]:
     has_watermark_action = any(action.startswith("watermarked") for action in actions)
     if has_watermark_action:
         info["watermarked"] = True
-    if info.get("ai_source_kind"):
-        selected_bytes = json.dumps(chain, ensure_ascii=False).encode()
-        synthid = synthid_evidence_vendors_in(selected_bytes, has_watermark_action=has_watermark_action)
+    if info.get("ai_source_kind") and not soft_binding_algorithms:
+        # Evidence scope: only the signer/generator identity strings above, never
+        # the whole chain - a vendor named inside another vendor's manifest (the
+        # Designer case) must not turn into that vendor's SynthID provenance. A
+        # manifest that names its own forensic soft-binding algorithm carries
+        # that vendor's mark and is excluded from the generic inference entirely.
+        identity_bytes = json.dumps(identity_strings, ensure_ascii=False).encode()
+        synthid = synthid_evidence_vendors_in(identity_bytes, has_watermark_action=has_watermark_action)
         if synthid:
             info["synthid_vendors"] = synthid
             info["synthid_watermark"] = synthid_verdict(", ".join(synthid))
@@ -611,7 +624,11 @@ def _populate_registry_fields(buffer: bytes, info: dict[str, Any]) -> bool:
 
     if b"c2pa.watermarked" in buffer:
         info["watermarked"] = True
-    synthid = synthid_evidence_vendors_in(buffer, has_watermark_action=info.get("watermarked", False))
+    synthid = (
+        []
+        if soft_binding_vendors_in(buffer)
+        else synthid_evidence_vendors_in(buffer, has_watermark_action=info.get("watermarked", False))
+    )
     if ai_source and synthid:
         info["synthid_vendors"] = synthid
         info["synthid_watermark"] = synthid_verdict(", ".join(synthid))

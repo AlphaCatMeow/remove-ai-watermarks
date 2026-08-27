@@ -1273,7 +1273,19 @@ def _identify_from_evidence(
     # reusing the derived `has_c2pa` / `source_kind` above, which are broader:
     # the file path's answer must not move.
     trained_source = b"trainedAlgorithmicMedia" in head or b"TrainedAlgorithmicMedia" in head
-    if not synthid and trained_source and c2pa_marker_in(head) and (vendors := synthid_evidence_vendors_in(region)):
+    # Same suppression as every other inference site: bytes that name their own
+    # forensic soft-binding algorithm carry that vendor's mark, and the generic
+    # vendor-token inference must not add a second, differently-attributed
+    # invisible watermark (Microsoft Designer: "Azure OpenAI ImageGen" agent +
+    # the InvisMark watermarked action read as "SynthID per OpenAI").
+
+    if (
+        not synthid
+        and trained_source
+        and c2pa_marker_in(head)
+        and not soft_binding_vendors_in(region)
+        and (vendors := synthid_evidence_vendors_in(region))
+    ):
         synthid = synthid_verdict(", ".join(vendors))
     if synthid:
         watermarks.append(

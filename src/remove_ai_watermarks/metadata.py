@@ -839,6 +839,13 @@ def synthid_source(image_path: Path, *, c2pa_info: dict[str, Any] | None = None)
     ai_source = b"trainedAlgorithmicMedia" in data or b"TrainedAlgorithmicMedia" in data
     if not (has_c2pa and ai_source):
         return None
+    from remove_ai_watermarks._internal.c2pa import soft_binding_vendors_in
+
+    # A scan that names its own forensic soft-binding algorithm carries that
+    # vendor's mark; the generic vendor-token inference must not add a second,
+    # differently-attributed invisible watermark from the same bytes.
+    if soft_binding_vendors_in(data):
+        return None
     matched = synthid_evidence_vendors_in(data)
     return ", ".join(matched) if matched else None
 
