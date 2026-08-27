@@ -112,6 +112,18 @@ raiw.remove_all(
 )
 ```
 
+`vendor="meta"` names a strength cohort explicitly (the measured Content Seal
+floor) for a stripped file whose provenance no longer carries the AI IPTC tag,
+and implies the scrub runs:
+
+```python
+raiw.remove_all(
+    "muse_output.webp",
+    "clean.png",
+    invisible=InvisibleOptions(vendor="meta"),
+)
+```
+
 `InvisibleOptions` carries only what `InvisibleEngine` itself takes, and uses the
 engine's own parameter names and defaults. `force`, which decides whether the
 engine runs at all, is a parameter of `remove_all` and `remove_batch` alongside

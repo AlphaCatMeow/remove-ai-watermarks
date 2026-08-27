@@ -232,6 +232,7 @@ class InvisibleOptions:
 
     strength: float | None = None
     pipeline: str = "qwen-zimage"
+    vendor: str | None = None
     seed: int | None = None
     hf_token: str | None = None
     humanize: float = 0.0
@@ -487,13 +488,17 @@ def _run_invisible(
     if not is_available():
         say("invisible", "unavailable")
         return "unavailable"
-    if not (force or evidence.has_invisible_target()):
+    if not (force or opts.vendor is not None or evidence.has_invisible_target()):
         say("invisible", "no-signal")
         return "no-signal"
 
     from remove_ai_watermarks._internal.watermark_profiles import resolve_strength, vendor_for_strength
 
-    vendor = vendor_for_strength(vendor_source)
+    # An explicit vendor override wins over detection and implies the scrub runs:
+    # naming the cohort (e.g. "meta" for Muse Image Content Seal, which carries no
+    # provenance to detect) asserts the pixel watermark is present, so the no-signal
+    # gate must not skip it.
+    vendor = opts.vendor or vendor_for_strength(vendor_source)
     # Report the strength the engine will actually execute, resolved the same way it
     # resolves it, so the reported value cannot drift from the executed one.
     with suppress(Exception):

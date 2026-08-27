@@ -387,6 +387,23 @@ detected. Use `--force` when you know the image should be processed:
 remove-ai-watermarks invisible image.png -o clean.png --force
 ```
 
+### Choose a strength cohort
+
+`--vendor` selects the cohort the default strength resolves from. `auto`
+(the default) derives it from provenance: the C2PA issuer for
+OpenAI/Google/Microsoft, and the standalone AI IPTC tag for Meta Content Seal
+(Muse output carries no C2PA; the tag is a standard code, so C2PA evidence
+always wins first). An explicit value both names the cohort for stripped files
+and implies the scrub runs -- naming the cohort asserts the pixel watermark is
+present -- exactly like `--force` plus a measured floor:
+
+```bash
+remove-ai-watermarks invisible muse_output.webp -o clean.png --vendor meta
+```
+
+The same option exists on `all` and `batch`, and as
+`InvisibleOptions(vendor="meta")` in the Python API.
+
 ### Choose a pipeline
 
 | Pipeline | When to use it |

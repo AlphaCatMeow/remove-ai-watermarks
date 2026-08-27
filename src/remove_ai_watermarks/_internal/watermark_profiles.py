@@ -86,10 +86,26 @@ QWEN_ZIMAGE_OPENAI_STRENGTH = 0.07675
 # measured corpus margin, not a universal InvisMark threshold.
 QWEN_ZIMAGE_MICROSOFT_STRENGTH = 0.15
 
+# Meta Muse Image stamps every output with Content Seal, but no provenance signal
+# survives to route it: the outputs carry no C2PA, and their IPTC
+# trainedAlgorithmicMedia companion tag is a standard code many platforms use, so
+# it cannot key this cohort the way an issuer keys the others. The floor is
+# therefore selected by an explicit --vendor meta override, never by detection.
+# Derivation (oracle meta.ai/identification, 2026-08-26/27, corpus in
+# data/contentseal/): five independent 2.56 MP generations bracketed at
+# lighthouse (0.0525, 0.06], fox (0.03, 0.0375], night_city (0.03, 0.0375],
+# mug <= 0.03, text <= 0.015. Worst clean boundary plus one full observed
+# cross-source spread: 0.06 + (0.0525 - 0.015) = 0.0975, rounded up to 0.1.
+# sdxl-zimage has no measured Meta floor; its vendor map stays without a meta
+# entry so an explicit --vendor meta there falls to the unknown 0.25, which is
+# above this floor and therefore conservative.
+QWEN_ZIMAGE_META_STRENGTH = 0.1
+
 _QWEN_ZIMAGE_FLAT_STRENGTH_BY_VENDOR: dict[str, float] = {
     "google": QWEN_ZIMAGE_GOOGLE_STRENGTH,
     "openai": QWEN_ZIMAGE_OPENAI_STRENGTH,
     "microsoft": QWEN_ZIMAGE_MICROSOFT_STRENGTH,
+    "meta": QWEN_ZIMAGE_META_STRENGTH,
 }
 
 
@@ -129,7 +145,8 @@ def strength_default_help() -> str:
     return (
         "profile-adaptive (qwen-zimage uses resolution-adaptive denoise, with a "
         f"flat OpenAI {QWEN_ZIMAGE_OPENAI_STRENGTH} / Google {QWEN_ZIMAGE_GOOGLE_STRENGTH} / "
-        f"Microsoft InvisMark {QWEN_ZIMAGE_MICROSOFT_STRENGTH} floors; sdxl-zimage "
+        f"Microsoft InvisMark {QWEN_ZIMAGE_MICROSOFT_STRENGTH} / Meta Content Seal "
+        f"{QWEN_ZIMAGE_META_STRENGTH} floors; sdxl-zimage "
         f"uses OpenAI {SDXL_ZIMAGE_OPENAI_STRENGTH} / Google {SDXL_ZIMAGE_GEMINI_STRENGTH} / "
         f"unknown {SDXL_ZIMAGE_UNKNOWN_STRENGTH}, from the C2PA issuer)"
     )
@@ -167,8 +184,18 @@ def resolve_strength(
     return resolution_adaptive_denoise(*size)
 
 
-def vendor_for_strength(image_path: Path) -> Literal["openai", "google", "microsoft"] | None:
-    """Select the strength cohort from non-invalid pixel-watermark provenance."""
+def vendor_for_strength(image_path: Path) -> Literal["openai", "google", "microsoft", "meta"] | None:
+    """Select the strength cohort from non-invalid pixel-watermark provenance.
+
+    OpenAI / Google / Microsoft come from their C2PA issuers. Meta is the
+    fallback cohort: Muse Image carries no C2PA at all, and its only readable
+    companion is the IPTC ``trainedAlgorithmicMedia`` XMP tag -- a standard code
+    other platforms also use. Attributing that tag to Meta is a measured bet,
+    not an identification: the other tag users in this project's model (ByteDance
+    products, X) ship no invisible pixel watermark this profile targets, so the
+    worst misroute spends the Meta floor (0.1) where the resolution curve would
+    have spent a similar amount, and Google/OpenAI files never reach this arm
+    because their C2PA matched first."""
     try:
         from remove_ai_watermarks._internal.c2pa import (
             c2pa_info_has_invalid_credential,
@@ -187,4 +214,25 @@ def vendor_for_strength(image_path: Path) -> Literal["openai", "google", "micros
         return "openai"
     if not c2pa_info_has_invalid_credential(info) and c2pa_info_has_invismark(info):
         return "microsoft"
+    if _standalone_iptc_ai_tag(image_path):
+        return "meta"
     return None
+
+
+def _standalone_iptc_ai_tag(image_path: Path) -> bool:
+    """True when the file carries an AI IPTC marker with no C2PA around it.
+
+    Mirrors identify's ``standalone_iptc`` condition (the tag is only
+    trustworthy as platform evidence when no manifest supersedes it) without
+    importing the heavy identify module: the shared chunk-aware
+    :func:`metadata.scan_head` window -- Muse WebP outputs place their XMP
+    packet in a tail chunk up to hundreds of KB past a plain head read, which
+    is exactly what scan_head's extensions exist to catch.
+    """
+    try:
+        from remove_ai_watermarks.metadata import IPTC_AI_MARKERS, c2pa_marker_in, scan_head
+
+        scan = scan_head(image_path)
+    except Exception:
+        return False
+    return any(marker in scan for marker in IPTC_AI_MARKERS) and not c2pa_marker_in(scan)

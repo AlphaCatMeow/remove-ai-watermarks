@@ -135,6 +135,11 @@ _C2PA_INVALID_CAVEAT = (
     "are retained only as removal hints, not as verified provenance."
 )
 _IPTC_ONLY_CAVEAT = "The IPTC 'Made with AI' tag flags AI provenance but does not identify the specific platform."
+_CONTENT_SEAL_CAVEAT = (
+    "Meta Muse Image outputs carry the invisible Content Seal pixel watermark, which has no "
+    "local decoder; `invisible` removes it (auto when this tag is present, or `--vendor meta` "
+    "on stripped files) and meta.ai/identification verifies it."
+)
 _INVISIBLE_WM_CAVEAT = (
     "The open invisible watermark is fragile: it does not survive JPEG re-encoding "
     "or resizing, so it confirms origin only on a pristine (un-re-encoded) file."
@@ -1318,6 +1323,7 @@ def _identify_from_evidence(
         signals.append(Signal("iptc", "digitalSourceType (Made with AI)", "high"))
         watermarks.append("IPTC digitalSourceType (Made with AI)")
         caveats.append(_IPTC_ONLY_CAVEAT)
+        caveats.append(_CONTENT_SEAL_CAVEAT)
         if platform is None:
             # Apple Photos Clean Up (Apple Intelligence object removal) marks
             # the edit with photoshop:Credit / IPTC "Apple Photos Clean Up"

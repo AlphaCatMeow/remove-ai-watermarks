@@ -274,6 +274,32 @@ _strength_option = click.option(
     default=None,
     help=f"Denoising strength (0.0-1.0). Default: {strength_default_help()}.",
 )
+# Explicit strength-cohort override. Auto-detection reads the C2PA issuer, so it
+# covers OpenAI / Google / Microsoft; Meta Content Seal has no provenance signal
+# (no C2PA; the IPTC tag is a standard code), and an unknown or stripped manifest
+# also leaves the resolution-adaptive curve in charge -- this flag is the way to
+# name the cohort when the user knows what the file does not say.
+_vendor_option = click.option(
+    "--vendor",
+    type=click.Choice(["auto", "openai", "google", "microsoft", "meta"]),
+    default="auto",
+    help=(
+        "Strength cohort for the invisible-removal default, and it implies the scrub "
+        "runs even without a local signal: naming the cohort asserts the pixel "
+        "watermark is present. auto: derive from C2PA provenance, else "
+        "resolution-adaptive. Set explicitly when the source is known but unreadable "
+        "(e.g. meta for Muse Image Content Seal, which never carries C2PA)."
+    ),
+)
+
+
+def _explicit_vendor(vendor: str | None) -> str | None:
+    """Normalize --vendor's ``auto`` default to None for the engine/API seam.
+
+    One helper so the three diffusion commands cannot drift on the spelling."""
+    return None if vendor in (None, "auto") else vendor
+
+
 _seed_option = click.option(
     "--seed",
     type=int,
@@ -796,6 +822,7 @@ def cmd_erase(
 @click.argument("source", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @_output_option
 @_strength_option
+@_vendor_option
 @_pipeline_option
 @_seed_option
 @_hf_token_option
@@ -815,6 +842,7 @@ def cmd_invisible(
     source: Path,
     output: Path | None,
     strength: float | None,
+    vendor: str | None,
     pipeline: str,
     seed: int | None,
     hf_token: str | None,
@@ -851,11 +879,17 @@ def cmd_invisible(
     if output is None:
         output = source.with_stem(source.stem + "_clean")
 
+    # An explicit --vendor wins over detection (see the option help) and implies the
+    # scrub runs: naming the cohort asserts the pixel watermark is present, so the
+    # no-signal gate must not skip it. Resolved BEFORE the gate for the same reason.
+    resolved_vendor = _explicit_vendor(vendor)
+
     # Gate BEFORE building the engine: skip the destructive regeneration when no
     # invisible AI watermark is locally detectable (it would only degrade a clean
     # image -- dominant paid score-0 cause), so the common skip path pays nothing for
-    # engine construction. A skip never claims the image is clean; --force overrides.
-    if _should_skip_invisible_scrub(force, source):
+    # engine construction. A skip never claims the image is clean; --force and an
+    # explicit --vendor override.
+    if _should_skip_invisible_scrub(force or resolved_vendor is not None, source):
         _no_invisible_signal_exit(source)
 
     def progress_cb(msg: str) -> None:
@@ -870,11 +904,18 @@ def cmd_invisible(
     )
 
     # Detect the SynthID vendor from the ORIGINAL (before processing strips C2PA) so the
-    # displayed and executed strength agree on the vendor-adaptive default.
-    vendor = vendor_for_strength(source)
+    # displayed and executed strength agree on the vendor-adaptive default. An explicit
+    # --vendor override wins over detection: it names a cohort the file cannot prove
+    # (Meta Content Seal never carries C2PA; a stripped manifest proves nothing).
+    detected_vendor = vendor_for_strength(source) if resolved_vendor is None else None
+    vendor_label = resolved_vendor or detected_vendor
+    vendor_note = " (override)" if resolved_vendor else ""
     console.print(f"  Input:    {source.name}")
     console.print(f"  Pipeline: {pipeline}")
-    console.print(f"  Strength: {_resolved_strength_for_display(source, strength, vendor, pipeline)}")
+    console.print(
+        f"  Strength: {_resolved_strength_for_display(source, strength, vendor_label, pipeline)}"
+        + (f"  [vendor: {vendor_label}{vendor_note}]" if vendor_label else "")
+    )
 
     t0 = time.monotonic()
     try:
@@ -887,7 +928,7 @@ def cmd_invisible(
             unsharp=unsharp,
             adaptive_polish=adaptive_polish,
             max_resolution=max_resolution,
-            vendor=vendor,
+            vendor=vendor_label,
             tile=tile,
             tile_size=tile_size,
             tile_overlap=tile_overlap,
@@ -1448,6 +1489,7 @@ def cmd_identify(ctx: click.Context, source: Path, no_visible: bool, as_json: bo
 @_visible_backend_option
 @_visible_sensitivity_option
 @_strength_option
+@_vendor_option
 @_pipeline_option
 @_seed_option
 @_hf_token_option
@@ -1469,6 +1511,7 @@ def cmd_all(
     backend: str,
     sensitivity: str,
     strength: float | None,
+    vendor: str | None,
     pipeline: str,
     seed: int | None,
     hf_token: str | None,
@@ -1549,6 +1592,7 @@ def cmd_all(
             sensitivity=_parse_sensitivity(sensitivity),
             invisible=InvisibleOptions(
                 strength=strength,
+                vendor=_explicit_vendor(vendor),
                 pipeline=pipeline,
                 seed=seed,
                 hf_token=hf_token,
@@ -1643,6 +1687,7 @@ def _batch_engine(mode: str, options: InvisibleOptions) -> object | None:
 @_visible_backend_option
 @_visible_sensitivity_option
 @_humanize_option
+@_vendor_option
 @_pipeline_option
 @_seed_option
 @_hf_token_option
@@ -1660,6 +1705,7 @@ def cmd_batch(
     mode: str,
     output_dir: Path | None,
     strength: float | None,
+    vendor: str | None,
     pipeline: str,
     seed: int | None,
     hf_token: str | None,
@@ -1697,6 +1743,7 @@ def cmd_batch(
 
     invisible_options = InvisibleOptions(
         strength=strength,
+        vendor=_explicit_vendor(vendor),
         pipeline=pipeline,
         seed=seed,
         hf_token=hf_token,

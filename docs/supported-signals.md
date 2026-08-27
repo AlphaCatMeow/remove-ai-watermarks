@@ -172,9 +172,15 @@ documentation never mentions the seal. The
 default `qwen-zimage` profile clears Content Seal at the default
 resolution-adaptive strength (oracle-verified on 2.56 MP generations); measured
 strength boundaries are recorded in `data/contentseal/manifest.csv` and
-[module internals](module-internals.md#meta-content-seal-boundaries-for-qwen-zimage)
-(derived Meta floor 0.1 by the standard spread method, not shipped as a constant
-because no provenance signal can route Muse output onto a vendor cohort).
+[module internals](module-internals.md#meta-content-seal-boundaries-for-qwen-zimage).
+The derived Meta floor (0.1 by the standard spread method) ships as a measured
+cohort: auto mode routes a file whose only provenance is the standalone AI IPTC
+tag to it (the tag is not Meta-exclusive; other tag users ship no invisible
+watermark this profile targets, and Google/OpenAI/Microsoft C2PA evidence
+always wins first), and `invisible --vendor meta` (also `all` and `batch`, and
+`InvisibleOptions.vendor` in the API) names the cohort explicitly on stripped
+files. An explicit vendor implies the scrub runs: naming the cohort asserts the
+pixel watermark is present.
 The seal survives resizing, JPEG recompression, and metadata stripping; it dies
 to center crops of a third to a half, matching the Reuters 2026-07-11 finding
 that Meta's detector missed 55% of cropped Muse images.

@@ -6,6 +6,7 @@ answer and a clean refusal rather than a fallback ladder.
 
 from __future__ import annotations
 
+import struct
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -15,6 +16,7 @@ from remove_ai_watermarks._internal.utils import get_image_format, is_supported_
 from remove_ai_watermarks._internal.watermark_profiles import (
     PROFILE_CHOICES,
     QWEN_ZIMAGE_GOOGLE_STRENGTH,
+    QWEN_ZIMAGE_META_STRENGTH,
     QWEN_ZIMAGE_OPENAI_STRENGTH,
     REMOVAL_MODULES,
     SDXL_ZIMAGE_GEMINI_STRENGTH,
@@ -198,6 +200,30 @@ class TestNoReembeddedWatermark:
         assert "add_watermarker" not in calls["controlnet"]
 
 
+# Minimal WebP stub whose XMP chunk carries the IPTC trainedAlgorithmicMedia
+# tag exactly as Muse outputs place it (built inline so the test has no binary
+# fixture dependency).
+_XMP_PAYLOAD = (
+    b'<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax#">'
+    b'<rdf:Description rdf:about="" xmlns:iptcExt="http://iptc.org/std/Iptc4xmpExt/2008-02-29/" '
+    b'iptcExt:DigitalSourceType="http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia"/>'
+    b"</rdf:RDF></x:xmpmeta>"
+)
+
+
+def _webp_stub(xmp: bytes | None) -> bytes:
+    def chunk(cid: bytes, data: bytes) -> bytes:
+        return cid + struct.pack("<I", len(data)) + data + (b"\x00" if len(data) % 2 else b"")
+
+    body = b"WEBP" + chunk(b"VP8L", b"\x00" * 20)
+    if xmp is not None:
+        body += chunk(b"XMP ", xmp)
+    return b"RIFF" + struct.pack("<I", len(body)) + body
+
+
+_MUSE_WEBP_WITH_IPTC_TAG = _webp_stub(_XMP_PAYLOAD)
+
+
 class TestResolveStrength:
     """resolve_strength owns the qwen-zimage and sdxl-zimage policies."""
 
@@ -222,11 +248,35 @@ class TestResolveStrength:
         with pytest.raises(ValueError, match="size is required"):
             resolve_strength(None, "openai", "qwen-zimage")
 
-    @pytest.mark.parametrize(("vendor", "expected"), [("microsoft", 0.15), ("openai", 0.07675)])
+    @pytest.mark.parametrize(("vendor", "expected"), [("microsoft", 0.15), ("openai", 0.07675), ("meta", 0.1)])
     def test_qwen_zimage_measured_vendors_use_flat_cross_source_margins(self, vendor, expected):
         """Measured providers must not fall below their operating points on small files."""
         assert resolve_strength(None, vendor, "qwen-zimage", size=(600, 500)) == pytest.approx(expected)
         assert resolve_strength(None, vendor, "qwen-zimage", size=(4000, 3000)) == pytest.approx(expected)
+
+    def test_meta_floor_is_size_independent_and_sdxl_falls_to_unknown(self):
+        """The Meta floor bypasses the area curve at every size (Content Seal removal
+        was bracketed on 2.56 MP generations and derived as a flat cross-source
+        margin, like the other measured cohorts), while sdxl-zimage has no measured
+        Meta rung and must fall to the conservative unknown value, not invent one."""
+        for size in ((600, 500), (1600, 1600), (1920, 1280), (4000, 3000)):
+            assert resolve_strength(None, "meta", "qwen-zimage", size=size) == pytest.approx(QWEN_ZIMAGE_META_STRENGTH)
+        assert resolve_strength(None, "meta", "sdxl-zimage") == SDXL_ZIMAGE_UNKNOWN_STRENGTH
+
+    def test_vendor_for_strength_routes_standalone_iptc_to_meta(self, tmp_path):
+        """Auto mode: a file whose only provenance is the AI IPTC tag routes to the
+        meta cohort (Muse carries no C2PA; the tag is its fallback companion), while
+        a file without the tag stays on the resolution curve and a C2PA issuer still
+        wins over the tag."""
+        from remove_ai_watermarks._internal.watermark_profiles import vendor_for_strength
+
+        tagged = tmp_path / "tagged.webp"
+        tagged.write_bytes(_MUSE_WEBP_WITH_IPTC_TAG)
+        assert vendor_for_strength(tagged) == "meta"
+
+        stripped = tmp_path / "stripped.webp"
+        stripped.write_bytes(b"RIFF\x24\x00\x00\x00WEBPVP8 \x18\x00\x00\x00" + b"\x00" * 16)
+        assert vendor_for_strength(stripped) is None
 
     def test_sdxl_zimage_uses_its_flat_vendor_ladder(self):
 

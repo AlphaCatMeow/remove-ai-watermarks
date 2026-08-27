@@ -78,10 +78,9 @@ Measured (2026-08-26/27, oracle `meta.ai/identification`):
   between easiest and hardest).
 - Derived Meta floor by the existing worst-boundary-plus-cross-source-spread
   method: 0.06 + (0.0525 - 0.015) = 0.0975, rounded to **0.1**.
-- Not shipped as a constant: no provenance signal routes Muse outputs onto a
-  vendor cohort, so the default curve stays authoritative and 0.1 is recorded
-  as the floor to encode if an explicit Meta override is ever added.
-
+- Shipped as `QWEN_ZIMAGE_META_STRENGTH`: auto mode routes standalone-AI-IPTC
+  files onto the cohort, and `--vendor meta` / `InvisibleOptions.vendor`
+  names it explicitly on stripped files (implying the scrub runs).
 ## Regeneration
 
 API key is not stored in this repository. Regenerate with the script pattern

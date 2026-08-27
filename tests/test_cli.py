@@ -426,6 +426,39 @@ class TestInvisibleCommand:
         assert result.exit_code == 0, result.output
         mock_engine.remove_watermark.assert_called_once()
 
+    def test_invisible_explicit_vendor_implies_force_and_sets_cohort(self, runner, sample_png, tmp_path):
+        """--vendor meta names a cohort the file cannot prove (Content Seal carries
+        no C2PA), so it must both bypass the no-signal skip and arrive at the engine
+        as the vendor, where it resolves to the measured Meta floor (not the
+        area-curve value the same size would otherwise get)."""
+        mock_cls, mock_engine = _mock_invisible_engine()
+        output = tmp_path / "clean.png"
+        with (
+            patch("remove_ai_watermarks.invisible_engine.is_available", return_value=True),
+            patch("remove_ai_watermarks.cli.InvisibleEngine", mock_cls, create=True),
+            patch("remove_ai_watermarks.invisible_engine.InvisibleEngine", mock_cls),
+        ):
+            result = runner.invoke(main, ["invisible", str(sample_png), "-o", str(output), "--vendor", "meta"])
+        assert result.exit_code == 0, result.output
+        kwargs = mock_engine.remove_watermark.call_args.kwargs
+        assert kwargs["vendor"] == "meta"
+        assert "0.1" in result.output  # the resolved Meta floor, printed
+        assert "0.094" not in result.output  # not the sample's area-curve value (200x200 -> ~0.0944)
+
+    def test_invisible_vendor_auto_keeps_detection_semantics(self, runner, sample_png, tmp_path):
+        """--vendor auto is the default spelled out: detection still runs and a
+        no-signal file still skips."""
+        mock_cls, mock_engine = _mock_invisible_engine()
+        output = tmp_path / "clean.png"
+        with (
+            patch("remove_ai_watermarks.invisible_engine.is_available", return_value=True),
+            patch("remove_ai_watermarks.cli.InvisibleEngine", mock_cls, create=True),
+            patch("remove_ai_watermarks.invisible_engine.InvisibleEngine", mock_cls),
+        ):
+            result = runner.invoke(main, ["invisible", str(sample_png), "-o", str(output), "--vendor", "auto"])
+        assert result.exit_code == 2, result.output
+        mock_engine.remove_watermark.assert_not_called()
+
     def test_invisible_runs_without_force_when_signal_present(self, runner, tmp_path):
         """An image carrying an AI metadata signal IS a scrub target, so the run
         proceeds with no --force needed."""

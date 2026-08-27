@@ -1170,18 +1170,22 @@ unreachable constant would be dead code.
 Full spread: worst first-clean boundary (0.0525, 0.06] on lighthouse, easiest
 source already clean at 0.015. Following the same derivation as the OpenAI and
 Microsoft floors (worst clean boundary plus one full observed cross-source
-spread): 0.06 + (0.0525 - 0.015) = 0.0975, rounded up to **0.1**. This is a
-candidate `meta` floor, not yet a shipped constant: Muse outputs carry no C2PA,
-so `vendor_for_strength` has no signal that could route them onto the flat
-vendor map automatically. Encoding 0.1 as `QWEN_ZIMAGE_META_STRENGTH` makes
-sense only once the tool gains an explicit way to opt into a Meta cohort (for
-example a CLI `--vendor meta` override); the default resolution-adaptive curve
-(~0.1305 at 2.56 MP) already clears every measured source, so default behavior
-needs no change. Oracle verdicts carry a per-generation ID and creation timestamp
-embedded in the watermark payload; both survived the 512 px resize and JPEG q85
-rows, so payload recovery outlives the detection threshold. Oracle session
-limits are per-IP, server-side, and sliding-window: clearing cookies and storage
-does not reset them, and a burst exhausts the window minutes after it reopens.
+spread): 0.06 + (0.0525 - 0.015) = 0.0975, rounded up to **0.1**. Shipped as
+`QWEN_ZIMAGE_META_STRENGTH` with two routing paths: auto mode routes a file
+whose only provenance is the standalone AI IPTC tag onto the cohort
+(`vendor_for_strength` checks C2PA issuers first, so Google/OpenAI/Microsoft
+evidence always wins, and the tag's other users ship no invisible watermark
+this profile targets), and `--vendor meta` / `InvisibleOptions.vendor` names the
+cohort explicitly on stripped files, implying the scrub runs (naming the cohort
+asserts the watermark is present). sdxl-zimage has no measured Meta rung and an
+explicit meta vendor there falls to the conservative unknown 0.25. The default
+resolution-adaptive curve (~0.1305 at 2.56 MP) also clears every measured
+source, so default behavior needed no change. Oracle verdicts carry a
+generation ID and creation timestamp embedded in the watermark payload; both
+survived the 512 px resize and JPEG q85 rows, so payload recovery outlives the
+detection threshold. Oracle session limits are per-IP, server-side, and
+sliding-window: clearing cookies and storage does not reset them, and a burst
+exhausts the window minutes after it reopens.
 
 ### Static prompt embeddings
 
