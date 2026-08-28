@@ -23,7 +23,7 @@ whose producer USCC 91440101MA9Y9T4H7A names the entity, 2026-07-21; harness
     ratio 1.64 -- wider than the shared 3-rung ladder's 1.5625 span), so a single
     fraction on the shared ladder covers ~75% of marks and the rest land in the
     comb's collapse zone. Qwen therefore carries its OWN 2-rung ladder
-    (``TextMarkConfig.ladder``), one rung centred on each mode; the shared
+    (``TextMarkConfig.ladder``), one rung centered on each mode; the shared
     default is untouched for every other mark.
   * The mark also sits FARTHER off the corner than Doubao's box assumes (right
     margin ~0.025 vs 0.004 of the short side), so Doubao's locate box clipped the
@@ -38,7 +38,7 @@ whose producer USCC 91440101MA9Y9T4H7A names the entity, 2026-07-21; harness
     arm would be mostly false fills. No provenance relaxation exists for this
     mark.
   * No rival margin: at the shipped gate the template fires on 0 of 400
-    Doubao-marked frames, 0 of 298 Jimeng-marked frames and 0 of 286 hand-labelled
+    Doubao-marked frames, 0 of 298 Jimeng-marked frames and 0 of 286 hand-labeled
     clean frames (the shared tail correlates at ~0.22, far below the gate), while
     a 0.10 rival margin would have suppressed ~10% of genuine Qwen detections.
 """
@@ -74,7 +74,7 @@ LOGO_MIN_LUMA = 150
 TOPHAT_DELTA = 12
 
 DETECT_MIN_COVERAGE = 0.04  # unused by the tophat front-end (kept for config parity)
-# Calibrated 2026-07-21 on the vendor cohort vs 286 hand-labelled clean frames
+# Calibrated 2026-07-21 on the vendor cohort vs 286 hand-labeled clean frames
 # (cohort-contamination-guarded): clean p99 0.301 / max 0.316, and every cohort
 # frame scoring >= 0.45 carries a visible 千问AI生成 mark (86% of the eyeballed
 # visible marks fire, the misses being white-on-near-white contrast losses).

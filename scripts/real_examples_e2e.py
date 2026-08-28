@@ -81,7 +81,7 @@ def find_visible_positive(mark: str) -> Path | None:
 
 
 class Results:
-    """Collects one row per checked behaviour.
+    """Collects one row per checked behavior.
 
     A FAIL keeps the command's OUTPUT. That is not cosmetic: the first run of this harness
     discarded it, an `all` invocation failed once with exit 1, and because the output was
@@ -166,7 +166,7 @@ def check_visible(res: Results, tmp: Path) -> None:
     """Real marked images -> the PRODUCT'S DECISION is honoured, and a removed mark clears.
 
     The success criterion is not "the mark is always gone" -- it is "the product did what it
-    decided, and the decision is right". Two designed behaviours make a blind re-detect
+    decided, and the decision is right". Two designed behaviors make a blind re-detect
     misleading:
       * The pill is GATED (`_keep_pill`): a low-confidence pill with no corroboration is
         deliberately NOT removed, so `visible` correctly writes nothing and exits 2. That is

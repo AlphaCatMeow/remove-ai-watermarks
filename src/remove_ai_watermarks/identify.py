@@ -1105,7 +1105,7 @@ def _collect_visible_signals(
     sparkle_conf = _visible_sparkle(image_path, image=image)
     if sparkle_conf is not None and sparkle_conf >= _SPARKLE_THRESHOLD:
         signals.append(Signal("visible_sparkle", f"NCC confidence {sparkle_conf:.2f}", "medium"))
-        watermarks.append(f"Visible Gemini sparkle (confidence {sparkle_conf:.2f})")
+        watermarks.append(f"Google Gemini visible watermark (sparkle; confidence {sparkle_conf:.2f})")
         if platform is None:
             platform = "Google Gemini family (visible sparkle detected)"
 

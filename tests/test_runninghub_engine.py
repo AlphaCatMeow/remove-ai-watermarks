@@ -71,7 +71,7 @@ class TestConfig:
         assert RunningHubEngine().config.provenance_ncc_factor == 1.0
 
     def test_gate_above_clean_arm_max(self):
-        # Clean arm scored p99 0.273 / max 0.295 on 286 hand-labelled frames.
+        # Clean arm scored p99 0.273 / max 0.295 on 286 hand-labeled frames.
         assert RunningHubEngine().config.detect_ncc_threshold > 0.295
 
     def test_registry_row(self):

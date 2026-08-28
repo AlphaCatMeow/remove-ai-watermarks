@@ -1,8 +1,8 @@
 """Build an UNBIASED random sample for measuring visible-mark RECALL.
 
-Every earlier labelling round sampled where detectors FIRED, so images that every
+Every earlier labeling round sampled where detectors FIRED, so images that every
 detector missed were absent by construction and recall was unmeasurable. This round
-samples at random within a provenance class and shows the labeller the corners where
+samples at random within a provenance class and shows the labeler the corners where
 a mark can physically be, so a MISSED mark is visible as such.
 
 Design decisions that matter:
@@ -13,11 +13,11 @@ Design decisions that matter:
   recall over all uploads would mostly measure how often each vendor appears.
 * NATIVE RESOLUTION crops, never a downscaled whole image: a 220px preview destroys a
   faint mark (measured in an earlier round), which would inflate the miss count with
-  the labeller's own blindness rather than the detector's.
+  the labeler's own blindness rather than the detector's.
 * BOTH corners per image (top-left pill, bottom-right wordmark/strip/sparkle), so one
   pass adjudicates every registered mark instead of one mark per crop.
 * The detector's verdict is NOT shown and is not in the sheet order -- the manifest
-  holds it and must not be opened until labelling ends.
+  holds it and must not be opened until labeling ends.
 """
 
 from __future__ import annotations

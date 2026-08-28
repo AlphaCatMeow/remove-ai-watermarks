@@ -4,8 +4,8 @@ Supported marks use fully synthetic silhouettes made from geometric primitives,
 OpenCV's built-in font, and Pillow's bundled font. Sora detection searches the
 full frame because the wordmark moves. Veo detection covers both the current
 four-point diamond and legacy ``Veo`` text. Seedance detects the boxed ``AI``
-label, Dola detects its compact text label, Hailuo detects the composite
-MINIMAX/Hailuo label, and Kling detects its version-independent wordmark core.
+label, Dola detects its compact text label, Hailuo AI detects the composite
+MINIMAX/Hailuo AI label, and Kling AI detects its version-independent wordmark core.
 A single frame is never enough to authorize removal: the temporal arbiter
 requires the candidate to recur at the same location across adjacent frames.
 This keeps isolated lookalikes in clean videos from becoming removal masks.

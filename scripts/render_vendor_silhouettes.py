@@ -12,10 +12,13 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "src"))
@@ -42,7 +45,7 @@ MARKS = {
     "kling_alpha.png": "可灵AI 3.0",
     # The "cat-logo" candidate stamps an outline cat-head plus bold "AI生成",
     # bottom-right. It remains unregistered pending sufficient calibration coverage.
-    "catlogo_alpha.png": "CATLOGO",  # sentinel: drawn by draw_catlogo(), not font-rendered
+    "catlogo_alpha.png": "cat logo + AI生成",
     # RunningHub top-left text mark.
     "runninghub_alpha.png": "RunningHub AI生成",
     # LibLibAI bottom-center wordmark.
@@ -53,6 +56,19 @@ MARKS = {
     "hailuo_alpha.png": "Hailuo AI",
     # Baidu bottom-right text run.
     "baidu_alpha.png": "百度",
+    # Measured Microsoft top-right white AI-badge variant. Sentinel: drawn by
+    # draw_msbadge(), not font-rendered.
+    "microsoft_alpha.png": "Made with AI",
+    # Samsung Galaxy AI label, English locale (the registered samsung_alpha.png is
+    # the Italian "Contenuti generati dall'AI" silhouette; EN is the literal
+    # translation with the same leading sparkle). Sentinel: draw_samsung_en().
+    "samsung_en_alpha.png": "AI-generated content",
+    # Gemini text-form label (the registered gemini mark is the sparkle icon).
+    "gemini_text_alpha.png": "Generated with Gemini",
+    # Candidate wordmarks measured on a local evaluation corpus (unregistered).
+    "notebooklm_alpha.png": "NotebookLM",
+    "dola_alpha.png": "DolaAI",
+    "mindvideo_alpha.png": "MindVideo.AI",
 }
 _REGISTERED = {f"{key}_alpha.png" for key in mark_keys()} & MARKS.keys()
 
@@ -74,6 +90,24 @@ MARK_OPTS: dict[str, dict[str, Any]] = {
 }
 
 
+def _fit_font(
+    font_path: str,
+    reaches_target: Callable[[ImageFont.FreeTypeFont], bool],
+    *,
+    index: int = 0,
+) -> ImageFont.FreeTypeFont:
+    """Return the smallest 8-200 px font that reaches a render target."""
+    low, high = 8, 200
+    while low < high:
+        size = (low + high) // 2
+        font = ImageFont.truetype(font_path, size, index=index)
+        if reaches_target(font):
+            high = size
+        else:
+            low = size + 1
+    return ImageFont.truetype(font_path, low, index=index)
+
+
 def render(text: str, width: int = 335, opts: dict[str, Any] | None = None) -> np.ndarray:
     """Binary glyph silhouette (255 = glyph), sized to the doubao asset's convention.
 
@@ -91,13 +125,11 @@ def render(text: str, width: int = 335, opts: dict[str, Any] | None = None) -> n
     probe = Image.new("L", (10, 10))
     d0 = ImageDraw.Draw(probe)
     lines = text.split("\n")
-    size = 8
-    while size < 200:  # grow until the LONGEST line fills the target width
-        f = ImageFont.truetype(font_path, size, index=font_index)
-        if max(d0.textbbox((0, 0), ln, font=f)[2] for ln in lines) >= width * 0.98:
-            break
-        size += 1
-    font = ImageFont.truetype(font_path, size, index=font_index)
+    font = _fit_font(
+        font_path,
+        lambda f: max(d0.textbbox((0, 0), ln, font=f)[2] for ln in lines) >= width * 0.98,
+        index=font_index,
+    )
     boxes = [d0.textbbox((0, 0), ln, font=font) for ln in lines]
     line_h = max(bb[3] - bb[1] for bb in boxes)
     gap = max(1, int(line_h * gap_frac))
@@ -138,13 +170,7 @@ def draw_catlogo(width: int = 335) -> np.ndarray:
     probe = Image.new("L", (10, 10))
     d0 = ImageDraw.Draw(probe)
     text = "AI生成"
-    size = 8
-    while size < 200:
-        f = ImageFont.truetype(_FONT, size)
-        if d0.textbbox((0, 0), text, font=f)[2] >= width * 0.60:
-            break
-        size += 1
-    font = ImageFont.truetype(_FONT, size)
+    font = _fit_font(_FONT, lambda f: d0.textbbox((0, 0), text, font=f)[2] >= width * 0.60)
     bb = d0.textbbox((0, 0), text, font=font)
     tw, th = bb[2] - bb[0], bb[3] - bb[1]
     cs = int(th * 1.08)
@@ -182,10 +208,90 @@ def draw_catlogo(width: int = 335) -> np.ndarray:
     return np.array(im)
 
 
+def _star_pts(cx: float, cy: float, r: float, waist: float) -> list[tuple[float, float]]:
+    return [
+        (cx, cy - r),
+        (cx + r * waist, cy - r * waist),
+        (cx + r, cy),
+        (cx + r * waist, cy + r * waist),
+        (cx, cy + r),
+        (cx - r * waist, cy + r * waist),
+        (cx - r, cy),
+        (cx - r * waist, cy - r * waist),
+    ]
+
+
+def _sparkle(draw: ImageDraw.ImageDraw, cx: float, cy: float, r: float) -> None:
+    """Draw the four-point cutout used by synthetic candidate silhouettes."""
+    draw.polygon(_star_pts(cx, cy, r, 0.22), fill=0)
+
+
+def draw_msbadge(width: int = 335) -> np.ndarray:
+    """Synthetic silhouette for the measured Microsoft top-right white pill.
+
+    The top-hat front-end sees the bright pill with dark-text holes, so the template
+    carries the same holes -- that is what discriminates this pill from any other
+    white rounded element in the top-right corner. The text and four-point cutout
+    approximate the measured internal shape; they do not assert one universal
+    Microsoft icon or wording. Geometry measured on 17 visually confirmed carriers
+    on 2026-08-27: pill 0.152W x 0.040W, margins ~0.010W right / ~0.007W top,
+    glyph height ~0.39 of pill height.
+    """
+    h = round(width / 3.78)
+    im = Image.new("L", (width, h), 0)
+    d = ImageDraw.Draw(im)
+    d.rounded_rectangle([0, 0, width - 1, h - 1], radius=h // 2, fill=255)
+    font_path = "/System/Library/Fonts/Supplemental/Arial Bold.ttf"
+    text = "Made with AI"
+    probe = Image.new("L", (10, 10))
+    d0 = ImageDraw.Draw(probe)
+    font = _fit_font(font_path, lambda f: d0.textbbox((0, 0), text, font=f)[3] >= h * 0.39)
+    bb = d0.textbbox((0, 0), text, font=font)
+    th = bb[3] - bb[1]
+    r = h * 0.20  # sparkle radius, ~half the text height
+    pad_l = h * 0.22
+    cx = pad_l + r
+    cy = h / 2 - 1
+    tx = int(pad_l + 2 * r + h * 0.22)
+    d.text((tx - bb[0], (h - th) // 2 - bb[1]), text, font=font, fill=0)
+    _sparkle(d, cx, cy, r)
+    return np.array(im)
+
+
+def draw_samsung_en(width: int = 335) -> np.ndarray:
+    """Samsung Galaxy AI English label: "AI-generated content" with the leading
+    4-point sparkle, light-gray glyphs (same class as the registered Italian asset)."""
+    text = "AI-generated content"
+    font_path = "/System/Library/Fonts/Supplemental/Arial.ttf"
+    probe = Image.new("L", (10, 10))
+    d0 = ImageDraw.Draw(probe)
+    font = _fit_font(font_path, lambda f: d0.textbbox((0, 0), text, font=f)[2] >= width * 0.80)
+    bb = d0.textbbox((0, 0), text, font=font)
+    tw, th = bb[2] - bb[0], bb[3] - bb[1]
+    r = th * 0.55
+    gap = th * 0.45
+    im = Image.new("L", (int(tw + gap + 2 * r + 8), th + 8), 0)
+    d = ImageDraw.Draw(im)
+    # sparkle as bright glyph (this silhouette is light-glyph class, not a pill)
+    d.polygon(_star_pts(4 + r, 4 + th / 2, r, 0.22), fill=255)
+    d.text((4 + 2 * r + gap - bb[0], 4 - bb[1]), text, font=font, fill=255)
+    arr = np.array(im)
+    ys, xs = np.where(arr > 0)
+    return arr[ys.min() : ys.max() + 1, xs.min() : xs.max() + 1]
+
+
+_CUSTOM_RENDERERS = {
+    "catlogo_alpha.png": draw_catlogo,
+    "microsoft_alpha.png": draw_msbadge,
+    "samsung_en_alpha.png": draw_samsung_en,
+}
+
+
 def main() -> None:
     try:
         for name, text in MARKS.items():
-            sil = draw_catlogo() if text == "CATLOGO" else render(text, opts=MARK_OPTS.get(name))
+            renderer = _CUSTOM_RENDERERS.get(name)
+            sil = renderer() if renderer is not None else render(text, opts=MARK_OPTS.get(name))
             output_dir = _PACKAGE_ASSETS if name in _REGISTERED else _CANDIDATE_ASSETS
             output_dir.mkdir(parents=True, exist_ok=True)
             output = output_dir / name

@@ -541,7 +541,7 @@ def _should_skip_invisible_scrub(force: bool, image_path: Path) -> bool:
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose logging.")
 @click.pass_context
 def main(ctx: click.Context, verbose: bool) -> None:
-    """Remove visible and invisible AI watermarks from images, plus provenance metadata from video."""
+    """Remove visible and invisible AI watermarks, plus metadata provenance marks, from images and video."""
     from dotenv import load_dotenv
 
     load_dotenv()  # Load .env (e.g. HF_TOKEN)

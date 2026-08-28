@@ -266,8 +266,8 @@ class TestC2PA:
 
     def test_content_fingerprint_does_not_trigger_invisible_removal(self):
         info = {
-            "soft_binding": "Adobe (content fingerprint)",
-            "soft_binding_vendors": ["Adobe (content fingerprint)"],
+            "soft_binding": "Adobe Image Comparator Network",
+            "soft_binding_vendors": ["Adobe Image Comparator Network"],
         }
 
         assert c2pa_info_has_removal_hint(info) is False
@@ -1007,7 +1007,7 @@ class TestTc260ContainerRouting:
     def _riff_chunk(chunk_id: bytes, payload: bytes) -> bytes:
         return chunk_id + len(payload).to_bytes(4, "little") + payload + (b"\x00" if len(payload) & 1 else b"")
 
-    def _labelled_avi(self) -> bytes:
+    def _labeled_avi(self) -> bytes:
         info = self._riff_chunk(b"AIGC", _TC260_AIGC_VALUE)
         body = b"AVI " + self._riff_chunk(b"LIST", b"INFO" + info)
         return b"RIFF" + len(body).to_bytes(4, "little") + body
@@ -1016,7 +1016,7 @@ class TestTc260ContainerRouting:
         from remove_ai_watermarks.metadata import aigc_label
 
         target = tmp_path / "clip.bin"  # correct AVI bytes, wrong suffix
-        target.write_bytes(self._labelled_avi())
+        target.write_bytes(self._labeled_avi())
         label = aigc_label(target)
         assert label is not None
         assert label["Label"] == "1"
@@ -1025,7 +1025,7 @@ class TestTc260ContainerRouting:
         from remove_ai_watermarks.metadata import aigc_label
 
         target = tmp_path / "clip.avi"
-        target.write_bytes(self._labelled_avi())
+        target.write_bytes(self._labeled_avi())
         assert aigc_label(target) is not None
 
     def test_webp_yields_nothing_from_the_riff_reader(self, tmp_path: Path):

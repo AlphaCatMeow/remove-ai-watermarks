@@ -31,11 +31,14 @@ an unsupported locale, a different position, or a crop may be missed.
 
 Known examples:
 
+- The Microsoft detector covers one calibrated top-right white pill. Microsoft's
+  [documented feature](https://support.microsoft.com/en-us/topic/include-a-watermark-when-content-from-microsoft-365-is-ai-generated-b00a656e-ae61-4692-8086-67d004421030)
+  can instead use a Copilot icon, `AI-Generated` text, or another position.
 - Samsung detection is calibrated for the Italian
   `Contenuti generati dall'AI` text variant.
 - The Jimeng top-left pill has a weak visual detector and is intentionally
   subject to additional product and background checks.
-- Kling support covers the calibrated variants rather than every Kling label.
+- Kling AI support covers the calibrated variants rather than every Kling AI label.
 
 Use `erase --region` when you can see and select an unsupported or missed mark.
 
@@ -310,11 +313,11 @@ supported AI provenance metadata without transcoding streams.
 
 `video visible` and `remove_video_visible` additionally support the moving
 Sora 2 mascot and wordmark, the current Veo four-point diamond, the legacy
-`Veo` text, the Seedance boxed `AI` label, the fixed `Dola AI` text, the Hailuo
-MINIMAX/Hailuo composite label, and the bottom-right Kling label with its
+`Veo` text, the Seedance boxed `AI` label, the fixed `Dola AI` text, the Hailuo AI
+MINIMAX/Hailuo AI composite label, and the bottom-right Kling AI label with its
 version suffix. Detection requires a recurring visual candidate across
 adjacent frames. Fixed-mark candidates must remain anchored rather than
-drifting with a scene object. Kling also requires a bright low-saturation
+drifting with a scene object. Kling AI also requires a bright low-saturation
 candidate near the expected frame edge. Provider provenance can recover
 low-contrast runs only after visual evidence exists for the marks that define a
 provenance prior, so metadata alone does not erase a clean API export.
@@ -325,7 +328,7 @@ policies and selects the first stable result in specificity order. Use an
 explicit mark when the provider is already known.
 Historical Sora Turbo exports use a small OpenAI swirl in the corner rather
 than the moving mascot-and-wordmark design; that earlier variant is not
-detected by the `sora` video mark. Hailuo and Kling coverage is specific to the
+detected by the `sora` video mark. Hailuo AI and Kling AI coverage is specific to the
 verified lower-edge layouts; a new provider layout needs a separate calibrated
 silhouette. Other provider video labels are not supported yet. Google video
 SynthID has an oracle-certified VAE removal path, while other proprietary

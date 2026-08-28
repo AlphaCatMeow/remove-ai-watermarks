@@ -1,8 +1,8 @@
 """High-level video processing API.
 
 The product path covers provenance identification, container-level AI metadata
-removal, temporally stabilized visible Sora, Veo, Seedance, Dola, Hailuo, and
-Kling removal, and an oracle-certified opt-in VAE profile for video SynthID.
+removal, temporally stabilized visible Sora, Veo, Seedance, Dola, Hailuo AI, and
+Kling AI removal, and an oracle-certified opt-in VAE profile for video SynthID.
 The visible pixel path reuses the image package's shared fill backends.
 """
 

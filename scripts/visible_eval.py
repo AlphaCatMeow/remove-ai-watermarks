@@ -1,7 +1,7 @@
 """Benchmark harness for the visible-mark detectors.
 
 Run this before AND after any detector change. It re-runs perception over the
-hand-labelled ground truth and reports, per mark, how often a fire is correct --
+hand-labeled ground truth and reports, per mark, how often a fire is correct --
 with Wilson intervals, so a change inside the noise is visible as such.
 
     uv run python scripts/visible_eval.py                 # score current code
@@ -10,10 +10,10 @@ with Wilson intervals, so a change inside the noise is visible as such.
 
 WHAT THIS SET CAN AND CANNOT MEASURE -- read before quoting a number:
 
-  * PRECISION: sound. Every labelled crop is centred on the region a detector
+  * PRECISION: sound. Every labeled crop is centered on the region a detector
     pointed at, so "the detector fired mark K here, was K actually there" is
     exactly the question the labels answer.
-  * RECALL: NOT measurable here, and the harness refuses to print it. The labelled
+  * RECALL: NOT measurable here, and the harness refuses to print it. The labeled
     images were SAMPLED WHERE DETECTORS FIRED (relaxation additions plus controls),
     so images carrying a mark that every detector missed are absent by construction.
     Computing recall on this set would divide by a denominator that excludes exactly
@@ -133,7 +133,7 @@ def report(res: dict, prev: dict | None = None) -> None:
         conf = {k: v for k, v in res["confusion"][m].items() if k != m}
         if conf:
             print(f"  {m:12s} {dict(sorted(conf.items(), key=lambda kv: -kv[1]))}")
-    print("\n'scope' = images whose crop could rule on that mark; 'missed' = labelled marks it did not fire on.")
+    print("\n'scope' = images whose crop could rule on that mark; 'missed' = labeled marks it did not fire on.")
     print("NOTE: 'missed' is NOT recall -- this set was sampled where detectors fired, so images")
     print("      every detector missed are absent by construction. Use it only to catch a change")
     print("      LOSING marks it used to find; an unbiased random sample is needed for true recall.")

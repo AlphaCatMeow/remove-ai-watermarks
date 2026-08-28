@@ -14,7 +14,7 @@ WHERE THE POSITIVES COME FROM
   absence) visible directly.
 
 NEGATIVES
-  The 432 frames hand-labelled `present: []` in the 2026-07-18 round -- already-adjudicated
+  The 432 frames hand-labeled `present: []` in the 2026-07-18 round -- already-adjudicated
   no-visible-mark images, so the false-fire arm rests on human labels rather than on the
   absence of a detection.
 
@@ -115,7 +115,7 @@ def load_sets(cohort: str) -> tuple[list[str], list[str]]:
     # The 2026-07-18 labels are in the vocabulary of the REGISTERED marks only
     # (gemini/doubao/jimeng/jimeng_pill): `present: []` means "no registered mark", NOT
     # "no mark at all" -- 146 of the 432 sit in a TC260 cohort, and qwen-cohort frames
-    # visibly carrying 千问AI生成 are labelled `present: []` there (measured 2026-07-21:
+    # visibly carrying 千问AI生成 are labeled `present: []` there (measured 2026-07-21:
     # they made up the clean arm's whole top tail, clean p99 0.37 -> 0.69). A gate read
     # off that arm is meaningless, so the clean arm excludes every frame in ANY TC260
     # cohort -- cohort membership is the cheap proxy for "may carry a CJK AI label".
@@ -168,7 +168,7 @@ def report(pos: list[dict[str, Any]], neg: list[dict[str, Any]], name: str) -> N
 
     p = np.array([r["score"] for r in pos])
     n = np.array([r["score"] for r in neg])
-    print(f"\n{'=' * 78}\n{name}: candidate-cohort vs hand-labelled clean\n{'=' * 78}")
+    print(f"\n{'=' * 78}\n{name}: candidate-cohort vs hand-labeled clean\n{'=' * 78}")
     print(f"\n{'arm':10s} {'n':>5s} {'p10':>7s} {'p50':>7s} {'p90':>7s} {'p95':>7s} {'p99':>7s} {'max':>7s}")
     for label, arr in (("cohort", p), ("clean", n)):
         if not len(arr):
@@ -602,7 +602,7 @@ def main() -> None:
         crossfire(pools, cand, a.workers, a.gate)
         return
 
-    print(f"cohort {a.cohort}: {len(pos_paths)} candidates | clean: {len(neg_paths)} hand-labelled")
+    print(f"cohort {a.cohort}: {len(pos_paths)} candidates | clean: {len(neg_paths)} hand-labeled")
     print(f"scale_basis={a.scale_basis} overrides={overrides}")
     pos = run(pos_paths, a.asset, name, a.workers, a.scale_basis, overrides)
     neg = run(neg_paths, a.asset, name, a.workers, a.scale_basis, overrides)

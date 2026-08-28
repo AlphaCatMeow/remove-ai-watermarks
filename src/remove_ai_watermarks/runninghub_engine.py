@@ -32,7 +32,7 @@ whose producer USCC names the entity, harvested 2026-07-22 by
   * STRICT ONLY (``provenance_ncc_factor`` 1.0): raw gray NCC is
     contrast-DEPENDENT and the sub-gate band of a corner-anchored gray match is
     unmeasured beyond the clean arm, so no provenance relaxation exists.
-  * Gate 0.34: on 283 hand-labelled clean frames (cohort-contamination-guarded)
+  * Gate 0.34: on 283 hand-labeled clean frames (cohort-contamination-guarded)
     corner-anchored gray NCC p99 is 0.264 / max 0.304, while the 4 positives
     score 0.38-0.54. 0.34 sits above the clean max with a small margin; the
     positives are few, so the margin is deliberately thin on the recall side.
@@ -75,14 +75,14 @@ LOGO_MIN_LUMA = 150
 TOPHAT_DELTA = 12
 
 DETECT_MIN_COVERAGE = 0.04  # unused by the gray front-end (kept for config parity)
-# Calibrated 2026-07-22 on the vendor cohort vs 283 hand-labelled clean frames:
+# Calibrated 2026-07-22 on the vendor cohort vs 283 hand-labeled clean frames:
 # corner-anchored gray NCC, clean p99 0.264 / max 0.304; positives 0.38-0.54.
 DETECT_NCC_THRESHOLD = 0.34
 
 # Detection-silhouette geometry (fraction of the image width), measured on the
 # positives: mark width is ~0.320 of width on all three frame sizes (266px at 832,
 # 345px at 1080, 491px at 1536), and the NCC is razor-sharp in size (0.537 on-size,
-# 0.223 at +5.6% -- the same comb behaviour Qwen measured), so the nominal sits
+# 0.223 at +5.6% -- the same comb behavior Qwen measured), so the nominal sits
 # exactly on the measured size with a TIGHT ladder around it, not the shared 3 rungs
 # (whose nearest rung landed 5.6% off and collapsed the match to 0.22).
 _ALPHA_WIDTH_FRAC = 0.32

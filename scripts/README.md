@@ -34,6 +34,7 @@ explicitly names a tracked canonical result.
 | `detector_response.py` | Measure detector response over mark size, contrast, background, and aspect. |
 | `fill_quality.py` | Measure visible-fill quality against constructed ground truth. |
 | `ladder_headroom.py` | Measure recall cost from the coarse scale ladder. |
+| `registered_mark_calibrate.py` | Measure a registered detector without conflating visual positives, metadata cohorts, adjudicated negatives, and unlabeled controls. |
 | `synthid_corpus.py` | Ingest and inspect the local SynthID reference corpus. |
 | `vendor_cohort_harvest.py` | Partition TC260 carriers by producer code. |
 | `vendor_mark_calibrate.py` | Calibrate a candidate vendor text detector. |

@@ -563,8 +563,8 @@ independently and are not compared across detectors. Pass one of those explicit
 values to restrict the scan to a single provider. The Veo detector recognizes
 the current four-point diamond and the
 legacy `Veo` text. Seedance recognizes the boxed `AI` label, Dola recognizes
-its compact text label, Hailuo recognizes the composite MINIMAX/Hailuo label,
-and Kling recognizes its bottom-right logo, wordmark, and version suffix. Each
+its compact text label, Hailuo AI recognizes the composite MINIMAX/Hailuo AI label,
+and Kling AI recognizes its bottom-right logo, wordmark, and version suffix. Each
 variant has an independent synthetic silhouette and calibrated temporal policy.
 After each accepted frame is filled, `temporal_consistency=True` motion-aligns
 the preceding accepted fill and blends it only when the warped prior mask

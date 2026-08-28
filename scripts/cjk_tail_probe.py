@@ -1,7 +1,7 @@
 """Can one GENERIC template cover the CJK AI labels no per-vendor detector fires on?
 
 THE OPPORTUNITY
-  Corpus inspection of doubao-provenance misses turned up `千问AI生成` (Alibaba Qwen) and
+  Corpus inspection of doubao-provenance misses turned up `千问AI生成` (Alibaba Cloud Qwen) and
   `百度 AI生成` (Baidu) sitting in the same bottom-right corner as the marks we do cover,
   bold and plainly legible, with no detector able to fire on either. `docs/...landscape`
   puts uncovered vendors at ~6% of sampled images -- larger than any tuning gain left in

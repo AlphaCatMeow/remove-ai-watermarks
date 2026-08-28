@@ -1,6 +1,6 @@
-"""Kling (可灵, Kuaishou) visible watermark detector/localizer.
+"""Kling AI (可灵AI, Kuaishou) visible watermark detector/localizer.
 
-Kling stamps its generations with a thin, light-gray "可灵AI 3.0" text strip in the
+Kling AI stamps its generations with a thin, light-gray "可灵AI 3.0" text strip in the
 bottom-right corner, preceded by the vendor's spiral logo (not part of the detection
 silhouette -- logos vary between releases, the text run is what discriminates).
 Known variants: an "Omni" suffix release, a latin "KlingAI 3.0" release, and a
@@ -9,7 +9,7 @@ suffix variants are only caught when the core run is bold enough (measured below
 
 Detection matches the bundled glyph silhouette against the corner; removal is the
 shared **localize -> fill** (the glyph-bbox :meth:`footprint_mask` feeds
-``region_eraser``), NOT reverse-alpha. This module supplies only Kling's tuned
+``region_eraser``), NOT reverse-alpha. This module supplies only Kling AI's tuned
 :class:`TextMarkConfig` (``assets/kling_alpha.png`` -- a font-rendered synthetic
 silhouette from ``scripts/render_vendor_silhouettes.py``, never cut from an
 upload). It also feeds ``identify`` as the medium-confidence ``visible_kling``
@@ -26,7 +26,7 @@ producer USCC 91110108335469089C names the entity, 2026-07-21; harness
   * ``alpha_height_frac`` comes from the silhouette aspect (0.239) at the fitted
     width, matching the aspect the fit converged on (0.25).
   * Gate 0.35, one step above the clean arm's max: on the cohort-vs-clean run
-    (cohort-contamination-guarded, 286 hand-labelled clean frames) the clean arm
+    (cohort-contamination-guarded, 286 hand-labeled clean frames) the clean arm
     scored p99 0.304 / max 0.320, and every cohort frame >= 0.35 carries a visible
     可灵AI 3.0 mark (9 of ~19 eyeballed visible marks fire = ~47% recall of visible
     marks; the misses are the faint "Omni"-suffix release, the latin "KlingAI"
@@ -38,7 +38,7 @@ producer USCC 91110108335469089C names the entity, 2026-07-21; harness
     provenance relaxation exists for this mark.
   * No rival margin: at the shipped gate the template fires on 1 of 400
     Doubao-marked frames (0.2%, a 豆包 frame sitting INSIDE the Kling cohort, still
-    below the gate), 0 of 298 Jimeng-marked frames and 0 of 286 hand-labelled clean
+    below the gate), 0 of 298 Jimeng-marked frames and 0 of 286 hand-labeled clean
     frames, and a 0.10 rival margin costs zero genuine Kling detections -- so it is
     simply unnecessary (same conclusion shape as Qwen).
 """
@@ -74,7 +74,7 @@ LOGO_MIN_LUMA = 150
 TOPHAT_DELTA = 12
 
 DETECT_MIN_COVERAGE = 0.04  # unused by the tophat front-end (kept for config parity)
-# Calibrated 2026-07-21 on the vendor cohort vs 286 hand-labelled clean frames
+# Calibrated 2026-07-21 on the vendor cohort vs 286 hand-labeled clean frames
 # (cohort-contamination-guarded): clean p99 0.304 / max 0.320, and every cohort
 # frame scoring >= 0.35 carries a visible 可灵AI 3.0 mark. 0.35 was picked over
 # 0.33 (also zero clean fires) for margin against unseen clean content at a cost
@@ -87,7 +87,7 @@ _ALPHA_WIDTH_FRAC = 0.12
 _ALPHA_HEIGHT_FRAC = 0.0287
 
 _CONFIG = TextMarkConfig(
-    name="Kling",
+    name="Kling AI",
     asset_name="kling_alpha.png",
     corner="br",
     margin_floor=4,
@@ -114,7 +114,7 @@ _CONFIG = TextMarkConfig(
 
 
 def _alpha_template() -> NDArray[Any] | None:
-    """The bundled Kling alpha template (float [0,1]), or None."""
+    """The bundled Kling AI alpha template (float [0,1]), or None."""
     return _text_mark_engine.load_alpha_template(_CONFIG.asset_name)
 
 
@@ -124,7 +124,7 @@ def _glyph_silhouette() -> NDArray[Any] | None:
 
 
 class KlingEngine(TextMarkEngine):
-    """Detect/localize the visible Kling "可灵AI 3.0" watermark (locate -> mask; mask feeds the fill)."""
+    """Detect/localize the visible Kling AI "可灵AI 3.0" watermark (locate -> mask; mask feeds the fill)."""
 
     def __init__(self) -> None:
         super().__init__(_CONFIG)

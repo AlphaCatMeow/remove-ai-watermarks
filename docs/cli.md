@@ -317,7 +317,7 @@ remove-ai-watermarks video visible kling.mp4 --mark kling -o kling_clean.mp4
 
 The command supports the moving Sora mascot and wordmark, two Veo
 corner variants, the Seedance boxed `AI` label, the `Dola AI` text label, the
-composite `MINIMAX | hailuo AI` label, and the bottom-right Kling label. Sora
+composite `MINIMAX | hailuo AI` label, and the bottom-right Kling AI label. Sora
 searches the whole frame at multiple scales. The other detectors search bounded
 lower-frame regions with separate synthetic silhouettes. Kling additionally
 requires its bright low-saturation label near the frame edge. Every mark
@@ -328,7 +328,7 @@ provenance-aware marks; metadata alone never creates a detection.
 
 `--mark auto` is the default. It evaluates all providers in one decode pass and
 selects the first stable match in specificity order: Sora, Veo, Seedance, Dola,
-Hailuo, then Kling. Their confidence scores are independently calibrated and
+Hailuo AI, then Kling AI. Their confidence scores are independently calibrated and
 are not compared across providers. Pass an explicit `--mark` to scan only that
 provider.
 

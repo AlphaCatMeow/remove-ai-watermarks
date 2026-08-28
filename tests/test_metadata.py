@@ -1562,7 +1562,7 @@ class TestAIGCLabel:
 
 
 class TestHuggingFaceJob:
-    """HuggingFace-hosted job marker (``hf-job-id`` PNG text chunk)."""
+    """Hugging Face-hosted job marker (``hf-job-id`` PNG text chunk)."""
 
     def _hf_png(self, tmp_path: Path, job_id: str = "ec8380a6-2091-423a-b835-209420f99ee1") -> Path:
         p = tmp_path / "hfjob.png"
@@ -1622,10 +1622,13 @@ class TestSoftBinding:
         from remove_ai_watermarks._internal.c2pa import soft_binding_vendors_in
 
         assert soft_binding_vendors_in(b"...alg...com.adobe.trustmark.P...") == ["Adobe TrustMark"]
-        assert soft_binding_vendors_in(b"com.digimarc.validate.1") == ["Digimarc"]
+        assert soft_binding_vendors_in(b"com.digimarc.validate.1") == ["Digimarc Validate"]
         assert soft_binding_vendors_in(b"ai.steg.api blah") == ["Steg.AI"]
         # Registry-verified vendors added in v0.6.x.
-        assert soft_binding_vendors_in(b"ai.trufo.gen1.image") == ["Trufo"]
+        assert soft_binding_vendors_in(b"ai.trufo.pawprint.watermark") == ["Trufo PawPrint"]
+        assert soft_binding_vendors_in(b"com.aiwatermark.pixelseal.1") == ["AIWatermark PixelSeal"]
+        assert soft_binding_vendors_in(b"com.aiwatermark.videoseal.1") == ["AIWatermark VideoSeal"]
+        assert soft_binding_vendors_in(b"com.aiwatermark.audioseal.1") == ["AIWatermark AudioSeal"]
         assert soft_binding_vendors_in(b"io.iscc.v0") == ["ISCC (content code)"]
 
     def test_vendors_in_empty_when_absent(self):

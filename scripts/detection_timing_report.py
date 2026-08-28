@@ -39,7 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from detection_timing import COMPONENTS as _TIMED
 
 # Taken from the script that WROTE the rows, in its order, so a probe added, removed
-# or reordered there cannot silently leave a column missing or mislabelled here.
+# or reordered there cannot silently leave a column missing or mislabeled here.
 COMPONENTS = tuple(name for name, _ in _TIMED)
 METHODS = (
     ("cold_extract_evidence_ms", "extract_provenance_evidence (cold)"),

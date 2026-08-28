@@ -64,7 +64,7 @@ _MASK_W, _MASK_H = 0.205, 0.115  # width of W, height of W
 #
 # Measured through the PRODUCT path (the `_keep_pill` gate), not the raw detector, by
 # ``scripts/pill_gate_audit.py`` -- the raw path bypasses the gate and reads as a
-# disaster that the shipped behaviour does not have. Re-run it when the gate changes.
+# disaster that the shipped behavior does not have. Re-run it when the gate changes.
 _FLAT_TEXTURE_MAX = 6.0
 
 _silhouette: NDArray[Any] | None = None

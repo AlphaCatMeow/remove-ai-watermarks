@@ -413,7 +413,7 @@ def _scan_head_impl(image_path: Path, size: int) -> bytes:
 # packet larger than this is not a provenance label.
 _DECODED_TEXT_LIMIT = 512 * 1024
 # Decoder values that are binary payloads with their own readers, not metadata text.
-# An ICC profile is colour data and can run to hundreds of kilobytes; appending it
+# An ICC profile is color data and can run to hundreds of kilobytes; appending it
 # would bloat the buffer every later detector re-scans, for no signal.
 _DECODER_BINARY_KEYS = frozenset({"icc_profile"})
 

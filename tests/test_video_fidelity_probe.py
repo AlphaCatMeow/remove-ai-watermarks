@@ -142,7 +142,7 @@ def test_pairing_follows_the_engine_sampling_rule_not_just_the_frame_count(
     in the suite that constrains the sampler's phase at all.
 
     The clips encode losslessly, so the aligned pairing is exact and clears any
-    floor; the misaligned one compares frames a full colour step apart and lands
+    floor; the misaligned one compares frames a full color step apart and lands
     near 9 dB, which is what leaves the 25 dB ceiling a wide moat rather than a
     tuned threshold.
     """

@@ -228,8 +228,8 @@ class TestVisibleCommand:
         # The transparent corners must remain transparent.
         assert out[0, 0, 3] == 0
         assert out[199, 199, 3] == 0
-        # The opaque centre remains opaque (the watermark region default is bottom-right,
-        # which doesn't overlap the centre square at 200x200).
+        # The opaque center remains opaque (the watermark region default is bottom-right,
+        # which doesn't overlap the center square at 200x200).
         assert out[100, 100, 3] == 255
 
     def test_visible_keeps_alpha_opaque_in_watermark_region(self, runner, tmp_path):

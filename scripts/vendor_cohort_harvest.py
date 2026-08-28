@@ -15,7 +15,7 @@ THE KEY
   ``001191110102MACQD9K64010000`` -> USCC ``91110102MACQD9K640``, which names a
   specific legal entity. So the metadata partitions carriers into per-ENTITY
   cohorts without looking at a single pixel. A cohort is a LABEL: once one frame
-  in it is eyeballed, every frame in it is a labelled example of that vendor's
+  in it is eyeballed, every frame in it is a labeled example of that vendor's
   mark. That is what turns "one confirmed positive" into "30+ per vendor".
 
   CLAUDE.md's "the generic TC260 label names no specific vendor" is about the

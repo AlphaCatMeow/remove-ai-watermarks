@@ -245,7 +245,7 @@ class TestEngineResolvesThePolishPerProfile:
 
     This is the change that stopped a library caller and a CLI caller on one profile
     from producing different pixels, and it had no test: rebinding
-    ``resolve_adaptive_polish`` to ``bool(value)`` -- exactly the pre-commit behaviour --
+    ``resolve_adaptive_polish`` to ``bool(value)`` -- exactly the pre-commit behavior --
     left the whole suite green.
     """
 

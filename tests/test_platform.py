@@ -285,7 +285,7 @@ class TestResolveStrength:
         assert SDXL_ZIMAGE_UNKNOWN_STRENGTH == SDXL_ZIMAGE_GEMINI_STRENGTH
         assert resolve_strength(None, "openai", "sdxl-zimage") == SDXL_ZIMAGE_OPENAI_STRENGTH
         assert resolve_strength(None, "google", "sdxl-zimage") == SDXL_ZIMAGE_GEMINI_STRENGTH
-        # An unrecognised issuer takes the stricter Gemini value, not the OpenAI one.
+        # An unrecognized issuer takes the stricter Gemini value, not the OpenAI one.
         assert resolve_strength(None, "adobe", "sdxl-zimage") == SDXL_ZIMAGE_UNKNOWN_STRENGTH
         assert resolve_strength(None, None, "sdxl-zimage") == SDXL_ZIMAGE_UNKNOWN_STRENGTH
 

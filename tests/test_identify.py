@@ -17,7 +17,11 @@ from unittest.mock import patch
 import pytest
 
 from remove_ai_watermarks._internal.c2pa import c2pa_info_from_manifest_store
-from remove_ai_watermarks._internal.constants import C2PA_AI_VENDORS, C2PA_CLAIM_GENERATOR_PLATFORMS
+from remove_ai_watermarks._internal.constants import (
+    C2PA_AI_VENDORS,
+    C2PA_CLAIM_GENERATOR_PLATFORMS,
+    C2PA_IDENTITY_AI_ORGS,
+)
 from remove_ai_watermarks.identify import (
     ProvenanceEvidence,
     ProvenanceReport,
@@ -179,7 +183,7 @@ class TestProvenanceEvidence:
 
         assert report.is_ai_generated is True
         assert report.confidence == "high"
-        assert report.platform == "OpenAI (ChatGPT / gpt-image / DALL-E / Sora)"
+        assert report.platform == "OpenAI (ChatGPT / GPT Image / DALL·E / Sora)"
         assert not any("not anchored" in caveat for caveat in report.caveats)
 
     def test_external_metadata_record_builds_equivalent_evidence(self, tmp_path: Path):
@@ -244,7 +248,7 @@ class TestProvenanceEvidence:
         report = identify_from_evidence(evidence_from_metadata_record(record, path=path))
 
         assert report.is_ai_generated is True
-        assert report.platform == "OpenAI (ChatGPT / gpt-image / DALL-E / Sora)"
+        assert report.platform == "OpenAI (ChatGPT / GPT Image / DALL·E / Sora)"
         assert [signal.name for signal in report.signals] == ["c2pa"]
 
     def test_external_generator_bytes_are_normalized(self, tmp_path: Path):
@@ -374,13 +378,12 @@ class TestAttributePlatform:
         assert platform
         assert "Canva" in platform
 
-    def test_byteplus_attributes_to_bytedance(self):
+    def test_byteplus_keeps_its_product_name(self):
         # ByteDance's intl brand signs as "Byteplus Pte. Ltd."; the registry maps
-        # it to the ByteDance platform (was mis-read as Adobe via an incidental
+        # it to the ByteDance family (was mis-read as Adobe via an incidental
         # "Adobe XMP" file string before the entry existed).
         platform = _attribute_platform(["BytePlus (ByteDance)"])
-        assert platform
-        assert "ByteDance" in platform
+        assert platform == "BytePlus (ByteDance)"
 
     def test_empty_is_none(self):
         assert _attribute_platform([]) is None
@@ -444,7 +447,7 @@ class TestIdentifyNonPng:
         path = self._c2pa_jpeg(tmp_path, b"certificate_center@volcengine.com ... trainedAlgorithmicMedia")
         r = identify(path, check_visible=False, check_invisible=False)
         assert r.is_ai_generated is True
-        assert "ByteDance" in (r.platform or "")
+        assert r.platform == "ByteDance Volcano Engine"
 
     def test_bytedance_chinese_legal_name_attributed(self, tmp_path: Path):
         # Some Volcano Engine certs name the signer with the Chinese legal entity
@@ -454,7 +457,7 @@ class TestIdentifyNonPng:
         path = self._c2pa_jpeg(tmp_path, blob)
         r = identify(path, check_visible=False, check_invisible=False)
         assert r.is_ai_generated is True
-        assert "ByteDance" in (r.platform or "")
+        assert r.platform == "ByteDance Volcano Engine"
 
     @pytest.mark.parametrize(
         ("claim_generator", "platform"),
@@ -498,7 +501,7 @@ class TestIdentifyNonPng:
         path = self._c2pa_jpeg(tmp_path, b"Bytedance Pte. Ltd. Dreamina/7.5.0 c2pa.created")
         r = identify(path, check_visible=False, check_invisible=False)
         assert r.is_ai_generated is True
-        assert "ByteDance" in (r.platform or "")
+        assert r.platform == "ByteDance Dreamina"
 
     def test_elevenlabs_attributed(self, tmp_path: Path):
         path = self._c2pa_jpeg(tmp_path, b"Eleven Labs Inc. ... trainedAlgorithmicMedia")
@@ -895,7 +898,7 @@ class TestIdentifyAigcPngChunk:
         assert "doubao" in signal.detail
 
 
-# ── HuggingFace-hosted job marker (medium confidence) ───────────────
+# ── Hugging Face-hosted job marker (medium confidence) ─────────────
 
 
 class TestIdentifyHuggingFaceJob:
@@ -917,7 +920,7 @@ class TestIdentifyHuggingFaceJob:
         assert r.is_ai_generated is True
         assert r.confidence == "medium"
         assert r.platform is not None
-        assert "HuggingFace" in r.platform
+        assert "Hugging Face" in r.platform
         signal = next(s for s in r.signals if s.name == "hf_job")
         assert signal.confidence == "medium"
 
@@ -1221,7 +1224,7 @@ class TestSynthIDProvenanceEvidence:
         png = self._png(tmp_path, "dreamina.png", self._png_chunk(b"caBX", b"jumbc2pa Dreamina/7.5.0 c2pa.created"))
         r = identify(png, check_visible=False, check_invisible=False)
         assert r.is_ai_generated is True
-        assert "ByteDance" in (r.platform or "")
+        assert r.platform == "ByteDance Dreamina"
 
 
 class TestReportSerializable:
@@ -1452,7 +1455,7 @@ class TestIdentifyAIGC:
 
 class TestVendorOf:
     def test_openai_variants(self):
-        assert _vendor_of("OpenAI (ChatGPT / gpt-image / DALL-E / Sora)") == "OpenAI"
+        assert _vendor_of("OpenAI (ChatGPT / GPT Image / DALL·E / Sora)") == "OpenAI"
         assert _vendor_of("DALL-E 3") == "OpenAI"
 
     def test_google_variants(self):
@@ -1478,17 +1481,32 @@ class TestVendorOf:
         # entered clash detection (a coverage hole). They now normalize to one origin.
         assert _vendor_of("Microsoft (Copilot / Designer)") == "Microsoft"
         assert _vendor_of("Copilot") == "Microsoft"
-        assert _vendor_of("ByteDance (Doubao / Jimeng / Dreamina / Volcano Engine)") == "ByteDance"
+        assert _vendor_of("ByteDance Volcano Engine") == "ByteDance"
+        assert _vendor_of("BytePlus (ByteDance)") == "ByteDance"
         assert _vendor_of("Dreamina/1.2") == "ByteDance"
         assert _vendor_of("Canva (Magic Media)") == "Canva"
         assert _vendor_of("Black Forest Labs (FLUX)") == "Black Forest Labs"
         assert _vendor_of("Eleven Labs Inc.") == "ElevenLabs"
+        assert _vendor_of("Ideogram") == "Ideogram"
 
-    def test_bytedance_issuers_share_one_platform(self):
-        expected = "ByteDance (Doubao / Jimeng / Dreamina / Volcano Engine)"
-        platforms = {vendor.platform for vendor in C2PA_AI_VENDORS if vendor.needle == "ByteDance"}
-        assert platforms == {expected}
-        assert ("dreamina", expected) in C2PA_CLAIM_GENERATOR_PLATFORMS
+    def test_ideogram_issuer_attributed(self):
+        # Corpus evidence 2026-08-08: four uploads signed "Ideogram, Inc" read as
+        # unknown-signer C2PA with no platform. The issuer token is the org prefix.
+        platforms = {v.issuer: v.platform for v in C2PA_AI_VENDORS}
+        assert platforms[b"Ideogram"] == "Ideogram"
+        assert "Ideogram" in C2PA_IDENTITY_AI_ORGS
+        assert _issuers_in(b"...CN=Ideogram, Inc...trainedAlgorithmicMedia") == ["Ideogram"]
+
+    def test_bytedance_issuers_keep_the_source_product(self):
+        platforms = {
+            vendor.issuer: vendor.platform
+            for vendor in C2PA_AI_VENDORS
+            if vendor.org.startswith("ByteDance") or vendor.org.startswith("BytePlus")
+        }
+        assert platforms[b"volcengine"] == "ByteDance Volcano Engine"
+        assert platforms[b"Byteplus"] == "BytePlus (ByteDance)"
+        assert platforms[b"Dreamina"] == "ByteDance Dreamina"
+        assert ("dreamina", "ByteDance Dreamina") in C2PA_CLAIM_GENERATOR_PLATFORMS
 
 
 class TestIntegrityClashesHelper:

@@ -97,7 +97,7 @@ class _DecodeMaxDct:
         return decoded
 
     def _plane_bits(self, trimmed: NDArray[Any], channel: int, scale: int) -> NDArray[Any]:
-        """Block bits for one colour plane, a strip of block-rows at a time.
+        """Block bits for one color plane, a strip of block-rows at a time.
 
         ``dwt2`` is ``dwtn``: it transforms along axis 0, then along axis 1 over
         both halves, and three of the four bands it returns are discarded here.

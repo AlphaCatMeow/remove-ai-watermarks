@@ -72,7 +72,7 @@ class TestConfig:
         assert KlingEngine().config.provenance_ncc_factor == 1.0
 
     def test_gate_above_clean_arm_max(self):
-        # Clean arm scored p99 0.304 / max 0.320 on 286 hand-labelled frames; the
+        # Clean arm scored p99 0.304 / max 0.320 on 286 hand-labeled frames; the
         # gate must sit above that with margin.
         assert KlingEngine().config.detect_ncc_threshold > 0.32
 

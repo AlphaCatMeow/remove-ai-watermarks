@@ -1,6 +1,6 @@
 """Policy-level tests for the shared text-mark engine config.
 
-These assert calibrated TUNING, not algorithm behaviour --
+These assert calibrated TUNING, not algorithm behavior --
 they exist so a future edit cannot silently revert a calibrated constant back to a
 value that was measured to be wrong. The measurements themselves live in
 `docs/module-internals.md` and in the comment at
@@ -74,7 +74,7 @@ class TestScaleBasis:
         assert doubao_engine._CONFIG.scale_basis == "short"
 
     def test_jimeng_scales_with_width(self):
-        """Measured, not an oversight: the short-side basis took jimeng's labelled
+        """Measured, not an oversight: the short-side basis took jimeng's labeled
         landscape positives from 13/13 to 0/13."""
         from remove_ai_watermarks import jimeng_engine
 

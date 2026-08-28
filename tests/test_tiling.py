@@ -100,7 +100,7 @@ class TestRunTiled:
     def test_identity_generate_reconstructs_image(self):
         # A blend of identical (unchanged) tiles must reproduce the input exactly,
         # regardless of overlap -- the feather weights are a partition-of-unity once
-        # normalised. This is the seam-free guarantee.
+        # normalized. This is the seam-free guarantee.
         rng = np.random.default_rng(0)
         arr = rng.integers(0, 256, size=(1500, 1300, 3), dtype=np.uint8)
         image = Image.fromarray(arr)

@@ -860,6 +860,12 @@ class TestVideoMetadataApi:
 
 
 class TestVideoProvenanceApi:
+    def test_c2pa_platform_keeps_the_bytedance_surface_name(self):
+        from remove_ai_watermarks.video import _platform_from_video_metadata
+
+        assert _platform_from_video_metadata({"issuer": "BytePlus (ByteDance)"}) == "BytePlus (ByteDance)"
+        assert _platform_from_video_metadata({"issuer": "ByteDance (Volcano Engine)"}) == "ByteDance Volcano Engine"
+
     def test_identifies_metadata_without_pixel_scan(self, tmp_path: Path):
         from remove_ai_watermarks.video import identify_video
 
@@ -870,7 +876,7 @@ class TestVideoProvenanceApi:
         assert report.source == source
         assert report.is_ai_generated is True
         assert report.confidence == "high"
-        assert report.platform == "OpenAI (ChatGPT / gpt-image / DALL-E / Sora)"
+        assert report.platform == "OpenAI (ChatGPT / GPT Image / DALL·E / Sora)"
         assert report.visible_mark is None
         assert report.total_frames is None
         assert report.has_ai_metadata is True

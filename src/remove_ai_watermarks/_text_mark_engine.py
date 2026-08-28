@@ -52,8 +52,8 @@ _MIN_DETECT_SHORT_SIDE = 200
 # This used to be ONE shared 0.7 for every text mark. Measured 2026-07-18 on the
 # `auto` path (the default -- no flag, driven by TC260 metadata), it turned out to
 # mean two completely different things per mark. Blind hand-label of the ADDITIONS
-# (accepted with provenance, rejected without) over a labelled TC260 evaluation set,
-# two-sided control (labeller sensitivity 100%/96%, specificity 100%/100%):
+# (accepted with provenance, rejected without) over a labeled TC260 evaluation set,
+# two-sided control (labeler sensitivity 100%/96%, specificity 100%/100%):
 #
 #   mark     band            precision   95% CI     n
 #   doubao   whole arm             76%    61-87%    42
@@ -89,8 +89,8 @@ class TextMarkConfig:
     name: str  # short label for log lines (e.g. "Doubao")
     asset_name: str  # bundled alpha PNG under assets/ (e.g. "doubao_alpha.png")
     corner: Literal[
-        "br", "bl", "tl", "bc"
-    ]  # bottom-right (Doubao/Jimeng), bottom-left (Samsung), top-left (RunningHub), bottom-center (LiblibAI)
+        "br", "bl", "tl", "tr", "bc"
+    ]  # br (Doubao/Jimeng), bl (Samsung), tl (RunningHub), tr (Microsoft), bc (LiblibAI)
     margin_floor: int  # min margin in px for locate (4 for br marks, 2 for Samsung)
     # locate geometry (fraction of scale_base -- see scale_base())
     width_frac: float
@@ -131,7 +131,7 @@ class TextMarkConfig:
     template_blur: float = 0.0
     # Which image dimension the mark's size and margins scale with. VENDOR-SPECIFIC,
     # measured, not assumed -- see TextMarkEngine.scale_base. "short" = min(h, w), "width" = w.
-    scale_basis: Literal["short", "width"] = "width"
+    scale_basis: Literal["short", "width", "long"] = "width"
     # Scale rungs ``_ladder_best`` sweeps (the detection comb). PER-MARK: a vendor
     # whose stamp sizes do not land on the shared 3-rung comb carries its own ladder
     # (measured for 千问, whose marks sit in two size modes ~1.6x apart -- one fraction
@@ -309,7 +309,7 @@ class TextMarkEngine:
         provenance relaxation it stopped trying because many Jimeng false additions
         were actually Doubao marks.
 
-        Measured separability on hand-labelled examples, scoring BOTH templates
+        Measured separability on hand-labeled examples, scoring BOTH templates
         against the same glyph blob:
 
             feature                       separability   (0.5 = useless, 1.0 = perfect)
@@ -480,10 +480,19 @@ class TextMarkEngine:
 
         China's GB 45438-2025 clause 5.2(e) mandates glyph height >= 5% of "the
         shortest side" for CN marks, which is why a short-side basis is the natural
-        prior -- but Jimeng's measured behaviour overrides the prior, and measurement
+        prior -- but Jimeng's measured behavior overrides the prior, and measurement
         wins over the standard's wording.
+
+        "long" (max of the two sides) is the Microsoft badge's measured basis: the
+        pill tracks the RENDER dimension, so on a 1024x1536 portrait it scales with
+        the 1536 (a width basis undersized the template by the aspect ratio and the
+        portrait carriers fell to 0.15-0.32 NCC; measured 2026-08-27).
         """
-        return min(image.shape[:2]) if self.config.scale_basis == "short" else image.shape[1]
+        if self.config.scale_basis == "short":
+            return min(image.shape[:2])
+        if self.config.scale_basis == "long":
+            return max(image.shape[:2])
+        return image.shape[1]
 
     def locate(self, image: NDArray[Any]) -> TextMarkLocation:
         """Anchor the watermark box in the configured corner, scaled by ``scale_basis``.
@@ -499,14 +508,14 @@ class TextMarkEngine:
         wm_h = max(16, int(base * c.height_frac))
         margin_x = max(c.margin_floor, int(base * c.margin_x_frac))
         margin_b = max(c.margin_floor, int(base * c.margin_bottom_frac))
-        if c.corner == "br":
+        if c.corner == "br" or c.corner == "tr":
             x = max(0, w - margin_x - wm_w)
         elif c.corner == "bc":  # bottom-center: horizontally centered, margin_x unused
             x = max(0, (w - wm_w) // 2)
         else:
             x = min(margin_x, max(0, w - wm_w))
-        # "tl" anchors at the top instead: margin_bottom_frac is then the TOP margin.
-        y = min(margin_b, max(0, h - wm_h)) if c.corner == "tl" else max(0, h - margin_b - wm_h)
+        # "tl"/"tr" anchor at the top instead: margin_bottom_frac is then the TOP margin.
+        y = min(margin_b, max(0, h - wm_h)) if c.corner in ("tl", "tr") else max(0, h - margin_b - wm_h)
         wm_w = min(wm_w, w - x)
         wm_h = min(wm_h, h - y)
         return TextMarkLocation(x=x, y=y, w=wm_w, h=wm_h)

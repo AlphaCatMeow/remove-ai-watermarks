@@ -10,7 +10,7 @@ The `visible` command registers these mark keys:
 
 | Key | Mark | Expected area | Important limit |
 | --- | --- | --- | --- |
-| `gemini` | Google Gemini sparkle | Usually bottom right | Detection includes a false positive gate. |
+| `gemini` | Google Gemini visible watermark (sparkle) | Usually bottom right | Detection includes a false positive gate. |
 | `doubao` | `豆包AI生成` | Bottom right | Vendor specific text detector. |
 | `jimeng` | `★ 即梦AI` | Bottom right | Vendor specific text detector. |
 | `qwen` | `千问AI生成` | Bottom right | Strict visual gate. |
@@ -20,6 +20,7 @@ The `visible` command registers these mark keys:
 | `runninghub` | `RunningHub AI生成` | Top left | Strict visual and position gates. |
 | `baidu` | `百度 AI生成` | Bottom right | Detector and extended removal footprint. |
 | `liblib` | `LiblibAI` | Bottom center | Includes a minimum image size gate. |
+| `microsoft` | One Microsoft white AI-badge variant | Top right | Strict gate; other documented icon, text, and position variants are not covered. |
 | `jimeng_pill` | `AI生成` pill | Top left | Weak detector with additional product and background gates. |
 
 `--mark auto` evaluates all registered marks and removes every selected match.
@@ -38,7 +39,7 @@ when you can select the affected area yourself.
 | `seedance` | Boxed `AI` label | Fixed bottom-right corner | Requires an anchored recurring match; the full localized box is filled because a thinner synthetic shape mask leaves the real translucent rim behind. |
 | `dola` | `Dola AI` text | Fixed bottom-right corner | Requires an anchored recurring match; ByteDance or BytePlus provenance can relax only an existing visual run. |
 | `hailuo` | `MINIMAX \| hailuo AI` composite label | Fixed lower edge | Uses a synthetic waveform, text, separator, and ring silhouette; the complete recurring label box is filled. A TC260 label naming MiniMax as producer can relax only an existing stable run. |
-| `kling` | Kling swirl, `KLING AI`, version, and optional `PRO` suffix | Fixed bottom-right edge | Combines a synthetic logo rescue with font variants, an edge gate, a white-label gate, and anchored temporal recurrence. |
+| `kling` | Kling AI swirl, `KLING AI`, version, and optional `PRO` suffix | Fixed bottom-right edge | Combines a synthetic logo rescue with font variants, an edge gate, a white-label gate, and anchored temporal recurrence. |
 
 `video identify`, `video visible`, and `video all` share this registry and the
 same temporal arbiter. It is separate from the image registry because selection
@@ -216,6 +217,7 @@ not a universal clean verdict.
 | OpenAI image generators | None registered | Diffusion regeneration for supported invisible signals | C2PA and generator provenance |
 | Meta Muse Image | None on Muse output (legacy `Imagined with AI` unregistered) | Diffusion regeneration for Content Seal, oracle-verified on the default profile | XMP IPTC `trainedAlgorithmicMedia` companion tag; no local Content Seal decoder |
 | Microsoft Paint and Photos | None registered | External Microsoft oracle for InvisMark; no validated local decoder | Paint C2PA soft-binding algorithm and identifier |
+| Microsoft image outputs (measured variant) | One top-right white AI-badge variant | No registered pixel decoder | C2PA attribution |
 | Stable Diffusion and SDXL | None registered | Diffusion regeneration; optional open decoder | Embedded parameters and text metadata |
 | FLUX | None registered | Diffusion regeneration; optional open decoder | C2PA for supported sources |
 | Adobe Firefly | None registered | Optional TrustMark Variant P decoder | C2PA |
@@ -223,8 +225,8 @@ not a universal clean verdict.
 | Luma AI | None registered | No registered pixel decoder | PNG text generator tags (Uni-1) |
 | ByteDance generators | Doubao and Jimeng marks | No registered pixel decoder | TC260 AIGC, supported C2PA, and exact app-export AIGC disclosures |
 | Qwen | Qwen mark | No registered pixel decoder | TC260 AIGC |
-| Kling | Kling image and video marks | No registered pixel decoder | TC260 AIGC |
-| Hailuo / MiniMax video | Hailuo composite video label | No registered pixel decoder | TC260 AIGC where present |
+| Kling AI | Kling AI image and video marks | No registered pixel decoder | TC260 AIGC |
+| Hailuo AI / MiniMax video | Hailuo AI composite video label | No registered pixel decoder | TC260 AIGC where present |
 | Baidu | Baidu mark | No registered pixel decoder | TC260 AIGC |
 | LiblibAI | LiblibAI mark | No registered pixel decoder | TC260 AIGC |
 | RunningHub | RunningHub mark | No registered pixel decoder | TC260 AIGC |

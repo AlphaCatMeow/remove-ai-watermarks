@@ -24,7 +24,7 @@ Performance depends on format, enabled extras, and hardware. Measure it locally 
 
 ## Tier A -- self-evident oracles (full corpus, unattended)
 
-Properties that are true or false without anyone labelling anything. These are the
+Properties that are true or false without anyone labeling anything. These are the
 backbone: they scale to large local datasets and catch regressions with zero human cost.
 
 ### A1. Recorded-verdict regression
@@ -128,7 +128,7 @@ which read like twelve broken features. It was one bad harness parameter (`--ste
 sitting on top of one real bug. An error that is IDENTICAL across unrelated rows is
 evidence of a common cause, not of many faults -- check the shared input first.
 
-## Tier B -- constructed ground truth (automatable, no labelling)
+## Tier B -- constructed ground truth (automatable, no labeling)
 
 Where reality gives no answer key, build one. This is the tier that closes the two biggest
 holes: fill quality and detector response at the edge of the operating range.
@@ -169,7 +169,7 @@ Peak RSS and wall time per backend x input size, up to 25 MP. The memory-constra
 tier is a real constraint (MI-GAN must stay ~0.6-0.9 GB by cropping around the mask); a
 regression here is invisible today and would only surface under load.
 
-## Tier C -- human-labelled accuracy (bounded by labelling effort)
+## Tier C -- human-labeled accuracy (bounded by labeling effort)
 
 The machinery exists: `visible_recall_sample.py` -> `visible_sheets.py` ->
 `visible_groundtruth.py` -> `visible_eval.py`.
@@ -291,7 +291,7 @@ on one file. The bar is never "handles it" but **never raises and never silently
 4. **B2 detector curves** -- cheap, and directly guards the geometry class of bug.
 5. **A5 contract sweep over a representative local set**.
 6. **B4 resource ceilings**, **E robustness**.
-7. **C recall expansion** -- gated by labelling appetite.
+7. **C recall expansion** -- gated by labeling appetite.
 8. **D oracles** -- manual, per release.
 
 Every tier writes a versioned snapshot so runs are comparable over time; a run that cannot
@@ -326,7 +326,7 @@ Per mark, what actually goes away when metadata is stripped:
 
 ### Measure before improving
 
-Use Tier B2 detector-response curves before tuning a detector with sparse labelled
+Use Tier B2 detector-response curves before tuning a detector with sparse labeled
 examples. Sweep size, contrast, aspect, and background texture so geometry regressions
 are visible without exposing private evaluation statistics.
 

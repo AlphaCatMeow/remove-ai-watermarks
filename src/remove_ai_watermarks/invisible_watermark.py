@@ -99,7 +99,7 @@ def detect_invisible_watermark(image_path: Path, *, image: NDArray[Any] | None =
 
     # ``image`` lets a caller that has already decoded these pixels hand them in
     # (mirrors gemini_engine.detect_sparkle_confidence). The decoder only reads the
-    # array -- it converts colour spaces into fresh buffers -- so no copy is needed.
+    # array -- it converts color spaces into fresh buffers -- so no copy is needed.
     img = image if image is not None else image_io.imread(image_path)
     if img is None:
         return None

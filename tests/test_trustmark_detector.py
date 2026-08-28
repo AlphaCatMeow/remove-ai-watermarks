@@ -3,7 +3,7 @@
 TrustMark is an optional dependency (extra ``trustmark``) that downloads model
 weights on first use, so the decode path is only exercised when it is installed
 (mirrors the imwatermark handling). The always-on test pins the graceful
-absent/error behaviour: detect must return None, never raise.
+absent/error behavior: detect must return None, never raise.
 """
 
 from __future__ import annotations

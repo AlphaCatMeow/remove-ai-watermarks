@@ -1,14 +1,14 @@
-"""Build BLIND contact sheets for hand-labelling relaxation additions.
+"""Build BLIND contact sheets for hand-labeling relaxation additions.
 
 Crops are centered on the DETECTED REGION (not the corner), padded by ~0.9x the mark
 size, and resized to 240px with INTER_NEAREST -- a downscaled preview destroys a faint
 mark, so nothing here may smooth. The manifest is written to a separate file that must
-NOT be read until labelling is finished.
+NOT be read until labeling is finished.
 
 Each sheet mixes three strata in shuffled order:
   add    - the relaxation additions whose precision we are measuring
-  pos    - strict-consistent detections (a mark is really there): labeller sensitivity
-  clean  - verified-clean negatives (no mark can be there): labeller specificity
+  pos    - strict-consistent detections (a mark is really there): labeler sensitivity
+  clean  - verified-clean negatives (no mark can be there): labeler specificity
 The two control strata are what make a low measured precision trustworthy.
 """
 

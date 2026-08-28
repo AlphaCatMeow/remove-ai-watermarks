@@ -118,7 +118,7 @@ class TestFaintMaskStaysTight:
         loc = eng.locate(img)
         roi = loc.w * loc.h
         # The mark's own glyph box is ~40% of the corner ROI and the mask pads it, so a
-        # correct mask lands near 60%. The pre-fix behaviour measured 120.9% (the whole
+        # correct mask lands near 60%. The pre-fix behavior measured 120.9% (the whole
         # ROI plus padding), which this bound excludes.
         assert area < 0.85 * roi, f"mask covers {100 * area / roi:.0f}% of the corner box"
 
