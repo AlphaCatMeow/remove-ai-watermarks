@@ -29,6 +29,10 @@ The package version appears in:
 Update the first two, then refresh the lock file with uv. Do not edit a
 line-number-specific location in `uv.lock`; its package order changes.
 
+Before choosing a version, verify it is absent from git tags, GitHub Releases,
+and PyPI. An unpublished remote tag still reserves that version; never move it,
+publish the next version instead.
+
 ## Publish flow
 
 PyPI publishing is triggered by a published GitHub Release, not by a tag push
