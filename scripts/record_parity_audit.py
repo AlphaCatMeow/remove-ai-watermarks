@@ -34,7 +34,7 @@ DATA SAFETY
 Read-only over a local dataset. Writes only the given output path, which belongs
 outside the repository. Resumable: rerunning skips files already recorded.
 
-    uv run python scripts/record_parity_audit.py data/spaces/originals .local-eval/parity.jsonl
+    uv run python scripts/record_parity_audit.py /path/to/dataset .local-eval/parity.jsonl
     uv run python scripts/record_parity_audit.py <dataset> <out> --baseline .local-eval/previous.jsonl
 """
 

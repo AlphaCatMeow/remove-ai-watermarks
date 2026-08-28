@@ -5,10 +5,8 @@ sample of everything it supports and a canary test can hold both sides to it
 (mark registered without example; engine regressed on its canonical example).
 
 Every example is SYNTHETIC: a deterministic generated base photo with the mark's
-own committed silhouette composited at the engine's measured geometry. User
-uploads never enter the repository (data/spaces stays out of git), and no vendor
-asset is copied -- the silhouettes are the same font-rendered templates the
-detectors match against.
+own committed silhouette composited at the engine's measured geometry. The
+silhouettes are repository-owned font renders, not copied vendor raster assets.
 
 Regenerate with:
     uv run python scripts/render_visible_examples.py

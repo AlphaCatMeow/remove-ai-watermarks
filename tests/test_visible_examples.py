@@ -6,7 +6,7 @@ Two failures this suite exists to catch:
     generated from the engines' measured geometry, so this is a regression tripwire).
 
 The examples are SYNTHETIC (``scripts/render_visible_examples.py`` composites the
-committed silhouettes onto a generated base). User uploads never enter the repo.
+committed silhouettes onto a generated base).
 """
 
 from __future__ import annotations

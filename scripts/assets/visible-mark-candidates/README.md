@@ -12,6 +12,11 @@ provenance cohorts, not automatically visible-mark positives; comparison control
 are independently selected no-signal images and are not adjudicated negatives.
 Each needs capture-solved alphas or vendor-accurate font work before it can
 ship; `scripts/vendor_mark_calibrate.py` is the candidate-detector harness.
+Rows through `mindvideo_alpha.png` and the parked candidates were recorded on
+2026-08-27; rows from `higgsfield_alpha.png` through `gendo_alpha.png` were
+recorded on 2026-08-28. These are repository record dates, not inferred capture
+dates. The Mark column quotes the candidate raster text; where that text differs
+from the provider's canonical name, the provider is named separately.
 
 | Asset | Mark | Evidence | Result |
 | --- | --- | --- | --- |
@@ -20,13 +25,13 @@ ship; `scripts/vendor_mark_calibrate.py` is the candidate-detector harness.
 | `notebooklm_alpha.png` | NotebookLM wordmark (bottom-right) | 12 corpus files | locate geometry not yet fitted; POS max 0.12. |
 | `dola_alpha.png` | DolaAI on images (the video mark is registered) | 12 corpus files | POS 0.11-0.21 vs NEG max 0.30. |
 | `mindvideo_alpha.png` | MindVideo.AI (top-right) | 11 corpus files | POS 0.29-0.32 vs NEG max 0.30 -- borderline overlap, not shippable. |
-| `higgsfield_alpha.png` | HIGGSFIELD AI wordmark (bottom-right; the boxed `AI` variant shares the cohort) | 5 wordmark files (16 in the boxed-AI OCR cluster) | POS max 0.26 vs NEG max 0.22 -- no separation; the mark may be two-part (wordmark + boxed AI) and needs a composed template. |
-| `jianying_alpha.png` | 剪映AI (CapCut's CN sibling, bottom-right) | 2 corpus files | POS 0.29 vs NEG max 0.35. |
+| `higgsfield_alpha.png` | `HIGGSFIELD AI` wordmark (Higgsfield AI, bottom-right; the boxed `AI` variant shares the cohort) | 5 wordmark files (16 in the boxed-AI OCR cluster) | POS max 0.26 vs NEG max 0.22 -- no separation; the mark may be two-part (wordmark + boxed AI) and needs a composed template. |
+| `jianying_alpha.png` | `剪映AI` wordmark (Jianying / 剪映, the China product in the CapCut family; bottom-right) | 2 corpus files | POS 0.29 vs NEG max 0.35. |
 | `capcut_alpha.png` | CapCut AI pill (top-left; likely pill class, not plain text) | 3 corpus files | POS max 0.15 vs NEG max 0.33 -- locate geometry not yet fitted for the pill form. |
-| `zsky_alpha.png` | MADE WITH zsky.ai (bottom-right) | 2 corpus files | POS 0.10 vs NEG max 0.27. |
-| `chromastudio_alpha.png` | ChromaStudio.ai (bottom-right) | 2 corpus files | POS 0.11 vs NEG max 0.29. |
-| `digenai_alpha.png` | DIGENAI (bottom-right) | 3 corpus files (one 2026-07-24 batch) | POS 0.16 vs NEG max 0.31. |
-| `gendo_alpha.png` | GendoAI (bottom-left) | 3 corpus files | POS 0.08 vs NEG max 0.32. |
+| `zsky_alpha.png` | `MADE WITH zsky.ai` wordmark (ZSky AI, bottom-right) | 2 corpus files | POS 0.10 vs NEG max 0.27. |
+| `chromastudio_alpha.png` | `ChromaStudio.ai` wordmark (ChromaStudio, bottom-right) | 2 corpus files | POS 0.11 vs NEG max 0.29. |
+| `digenai_alpha.png` | `DIGENAI` wordmark (Digen AI, bottom-right) | 3 corpus files (one 2026-07-24 batch) | POS 0.16 vs NEG max 0.31. |
+| `gendo_alpha.png` | `GendoAI` wordmark (Gendo, bottom-left) | 3 corpus files | POS 0.08 vs NEG max 0.32. |
 | `xinghui_alpha.png` | 星绘AI生成 (parked before this set) | -- | prior parking, unchanged. |
 | `qingyan_alpha.png` | 清言·AI生成 (parked before this set) | -- | prior parking, unchanged. |
 | `hailuo_alpha.png` | Hailuo AI image wordmark (parked before this set; the VIDEO label is registered) | -- | prior parking, unchanged. |

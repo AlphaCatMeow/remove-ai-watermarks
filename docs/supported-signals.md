@@ -20,7 +20,7 @@ The `visible` command registers these mark keys:
 | `runninghub` | `RunningHub AI生成` | Top left | Strict visual and position gates. |
 | `baidu` | `百度 AI生成` | Bottom right | Detector and extended removal footprint. |
 | `liblib` | `LiblibAI` | Bottom center | Includes a minimum image size gate. |
-| `microsoft` | One Microsoft white AI-badge variant | Top right | Strict gate; other documented icon, text, and position variants are not covered. |
+| `microsoft` | One Microsoft white AI-badge variant | Top right | Strict uses the visual gate; auto can use Microsoft provenance for the measured [relaxed gate](module-internals.md#visible-mark-removal). Other documented icon, text, and position variants are not covered. |
 | `jimeng_pill` | `AI生成` pill | Top left | Weak detector with additional product and background gates. |
 
 `--mark auto` evaluates all registered marks and removes every selected match.
@@ -29,6 +29,10 @@ the masked area.
 
 Marks from other vendors are not detected automatically. Use `erase --region`
 when you can select the affected area yourself.
+
+Synthetic examples for every registered image and video mark live in the
+[visible-mark gallery](../data/fixtures/visible/README.md). They demonstrate the
+detectors' canonical geometry and house style, not vendor raster fidelity.
 
 ### Visible video marks
 

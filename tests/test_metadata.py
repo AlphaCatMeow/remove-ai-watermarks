@@ -359,8 +359,7 @@ class TestC2paMarkerIn:
 class TestSamsungGenai:
     """Samsung Galaxy AI editing marker (genAIType in PhotoEditor_Re_Edit_Data).
 
-    Synthetic byte blobs -- real Galaxy files are user content and not shipped
-    (public repo), same discipline as the Grok/Doubao fixtures.
+    Synthetic byte blobs keep this fixture self-contained and deterministic.
     """
 
     @staticmethod

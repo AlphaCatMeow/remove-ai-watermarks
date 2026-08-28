@@ -320,7 +320,8 @@ remove-ai-watermarks batch ./images --mode all
 Visible mark support includes:
 
 - Google Gemini and Nano Banana visible sparkle watermark;
-- Doubao, Jimeng, Qwen, Kling AI, Yuanbao, Baidu, LiblibAI, and RunningHub labels;
+- Doubao, the Jimeng wordmark and top-left `AI生成` pill, Qwen, Kling AI,
+  Yuanbao, Baidu, LiblibAI, and RunningHub labels;
 - one calibrated Microsoft top-right white AI-badge variant;
 - one calibrated Samsung Galaxy AI label variant.
 
@@ -330,7 +331,9 @@ signals. Optional decoders add support for open DWT-DCT watermarks and Adobe
 TrustMark.
 
 The exact support matrix, including important locale and detector limits, lives
-in [supported signals](docs/supported-signals.md).
+in [supported signals](docs/supported-signals.md). The
+[synthetic example gallery](data/fixtures/visible/README.md) carries one canonical
+sample for every registered image and video mark.
 
 ## How it works
 

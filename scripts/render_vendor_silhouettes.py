@@ -75,8 +75,8 @@ MARKS = {
     "chromastudio_alpha.png": "ChromaStudio.ai",
     "digenai_alpha.png": "DIGENAI",
     "gendo_alpha.png": "GendoAI",
-    # CapCut's Chinese sibling, JianYing, stamps 剪映AI bottom-right (the
-    # international CapCut pill sits top-left).
+    # Jianying / 剪映, the China product in the CapCut family, stamps 剪映AI
+    # bottom-right (the international CapCut pill sits top-left).
     "jianying_alpha.png": "剪映AI",
 }
 _REGISTERED = {f"{key}_alpha.png" for key in mark_keys()} & MARKS.keys()
