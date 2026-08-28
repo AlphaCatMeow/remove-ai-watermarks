@@ -76,9 +76,12 @@ class TestLocate:
 
 
 class TestConfig:
-    def test_strict_only_no_provenance_relaxation(self):
-        # Provenance names Microsoft, not the presence of this visible layout.
-        assert MicrosoftEngine().config.provenance_ncc_factor == 1.0
+    def test_provenance_relaxation_is_the_measured_07(self):
+        # The relaxed band was measured on the OCR-censused MS cohort: 257
+        # badge-less files max 0.251, so the 0.266 relaxed gate admits the three
+        # faint badges in [0.251, 0.38) with zero measured false fills. Do not
+        # move the factor without re-censusing the badge-less cohort.
+        assert MicrosoftEngine().config.provenance_ncc_factor == 0.7
 
     def test_long_scale_basis(self):
         assert MicrosoftEngine().config.scale_basis == "long"

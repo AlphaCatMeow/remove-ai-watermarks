@@ -823,8 +823,12 @@ and 1200 non-overlapping no-signal controls. At the strict 0.38 gate, 15/17
 confirmed carriers fired (min 0.249, p50 0.519, p90 0.578, max 0.579), while
 0/1200 controls fired (p99 0.200, max 0.293). The provenance cohort produced
 78/343 fires, but that is not a recall measurement because provenance identifies
-the provider, not the presence of this visible layout. No provenance relaxation
-ships until that cohort is visually labeled.
+the provider, not the presence of this visible layout. That cohort was later
+labeled by an OCR badge census (2026-08-28: 86 badge carriers, 257 badge-less,
+badge-less max 0.251 / p99 0.213), which is what enabled the shipped provenance
+relaxation 0.7: the relaxed band [0.251, 0.38) holds three faint badges and
+zero false fills, re-verified as 3 band detections with 0/257 badge-less fires
+on the provenance path.
 
 The detector and removal mask must use compatible geometry. A detector that
 fires while producing an empty or misplaced mask is a removal failure even if

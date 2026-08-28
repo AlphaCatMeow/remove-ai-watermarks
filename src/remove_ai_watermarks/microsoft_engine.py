@@ -22,10 +22,14 @@ status was not adjudicated, and 1200 non-overlapping no-signal controls:
     (aspect 3.73-3.89 over 720..1536 px), margins ~0.010/0.007 of the same basis. One size
     mode, so the shared 3-rung ladder is untouched and the locate box simply
     wraps the pill with NCC slack.
-  * STRICT ONLY (``provenance_ncc_factor`` 1.0): controls max 0.293 / p99
-    0.200; confirmed carriers p50 0.519 / p90 0.578 / max 0.579, with 15/17
-    above the 0.38 gate. Provenance alone does not relax the gate: only 78/343
-    files in that cohort crossed it, and the rest were not visually labeled.
+  * Provenance relaxation 0.7 (relaxed gate 0.266), enabled 2026-08-28 when the
+    cohort the strict-only note was waiting for became available: an OCR badge
+    census split the 343 Microsoft-C2PA uploads into 86 badge carriers and 257
+    true badge-less files (the watermark is a per-user opt-in, so 75% of MS
+    uploads carry none). Badge-less max 0.251 / p99 0.213, so the relaxed band
+    [0.251, 0.38) holds three genuine faint badges and zero false fills
+    (measured 3/3; doubao ships 0.7 on a 58%-precision band). Strict controls
+    max 0.293 / p99 0.200 vs the 0.38 gate.
   * Front-end "binary": the pill is a bold opaque overlay; the tophat blob is
     solid with dark-text holes, exactly the template's shape.
 """
@@ -88,7 +92,7 @@ _CONFIG = TextMarkConfig(
     min_gw=24,
     detect_frontend="binary",
     scale_basis="long",
-    provenance_ncc_factor=1.0,
+    provenance_ncc_factor=0.7,
 )
 
 
