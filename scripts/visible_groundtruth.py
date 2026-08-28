@@ -46,6 +46,7 @@ ROUNDS = [
     ("textmark", "labels.csv", "manifest.csv"),
     ("gemini", "gemini_labels.csv", "gemini_manifest.csv"),
 ]
+_HELP_DESCRIPTION = "Consolidate hand-labeled contact-sheet rounds into one ground-truth file."
 
 
 def metadata_provenance(path: str) -> list[str]:
@@ -77,7 +78,7 @@ def metadata_provenance(path: str) -> list[str]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=_HELP_DESCRIPTION)
     parser.add_argument(
         "root",
         type=Path,
