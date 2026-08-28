@@ -1,0 +1,275 @@
+"""Render the visible-mark example gallery under data/fixtures/visible/.
+
+One committed example per registered image mark, so the repo carries a working
+sample of everything it supports and a canary test can hold both sides to it
+(mark registered without example; engine regressed on its canonical example).
+
+Every example is SYNTHETIC: a deterministic generated base photo with the mark's
+own committed silhouette composited at the engine's measured geometry. User
+uploads never enter the repository (data/spaces stays out of git), and no vendor
+asset is copied -- the silhouettes are the same font-rendered templates the
+detectors match against.
+
+Regenerate with:
+    uv run python scripts/render_visible_examples.py
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+from typing import Any
+
+import cv2
+import numpy as np
+
+_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_ROOT / "src"))
+
+from remove_ai_watermarks import watermark_registry as wr  # noqa: E402
+from remove_ai_watermarks.image_io import imread  # noqa: E402
+
+ASSETS = _ROOT / "src" / "remove_ai_watermarks" / "assets"
+OUT = _ROOT / "data" / "fixtures" / "visible"
+
+# Composite strength per key: glyph target luma for the light-overlay class.
+# Kling is a thin light-gray run (not near-white); Samsung is a faint overlay
+# expressed by SCALING ITS ALPHA to 0.38 toward full white (see below); everything
+# else is the bold near-white house style.
+_STRENGTH: dict[str, int] = {
+    "kling": 208,
+}
+_DEFAULT_STRENGTH = 238
+
+# Base geometry: one canonical size per mark where the engine's size modes
+# matter (qwen's big mode), otherwise a plain 3:2 landscape frame.
+# Samsung keeps the larger base: its overlay is faint (peak alpha ~0.38) and
+# the real marks live on ~2958px phone photos -- at 1536 the example falls to 0.39,
+# just under the engine's 0.40 gate.
+_SIZE: dict[str, tuple[int, int]] = {"qwen": (1536, 1536), "liblib": (1152, 1536), "samsung": (2048, 1536)}
+
+
+def base_photo(w: int, h: int, seed: int = 7) -> np.ndarray:
+    """A deterministic synthetic 'photo': gradient sky, soft blobs, mild noise."""
+    rng = np.random.default_rng(seed)
+    top, bottom = 96, 168
+    grad = np.linspace(top, bottom, h, dtype=np.float32)[:, None]
+    img = np.repeat(grad[:, :, None], w, axis=1)  # (h, w, 1)
+    for _ in range(5):
+        cx, cy = rng.uniform(0, w), rng.uniform(0, h)
+        r = rng.uniform(w * 0.12, w * 0.35)
+        blob = rng.uniform(-52, 52)
+        yy, xx = np.ogrid[:h, :w]
+        gauss = np.exp(-(((xx - cx) ** 2 + (yy - cy) ** 2) / (2 * (r * 0.55) ** 2))).astype(np.float32)
+        img = img + (blob * gauss)[:, :, None]
+    img = img + rng.normal(0, 1.6, img.shape).astype(np.float32)
+    return cv2.merge([np.clip(img, 0, 255).astype(np.uint8)] * 3)
+
+
+def _glyph_asset(name: str) -> np.ndarray:
+    at = imread(str(ASSETS / name), cv2.IMREAD_GRAYSCALE)
+    if at is None:
+        raise RuntimeError(f"missing silhouette asset: {name}")
+    return at.astype(np.float32) / 255.0
+
+
+def _composite_light(base: np.ndarray, alpha: np.ndarray, x: int, y: int, strength: int) -> np.ndarray:
+    out = base.copy()
+    h, w = alpha.shape[:2]
+    roi = out[y : y + h, x : x + w].astype(np.float32)
+    a3 = alpha[:, :, None] if alpha.ndim == 2 else alpha
+    out[y : y + h, x : x + w] = np.clip(roi * (1 - a3) + strength * a3, 0, 255).astype(np.uint8)
+    return out
+
+
+def _text_mark_example(key: str) -> np.ndarray:
+    engine = wr._engine(key)  # the generator drives the engine's own config
+    cfg = engine.config
+    w, h = _SIZE.get(key, (1536, 1152))
+    base = base_photo(w, h)
+    if key == "microsoft":
+        # Opaque white pill with dark text/sparkle holes, at the measured inset.
+        at = _glyph_asset("microsoft_alpha.png")
+        long_side = max(w, h)
+        pw = int(0.152 * long_side)
+        ph = max(4, int(pw / (at.shape[1] / at.shape[0])))
+        pad = int(0.010 * long_side)
+        pill = cv2.resize(at, (pw, ph))
+        x, y = w - pad - pw, pad
+        roi = base[y : y + ph, x : x + pw].astype(np.float32)
+        bright = (pill > 0.6)[:, :, None]
+        roi = np.where(bright, 245.0, 46.0)
+        base[y : y + ph, x : x + pw] = roi.astype(np.uint8)
+        return base
+    base_dim = {"short": min(w, h), "width": w, "long": max(w, h)}[cfg.scale_basis]
+    # Size the glyph ON a ladder rung: the continuous front ends sweep only the
+    # configured rungs, and a glyph sized between rungs collapses the NCC (the
+    # comb-collapse qwen's own two-rung ladder exists to avoid).
+    rung = max(cfg.ladder) if cfg.detect_frontend != "binary" else 1.0
+    gw = int(cfg.alpha_width_frac * base_dim * rung)
+    gh = max(4, int(cfg.alpha_height_frac * base_dim * rung))
+    loc = engine.locate(base)
+    # Corner-hugging placement: the yuanbao/runninghub anchor gates demote a match
+    # that does not hug the corner, and the real marks sit flush on the box's
+    # corner side (never centered).
+    if cfg.corner in ("br", "tr"):
+        x = loc.x + loc.w - gw
+    elif cfg.corner == "bc":
+        x = loc.x + (loc.w - gw) // 2
+    else:  # bl, tl: flush left
+        x = loc.x
+    y = loc.y if cfg.corner in ("tl", "tr") else loc.y + loc.h - gh
+    x, y = max(0, x), max(0, y)
+    at = _glyph_asset(f"{key}_alpha.png")
+    alpha = cv2.resize(at, (gw, gh))
+    if key == "samsung":  # faint overlay: peak alpha 0.38 toward FULL white
+        alpha = alpha * 0.38
+    return _composite_light(base, alpha, x, y, _STRENGTH.get(key, _DEFAULT_STRENGTH))
+
+
+def _gemini_example() -> np.ndarray:
+    from remove_ai_watermarks.gemini_engine import GeminiEngine, get_watermark_config, get_watermark_size
+
+    w, h = 1536, 1152
+    base = base_photo(w, h)
+    eng = GeminiEngine()
+    size = get_watermark_size(w, h)
+    alpha = eng.get_alpha_map(size)
+    cfg = get_watermark_config(w, h)
+    x, y = cfg.get_position(w, h)
+    return _composite_light(base, alpha.astype(np.float32), x, y, 255)
+
+
+def _pill_example() -> np.ndarray:
+    w, h = 1152, 1536  # the measured pill cohort is 3:4 portrait
+    base = base_photo(w, h)
+    at = _glyph_asset("jimeng_pill.png")
+    pw = max(24, int(0.161 * w))
+    ph = max(8, int(pw * at.shape[0] / at.shape[1]))
+    x, y = int(0.03 * w), int(0.03 * h)
+    alpha = cv2.resize(at, (pw, ph))
+    return _composite_light(base, alpha, x, y, 232)
+
+
+_BUILDERS: dict[str, Any] = {"gemini": _gemini_example, "jimeng_pill": _pill_example}
+
+
+def build(key: str) -> np.ndarray:
+    if key in _BUILDERS:
+        return _BUILDERS[key]()
+    return _text_mark_example(key)
+
+
+# ── Video mark examples ──────────────────────────────────────────────────────
+# One short clip per registered video mark: the detector's own synthetic
+# template composited at a scale inside its calibrated search profile, on every
+# frame of a generated base. The canary asserts the SHIPPED selection accepts
+# the clip (identify_video -> visible_mark), not just the per-frame detector.
+
+_VIDEO_FRAMES = 90
+_VIDEO_FPS = 30
+
+
+def _video_mark_frame(key: str, w: int, h: int) -> np.ndarray:
+    from remove_ai_watermarks.video_visible import _template_sources
+
+    base = base_photo(w, h, seed=11)
+    templates = _template_sources()
+    short = min(w, h)
+    if key == "sora":
+        tmpl, scale, x, y = templates["sora-icon"], 0.10, int(w * 0.72), int(h * 0.90)
+    elif key == "veo":
+        # The legacy "Veo" TEXT form: a perfect synthetic diamond also matches the
+        # Sora icon template (both are 4-point stars) and table order hands the
+        # tie to Sora, so the gallery carries the discriminative text variant.
+        tmpl = templates["veo-text"]
+        th = max(6, round(14 * short / 720))
+        tw = max(1, round(tmpl.shape[1] * th / tmpl.shape[0]))
+        x, y = w - tw - int(0.045 * w), h - th - int(0.045 * h)
+        return _composite_light(base, cv2.resize(tmpl, (tw, th)).astype(np.float32) / 255.0, x, y, 250)
+    elif key == "seedance":
+        tmpl, scale, x, y = templates["seedance"], 0.095, int(w * 0.74), int(h * 0.80)
+    elif key == "dola":
+        tmpl, scale, x, y = templates["dola"], 0.036, int(w * 0.70), int(h * 0.88)
+    elif key == "hailuo":
+        tmpl, scale, x, y = templates["hailuo"], 0.052, int(w * 0.34), int(h * 0.82)
+    elif key == "kling":
+        # The FULL mark: swirl logo left of the text run, flush against the
+        # bottom-right EDGE. The font arm is edge-gated (region must reach
+        # >=0.96W / >=0.94H), and a text-only composite away from the edge both
+        # fails that gate and cross-fires the Seedance detector.
+        tmpl = templates["kling-1"]
+        th = max(8, round(short * 0.040))
+        tw = max(1, round(tmpl.shape[1] * th / tmpl.shape[0]))
+        tx, ty = w - tw - 6, h - th - 6
+        out = _composite_light(base, cv2.resize(tmpl, (tw, th)).astype(np.float32) / 255.0, tx, ty, 250)
+        logo = templates["kling-logo"]
+        lh = max(6, round(short * 0.046))
+        lw = max(1, round(logo.shape[1] * lh / logo.shape[0]))
+        lx, ly = tx - lw - round(th * 0.5), h - lh - 6
+        return _composite_light(out, cv2.resize(logo, (lw, lh)).astype(np.float32) / 255.0, lx, ly, 250)
+    else:
+        raise ValueError(key)
+    th = max(8, round(short * scale))
+    tw = max(1, round(tmpl.shape[1] * th / tmpl.shape[0]))
+    alpha = cv2.resize(tmpl, (tw, th)).astype(np.float32) / 255.0
+    return _composite_light(base, alpha, x, y, 250)
+
+
+def build_video(key: str) -> None:
+    w, h = 960, 540
+    out_dir = OUT / key
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / "example.mp4"
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), _VIDEO_FPS, (w, h))
+    if not writer.isOpened():
+        raise RuntimeError("mp4v writer unavailable")
+    frame = _video_mark_frame(key, w, h)
+    for _ in range(_VIDEO_FRAMES):
+        writer.write(frame)
+    writer.release()
+
+
+def verify_video(key: str) -> tuple[float, str | None, int]:
+    from remove_ai_watermarks.video import identify_video
+
+    rep = identify_video(OUT / key / "example.mp4", check_visible=True)
+    return float(rep.visible_detected_frames or 0), rep.visible_mark, rep.total_frames
+
+
+def render_videos() -> list[str]:
+    from remove_ai_watermarks.video import VIDEO_VISIBLE_MARKS
+
+    failures: list[str] = []
+    for key in VIDEO_VISIBLE_MARKS:
+        build_video(key)
+        frames, mark, total = verify_video(key)
+        status = "OK " if mark == key else "MISS"
+        print(f"{status} {key:10s} video: {mark} on {frames}/{total} frames -> data/fixtures/visible/{key}/example.mp4")
+        if mark != key:
+            failures.append(key)
+    return failures
+
+
+def main() -> None:
+    failures: list[str] = []
+    for mark in wr.known_marks():
+        key = mark.key
+        img = build(key)
+        out_dir = OUT / key
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / "example.png"
+        cv2.imwrite(str(path), img)
+        det = wr.get_mark(key).detect(imread(str(path)), provenance=False)
+        status = "OK " if det.detected else "MISS"
+        print(f"{status} {key:12s} conf={det.confidence:.3f} -> {path.relative_to(_ROOT)}")
+        if not det.detected:
+            failures.append(key)
+    failures += render_videos()
+    if failures:
+        print(f"\nNOT DETECTED on their own examples: {failures}", file=sys.stderr)
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()

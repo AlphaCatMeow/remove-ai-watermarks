@@ -69,6 +69,15 @@ MARKS = {
     "notebooklm_alpha.png": "NotebookLM",
     "dola_alpha.png": "DolaAI",
     "mindvideo_alpha.png": "MindVideo.AI",
+    "higgsfield_alpha.png": "HIGGSFIELD AI",
+    "capcut_alpha.png": "CapCut AI",
+    "zsky_alpha.png": "MADE WITH zsky.ai",
+    "chromastudio_alpha.png": "ChromaStudio.ai",
+    "digenai_alpha.png": "DIGENAI",
+    "gendo_alpha.png": "GendoAI",
+    # CapCut's Chinese sibling, JianYing, stamps 剪映AI bottom-right (the
+    # international CapCut pill sits top-left).
+    "jianying_alpha.png": "剪映AI",
 }
 _REGISTERED = {f"{key}_alpha.png" for key in mark_keys()} & MARKS.keys()
 
