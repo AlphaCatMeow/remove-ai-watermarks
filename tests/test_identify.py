@@ -1489,6 +1489,18 @@ class TestVendorOf:
         assert _vendor_of("Eleven Labs Inc.") == "ElevenLabs"
         assert _vendor_of("Ideogram") == "Ideogram"
 
+    def test_ideogram_fixture_attributed_end_to_end(self):
+        # Committed synthetic manifest signed by a test CA with CN "Ideogram, Inc":
+        # attribution must name the platform while signer trust stays untrusted.
+        # Reachability against the fixture, not a synthesized status set.
+        fixture = Path(__file__).resolve().parents[1] / "data" / "fixtures" / "provenance" / "ideogram-c2pa.png"
+        if not fixture.exists():  # the sdist ships no data/
+            pytest.skip("provenance fixture not present")
+        report = identify(fixture, check_visible=False, check_invisible=False)
+        assert report.ai_from_metadata is True
+        assert report.platform == "Ideogram"
+        assert any("Ideogram" in w for w in report.watermarks)
+
     def test_ideogram_issuer_attributed(self):
         # Corpus evidence 2026-08-08: four uploads signed "Ideogram, Inc" read as
         # unknown-signer C2PA with no platform. The issuer token is the org prefix.
