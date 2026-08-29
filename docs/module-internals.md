@@ -898,6 +898,16 @@ between no stable run (5) and cross-template ties handed to earlier table
 entries (sora 1, kling 1) -- the registry's known order-decides behavior, not a
 doubao-specific defect. Harness: `data/spaces/_doubao_seq_measure.py`.
 
+Two further video candidates were measured and PARKED the same day (2026-08-28,
+`data/spaces/_rh_jm_video_calibrate.py`): the Jimeng CN wordmark does not
+separate on video (1/5 positives vs 2/25 negatives hold a 12-frame 0.35 run --
+the same silhouette-generality the image jimeng engine documents), and
+RunningHub video separates (1/2 positives, 0/25 negatives) but a two-positive
+cohort is below the registration bar; both await corpus growth. The top-left
+"AI生成" pill on video is parked by analysis, not measurement: its image-engine
+false-fire mode is a STATIC textured corner, which is temporally stable, so the
+recurrence arbiter cannot screen it.
+
 ### Fill backends and region erasing
 
 [`region_eraser.py`](../src/remove_ai_watermarks/region_eraser.py) implements the
