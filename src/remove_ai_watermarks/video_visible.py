@@ -313,6 +313,28 @@ def _top_hat(gray: NDArray[Any]) -> NDArray[Any]:
 
 
 @lru_cache(maxsize=1)
+def _asset_template(name: str) -> NDArray[Any]:
+    """Load a package asset as a video detect template (white glyph on black).
+
+    The image-registry alpha maps are the same synthetic silhouettes the image
+    engines match; a video mark that shares the glyph reuses the asset instead of
+    re-rendering it. No source frame contributes pixels.
+    """
+    from pathlib import Path as _P
+
+    from remove_ai_watermarks.image_io import imread as _imread
+
+    at = _imread(str(_P(__file__).parent / "assets" / name), 2)
+    if at is None:
+        raise RuntimeError(f"missing video template asset: {name}")
+    return at
+
+
+@lru_cache(maxsize=1)
+def _doubao_template() -> NDArray[Any]:
+    return _asset_template("doubao_alpha.png")
+
+
 def _template_sources() -> dict[str, NDArray[Any]]:
     """Return every immutable synthetic template by detector-local key."""
     sora_word, sora_icon = _sora_templates()
@@ -326,6 +348,9 @@ def _template_sources() -> dict[str, NDArray[Any]]:
         "dola": _dola_template(),
         "hailuo": _hailuo_template(),
         "kling-logo": _kling_logo_template(),
+        # The Doubao video mark is the same "豆包AI生成" run the image engine
+        # matches (its synthetic alpha asset), bottom-right on video frames.
+        "doubao": _doubao_template(),
     }
     sources.update({f"kling-{index}": template for index, template in enumerate(_kling_templates())})
     return sources
@@ -601,6 +626,32 @@ def detect_seedance_frame(
         relative_heights=(0.065, 0.075, 0.085, 0.095, 0.105),
         search_origin=(0.68, 0.72),
         kernel_fraction=0.12,
+        normalized=None if prepared is None else (prepared.normalized_gray, prepared.normalized_scale),
+        frame_index=frame_index,
+    )
+
+
+def detect_doubao_frame(
+    image_bgr: NDArray[Any],
+    *,
+    frame_index: int = 0,
+    prepared: _PreparedFrame | None = None,
+) -> FrameLocalization:
+    """Locate the strongest fixed Doubao "豆包AI生成" text candidate.
+
+    The ByteDance Doubao mark registered for IMAGES also appears burned into the
+    bottom-right of Doubao VIDEO exports; this detector reuses the image engine's
+    synthetic alpha as the template. Search profile measured on the local spaces
+    corpus (48 TC260-confirmed Doubao videos, 2026-08-28): the run sits at
+    cx 0.83-0.90 / bottom-flush, heights swept 3.2-6.0 percent of the short side.
+    """
+    return _detect_fixed_mark(
+        image_bgr,
+        "doubao",
+        relative_heights=tuple(value / 1000 for value in range(32, 61, 4)),
+        search_origin=(0.60, 0.76),
+        kernel_fraction=0.14,
+        prefer_larger_within=0.04,
         normalized=None if prepared is None else (prepared.normalized_gray, prepared.normalized_scale),
         frame_index=frame_index,
     )
@@ -952,6 +1003,22 @@ VISIBLE_MARK_POLICIES: dict[str, VisibleMarkPolicy] = {
         padding_fraction=0.0,
         mask_style="box",
     ),
+    "doubao": VisibleMarkPolicy(
+        # One floor at either trust level (seedance-style: the TC260 producer
+        # confirms the vendor inside the arbiter; the confidence bar does not
+        # move). Floors measured 2026-08-28 on the local spaces corpus with
+        # sequential decode: a >=0.35 stable run of 12+ frames accepts 33/39
+        # TC260-confirmed Doubao videos and 0/25 no-Doubao negatives; 0.30
+        # already accepted 1 negative, so the bar stays at 0.35.
+        weak_floor=0.35,
+        strong_floor=0.55,
+        transition_floor=0.30,
+        min_stable_frames=_MIN_FIXED_MARK_STABLE_FRAMES,
+        cover_after_confirmation=True,
+        anchor_iou=0.80,
+        padding_fraction=0.0,
+        mask_style="box",
+    ),
     "dola": VisibleMarkPolicy(
         weak_floor=_DOLA_STRICT_WEAK_CONFIDENCE,
         provenance_weak_floor=_DOLA_PROVENANCE_WEAK_CONFIDENCE,
@@ -1181,6 +1248,7 @@ def scan_video_marks(
                 detect_sora_frame,
                 detect_veo_frame,
                 detect_seedance_frame,
+                detect_doubao_frame,
                 detect_dola_frame,
                 detect_hailuo_frame,
                 detect_kling_frame,

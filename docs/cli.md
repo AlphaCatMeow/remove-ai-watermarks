@@ -327,8 +327,8 @@ provider provenance may relax the visual score only for registered
 provenance-aware marks; metadata alone never creates a detection.
 
 `--mark auto` is the default. It evaluates all providers in one decode pass and
-selects the first stable match in specificity order: Sora, Veo, Seedance, Dola,
-Hailuo AI, then Kling AI. Their confidence scores are independently calibrated and
+selects the first stable match in specificity order: Sora, Veo, Seedance,
+Doubao, Dola, Hailuo AI, then Kling AI. Their confidence scores are independently calibrated and
 are not compared across providers. Pass an explicit `--mark` to scan only that
 provider.
 

@@ -296,7 +296,7 @@ from the gate. The full-clip oracle floor is
 detected while `0.15` did not.
 
 [`video_visible.py`](../src/remove_ai_watermarks/video_visible.py) implements
-the first pixel stages for Sora, Veo, Seedance, Dola, Hailuo AI, and Kling AI. The
+the first pixel stages for Sora, Veo, Seedance, Doubao, Dola, Hailuo AI, and Kling AI. The
 Sora detector searches a normalized frame with a fully synthetic
 mascot-and-text silhouette at several scales. The Veo detector uses separate
 synthetic silhouettes for the current four-point diamond and legacy `Veo`
@@ -327,8 +327,8 @@ carries `accepts_provenance`, which forces `provenance=False` for Hailuo AI and 
 — they have no metadata that could confirm them, and the guarantee used to be
 structural (their wrappers took no `provenance` parameter at all). Provenance can relax a low-contrast run only
 after recurring visual evidence exists. Sora transition frames follow the
-nearest confirmed moving position only with Sora provenance. Seedance, Dola,
-Hailuo AI, and Kling AI additionally require candidates to remain anchored to the
+nearest confirmed moving position only with Sora provenance. Seedance, Doubao,
+Dola, Hailuo AI, and Kling AI additionally require candidates to remain anchored to the
 start of a run. This rejects slowly drifting scene details that still have
 high frame-to-frame overlap. Hailuo AI and Kling AI do not infer provenance from
 technical encoder tags; their confirmed public samples carried no provider
@@ -855,6 +855,22 @@ two-line mark can be light on dark scenes or dark on light scenes. Its detector
 and footprint both use the same best-match box. The separate one-line overlay
 variant is not covered.
 
+#### Bare-upload pill arm: measured impossible with the current detector (2026-08-28)
+
+`_keep_pill` never removes a metadata-bare pill, and the question "can a bare arm
+(score + footprint-flatness) be opened" was measured to a closed NO over the local
+spaces corpus: 68 OCR-confirmed bare pills (an independent pixel-level label: the
+band sweep read a flush-left `AI生成`) score p50 0.181 / max 0.317, while 799 clean
+no-signal negatives reach 0.353 and 18 of them already pass the shipped 0.22 raw
+gate. The true-pill and clean distributions overlap completely -- there is no
+threshold -- and the engine's own high scores (0.34-0.48 on the flagged cohort)
+correlate with textured corners, not with pills: the edge-NCC keys on "text-like
+structure top-left". As with the Jimeng wordmark's silhouette, no threshold repairs
+this; a bare arm needs a detector that keys on the pill's rounded-rectangle
+geometry, and until one exists the bare-arm question is settled by this
+measurement, not by gate tuning. Harness: `data/spaces/_pill_bare_measure.py`
+(cohorts A/B/C over the no-signal pool).
+
 The capture-less Jimeng pill lives in
 [`pill_engine.py`](../src/remove_ai_watermarks/pill_engine.py). It uses a
 synthetic silhouette for detection and a fixed top-left footprint.
@@ -865,6 +881,22 @@ Shared behavior is covered by:
 - [`test_text_mark_engine.py`](../tests/test_text_mark_engine.py)
 - [`test_text_mark_faint_mask.py`](../tests/test_text_mark_faint_mask.py)
 - [`test_text_mark_memory.py`](../tests/test_text_mark_memory.py)
+
+#### Doubao video mark (2026-08-28 registration)
+
+`detect_doubao_frame` reuses the image engine's synthetic `doubao_alpha.png` as
+its video template (same `豆包AI生成` run, bottom-right) through
+`_asset_template`, so image and video cannot drift apart on the glyph. Search
+profile: heights 3.2-6.0 percent of the short side from origin (0.60, 0.76),
+measured on the corpus. Policy is seedance-style single-floor: weak 0.35 /
+strong 0.55 / anchor IoU 0.80, calibrated by sequential decode over 39
+TC260-confirmed Doubao videos and 25 negatives -- a 12-frame stable run at 0.35
+accepts 33/39 positives and 0/25 negatives, while 0.30 already accepted one
+negative, so the bar stays at 0.35. Through the shipped arbiter
+(`identify_video`): 32/39 selected as doubao, 0/25 false; the remainder split
+between no stable run (5) and cross-template ties handed to earlier table
+entries (sora 1, kling 1) -- the registry's known order-decides behavior, not a
+doubao-specific defect. Harness: `data/spaces/_doubao_seq_measure.py`.
 
 ### Fill backends and region erasing
 

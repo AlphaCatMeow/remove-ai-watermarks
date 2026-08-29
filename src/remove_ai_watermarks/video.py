@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from remove_ai_watermarks.video_visible import VideoScan
 
 VIDEO_EXTENSIONS: frozenset[str] = frozenset({".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi", ".flv"})
-VIDEO_VISIBLE_MARKS = ("sora", "veo", "seedance", "dola", "hailuo", "kling")
+VIDEO_VISIBLE_MARKS = ("sora", "veo", "seedance", "doubao", "dola", "hailuo", "kling")
 _ISOBMFF_VIDEO_EXTENSIONS: frozenset[str] = frozenset({".mp4", ".mov", ".m4v"})
 _EBML_VIDEO_EXTENSIONS: frozenset[str] = frozenset({".webm", ".mkv"})
 _RIFF_VIDEO_EXTENSIONS: frozenset[str] = frozenset({".avi"})
@@ -178,6 +178,7 @@ _VISIBLE_PLATFORM = {
     "sora": "OpenAI Sora",
     "veo": "Google Veo",
     "seedance": "ByteDance Seedance",
+    "doubao": "ByteDance Doubao",
     "dola": "ByteDance Dola",
     "hailuo": "MiniMax Hailuo AI",
     "kling": "Kuaishou Kling AI",

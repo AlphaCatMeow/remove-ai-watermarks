@@ -187,6 +187,8 @@ def _video_mark_frame(key: str, w: int, h: int) -> np.ndarray:
         return _composite_light(base, cv2.resize(tmpl, (tw, th)).astype(np.float32) / 255.0, x, y, 250)
     elif key == "seedance":
         tmpl, scale, x, y = templates["seedance"], 0.095, int(w * 0.74), int(h * 0.80)
+    elif key == "doubao":
+        tmpl, scale, x, y = templates["doubao"], 0.048, int(w * 0.72), int(h * 0.82)
     elif key == "dola":
         tmpl, scale, x, y = templates["dola"], 0.036, int(w * 0.70), int(h * 0.88)
     elif key == "hailuo":
