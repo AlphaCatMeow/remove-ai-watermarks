@@ -1068,7 +1068,8 @@ def test_chroma_global_stage_calls_diffusers_with_the_calibrated_shape(monkeypat
     """The calibrated call shape must not drift: prompt, guidance, width/height
     on the /16 grid, effective-step count, and no Canny conditioning. A silent
     parameter change moves the oracle floors without any test seeing it."""
-    import diffusers
+    # CI's base job installs the library without the qwen-zimage extra.
+    diffusers = pytest.importorskip("diffusers")
     import torch
 
     from remove_ai_watermarks._internal.chroma_zimage_pipeline import (
