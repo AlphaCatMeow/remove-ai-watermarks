@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from PIL import Image
 
 from remove_ai_watermarks._internal.watermark_profiles import (
+    CHROMA_ZIMAGE_PROFILE,
     DEFAULT_PROFILE,
     INVISIBLE_EXTRA,
     PROFILE_CHOICES,
@@ -80,7 +81,7 @@ def _cuda_works() -> bool:
 def get_device() -> str:
     """Return ``"cuda"`` when a usable CUDA backend is present, else ``"cpu"``.
 
-    Deliberately binary. Both profiles are CUDA-only, so an XPU or MPS answer would
+    Deliberately binary. All profiles are CUDA-only, so an XPU or MPS answer would
     only travel one frame further to the same refusal in :class:`WatermarkRemover`,
     while costing a probe on each. ``"cpu"`` here means "no CUDA", which is exactly
     what that refusal reports.
@@ -117,13 +118,13 @@ class WatermarkRemover:
         _ensure_watermark_deps()
         selected_device = (device or get_device()).casefold()
         self.device = get_device() if selected_device == "auto" else selected_device
-        # CUDA is a precondition of the object, not of the run. Both profiles raise on
+        # CUDA is a precondition of the object, not of the run. All profiles raise on
         # any other device, so accepting one here only defers a guaranteed failure to
         # model-load time, several layers down and under the wrong profile's name.
         if self.device != "cuda":
             raise ValueError(
                 f"Invisible-watermark removal is CUDA-only, so '{self.device}' cannot run it. "
-                "Both remaining profiles need an NVIDIA GPU. Visible-mark removal and "
+                "All profiles need an NVIDIA GPU. Visible-mark removal and "
                 "every identify command still run on CPU."
             )
 
@@ -131,6 +132,10 @@ class WatermarkRemover:
             # SDXL ships fp16 weights and an fp16-safe VAE; bf16 would give up the
             # variant without buying anything on this architecture.
             self.torch_dtype = torch.float16  # type: ignore[union-attr]
+        elif self.model_profile == CHROMA_ZIMAGE_PROFILE:
+            # Chroma1-HD is calibrated bf16 end to end (the floors were measured
+            # with bf16 weights); the inherited face stage is bf16 regardless.
+            self.torch_dtype = torch.bfloat16  # type: ignore[union-attr]
         else:
             self.torch_dtype = torch.bfloat16  # type: ignore[union-attr]
 
@@ -149,6 +154,10 @@ class WatermarkRemover:
             if self.model_profile == SDXL_ZIMAGE_PROFILE:
                 from remove_ai_watermarks._internal.sdxl_zimage_pipeline import (
                     SdxlZImagePipeline as _Pipeline,
+                )
+            elif self.model_profile == CHROMA_ZIMAGE_PROFILE:
+                from remove_ai_watermarks._internal.chroma_zimage_pipeline import (
+                    ChromaZImagePipeline as _Pipeline,
                 )
             else:
                 from remove_ai_watermarks._internal.qwen_zimage_pipeline import (
@@ -194,7 +203,7 @@ class WatermarkRemover:
     ) -> Path:
         """Regenerate image pixels and write the result without AI metadata.
 
-        Step count and CFG are not parameters. Each stage of both profiles is a
+        Step count and CFG are not parameters. Each stage of every profile is a
         distilled schedule that owns its own, so the only thing a caller-supplied
         value could do is break the run or be rejected.
         """
@@ -207,7 +216,7 @@ class WatermarkRemover:
         resolved_strength = resolve_strength(strength, vendor, self.model_profile, size=source.size)
         if not 0.0 <= resolved_strength <= 1.0:
             raise ValueError(f"Strength must be between 0.0 and 1.0, got {resolved_strength}")
-        if text_manifest is not None and self.model_profile == SDXL_ZIMAGE_PROFILE:
+        if text_manifest is not None and self.model_profile in (SDXL_ZIMAGE_PROFILE, CHROMA_ZIMAGE_PROFILE):
             raise ValueError("Verified text restoration is supported only by the qwen-zimage profile")
         if text_manifest is not None and tile:
             raise ValueError("Verified text restoration is not calibrated with tiled diffusion")

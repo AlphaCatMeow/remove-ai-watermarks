@@ -587,7 +587,7 @@ to 8-bit SDR.
 
 ## Remove invisible watermarks
 
-Install `remove-ai-watermarks[qwen-zimage]`. Both profiles need it, and both
+Install `remove-ai-watermarks[qwen-zimage]`. All three profiles need it, and all
 need an NVIDIA GPU.
 
 ```python
@@ -596,7 +596,7 @@ from pathlib import Path
 from remove_ai_watermarks.invisible_engine import InvisibleEngine
 
 engine = InvisibleEngine(
-    pipeline="qwen-zimage",  # the default; the only other value is "sdxl-zimage"
+    pipeline="qwen-zimage",  # the default; also "sdxl-zimage" or "chroma-zimage"
     device=None,
     cpu_offload=False,
 )
@@ -620,7 +620,7 @@ engine = InvisibleEngine(
 )
 ```
 
-Both profiles are CUDA-only, so on a machine without an NVIDIA GPU `device=None`
+All profiles are CUDA-only, so on a machine without an NVIDIA GPU `device=None`
 resolves to `cpu` and construction raises. For the SDXL global stage instead of
 Qwen:
 
@@ -628,7 +628,7 @@ Qwen:
 engine = InvisibleEngine(pipeline="sdxl-zimage")
 ```
 
-The `qwen-zimage` extra is required for both profiles: each runs the same
+The `qwen-zimage` extra is required for all three profiles: each runs the same
 DiffSynth Z-Image face stage.
 
 The opt-in verified-text stage uses the same `text_manifest` argument as the CLI:

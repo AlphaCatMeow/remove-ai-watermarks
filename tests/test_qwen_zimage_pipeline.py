@@ -24,14 +24,14 @@ def _mock_watermark_runtime_deps(monkeypatch):
 
 
 def test_resolution_adaptive_denoise_preserves_calibrated_values():
-    from remove_ai_watermarks._internal.qwen_zimage_pipeline import resolution_adaptive_denoise
+    from remove_ai_watermarks._internal.two_stage_pipeline import resolution_adaptive_denoise
 
     assert resolution_adaptive_denoise(600, 500, adaptive_level=6) == pytest.approx(0.084)
     assert resolution_adaptive_denoise(2000, 1850, adaptive_level=6) == pytest.approx(0.154)
 
 
 def test_largest_face_denoise_preserves_calibrated_values():
-    from remove_ai_watermarks._internal.qwen_zimage_pipeline import largest_face_denoise
+    from remove_ai_watermarks._internal.two_stage_pipeline import largest_face_denoise
 
     image_size = (1000, 1000)
     assert largest_face_denoise([(0, 0, 300, 100)], image_size) == pytest.approx(0.10)
@@ -59,7 +59,7 @@ def test_global_kwargs_use_lightning_and_diffsynth_controlnet_shape():
 
 
 def test_face_kwargs_use_project_zimage_settings():
-    from remove_ai_watermarks._internal.qwen_zimage_pipeline import build_face_kwargs
+    from remove_ai_watermarks._internal.two_stage_pipeline import build_face_kwargs
 
     crop = Image.new("RGB", (713, 941))
     kwargs = build_face_kwargs(crop, strength=0.17, seed=9)
@@ -76,7 +76,7 @@ def test_face_kwargs_use_project_zimage_settings():
 
 
 def test_canny_control_image_is_three_channel_and_detects_an_edge():
-    from remove_ai_watermarks._internal.qwen_zimage_pipeline import build_canny_control_image
+    from remove_ai_watermarks._internal.two_stage_pipeline import build_canny_control_image
 
     source = np.zeros((64, 80, 3), dtype=np.uint8)
     source[:, 40:] = 255
@@ -92,14 +92,15 @@ def test_canny_control_image_is_three_channel_and_detects_an_edge():
 
 
 def test_face_crop_geometry_preserves_calibrated_values():
-    from remove_ai_watermarks._internal.qwen_zimage_pipeline import QwenZImagePipeline, _expanded_box
+    from remove_ai_watermarks._internal.qwen_zimage_pipeline import QwenZImagePipeline
+    from remove_ai_watermarks._internal.two_stage_pipeline import _expanded_box
 
     assert _expanded_box((100, 100, 200, 200), (500, 500)) == (25, 25, 275, 275)
     assert QwenZImagePipeline._detail_size((500, 400), (100, 80)) == (1024, 816)
 
 
 def test_yunet_download_targets_verified_lfs_artifact():
-    from remove_ai_watermarks._internal.qwen_zimage_pipeline import (
+    from remove_ai_watermarks._internal.two_stage_pipeline import (
         YUNET_MODEL_SHA256,
         YUNET_MODEL_URL,
         YUNET_SCORE_THRESHOLD,
@@ -239,8 +240,8 @@ def test_face_stage_loads_in_its_own_dtype_when_the_global_stage_differs(monkeyp
 
 
 def test_resident_face_models_disable_vram_offload():
-    from remove_ai_watermarks._internal.qwen_zimage_pipeline import (
-        QwenZImagePipeline,
+    from remove_ai_watermarks._internal.qwen_zimage_pipeline import QwenZImagePipeline
+    from remove_ai_watermarks._internal.two_stage_pipeline import (
         _pin_vram_managed_models,
         resolve_face_model_residency,
     )
@@ -291,7 +292,7 @@ def test_resident_face_models_disable_vram_offload():
 
 
 def test_static_prompt_cache_reuses_embeddings_without_caching_image_edits():
-    from remove_ai_watermarks._internal.qwen_zimage_pipeline import _cache_static_prompt_embeddings
+    from remove_ai_watermarks._internal.two_stage_pipeline import _cache_static_prompt_embeddings
 
     class PromptUnit:
         output_params = ("prompt_embeds",)
@@ -322,24 +323,24 @@ def test_static_prompt_cache_reuses_embeddings_without_caching_image_edits():
 
 def test_prompt_cache_path_is_keyed_by_version_model_outputs_and_prompt(monkeypatch, tmp_path):
     """A model, prompt or format change must not read a stale embedding."""
-    from remove_ai_watermarks._internal import qwen_zimage_pipeline as qz
+    from remove_ai_watermarks._internal import two_stage_pipeline as ts
 
     monkeypatch.setenv("HF_HOME", str(tmp_path))
-    baseline = qz._prompt_cache_path("model/a", ("prompt_emb",), "text")
+    baseline = ts._prompt_cache_path("model/a", ("prompt_emb",), "text")
 
     assert baseline.parent == tmp_path / "remove-ai-watermarks" / "prompt-embeddings"
-    assert baseline == qz._prompt_cache_path("model/a", ("prompt_emb",), "text")
-    assert baseline != qz._prompt_cache_path("model/b", ("prompt_emb",), "text")
-    assert baseline != qz._prompt_cache_path("model/a", ("prompt_embeds",), "text")
-    assert baseline != qz._prompt_cache_path("model/a", ("prompt_emb",), "other")
+    assert baseline == ts._prompt_cache_path("model/a", ("prompt_emb",), "text")
+    assert baseline != ts._prompt_cache_path("model/b", ("prompt_emb",), "text")
+    assert baseline != ts._prompt_cache_path("model/a", ("prompt_embeds",), "text")
+    assert baseline != ts._prompt_cache_path("model/a", ("prompt_emb",), "other")
 
-    monkeypatch.setattr(qz, "_PROMPT_CACHE_VERSION", qz._PROMPT_CACHE_VERSION + 1)
-    assert baseline != qz._prompt_cache_path("model/a", ("prompt_emb",), "text")
+    monkeypatch.setattr(ts, "_PROMPT_CACHE_VERSION", ts._PROMPT_CACHE_VERSION + 1)
+    assert baseline != ts._prompt_cache_path("model/a", ("prompt_emb",), "text")
 
 
 def test_model_cache_dir_prefers_the_persistent_hugging_face_root(monkeypatch, tmp_path):
     """A scale-to-zero runner only mounts HF_HOME, so it must win over XDG."""
-    from remove_ai_watermarks._internal.qwen_zimage_pipeline import _model_cache_dir
+    from remove_ai_watermarks._internal.two_stage_pipeline import _model_cache_dir
 
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
     monkeypatch.delenv("HF_HOME", raising=False)
@@ -353,16 +354,17 @@ def test_stored_prompt_embedding_round_trips_without_casting_the_mask(monkeypatc
     """The mask rides in the same payload and is integer; casting it corrupts the prompt."""
     import torch
 
-    from remove_ai_watermarks._internal import qwen_zimage_pipeline as qz
+    from remove_ai_watermarks._internal import two_stage_pipeline as ts
+    from remove_ai_watermarks._internal.qwen_zimage_pipeline import _QWEN_PROMPT_OUTPUTS
 
     monkeypatch.setenv("HF_HOME", str(tmp_path))
-    path = qz._prompt_cache_path("model/a", qz._QWEN_PROMPT_OUTPUTS, "text")
+    path = ts._prompt_cache_path("model/a", _QWEN_PROMPT_OUTPUTS, "text")
     payload = {
         "prompt_emb": torch.ones((1, 2, 3), dtype=torch.float32),
         "prompt_emb_mask": torch.ones((1, 2), dtype=torch.int64),
     }
-    qz._store_prompt_payload(path, payload)
-    restored = qz._load_prompt_payload(path, "cpu", torch.bfloat16)
+    ts._store_prompt_payload(path, payload)
+    restored = ts._load_prompt_payload(path, "cpu", torch.bfloat16)
 
     assert restored["prompt_emb"].dtype == torch.bfloat16
     assert restored["prompt_emb_mask"].dtype == torch.int64
@@ -373,12 +375,12 @@ def test_persisted_prompt_cache_lets_a_second_pipeline_skip_the_text_encoder(mon
     """The whole point: container two must not call the encoder container one ran."""
     import torch
 
-    from remove_ai_watermarks._internal import qwen_zimage_pipeline as qz
+    from remove_ai_watermarks._internal import two_stage_pipeline as ts
 
     monkeypatch.setenv("HF_HOME", str(tmp_path))
 
     class PromptUnit:
-        output_params = qz._ZIMAGE_PROMPT_OUTPUTS
+        output_params = ts._ZIMAGE_PROMPT_OUTPUTS
 
         def __init__(self):
             self.calls = 0
@@ -393,13 +395,13 @@ def test_persisted_prompt_cache_lets_a_second_pipeline_skip_the_text_encoder(mon
         return unit, pipe
 
     first_unit, first_pipe = build()
-    qz._cache_static_prompt_embeddings(first_pipe, qz._ZIMAGE_PROMPT_OUTPUTS, model_id="model/a", require_cache=False)
-    first_unit.process(first_pipe, qz._FACE_PROMPT)
+    ts._cache_static_prompt_embeddings(first_pipe, ts._ZIMAGE_PROMPT_OUTPUTS, model_id="model/a", require_cache=False)
+    first_unit.process(first_pipe, ts._FACE_PROMPT)
     assert first_unit.calls == 1
 
     second_unit, second_pipe = build()
-    qz._cache_static_prompt_embeddings(second_pipe, qz._ZIMAGE_PROMPT_OUTPUTS, model_id="model/a", require_cache=True)
-    restored = second_unit.process(second_pipe, qz._FACE_PROMPT)
+    ts._cache_static_prompt_embeddings(second_pipe, ts._ZIMAGE_PROMPT_OUTPUTS, model_id="model/a", require_cache=True)
+    restored = second_unit.process(second_pipe, ts._FACE_PROMPT)
 
     assert second_unit.calls == 0
     assert torch.equal(restored["prompt_embeds"][0], torch.ones((2, 2)))
@@ -409,19 +411,20 @@ def test_a_missing_cache_fails_loudly_once_the_text_encoder_was_left_out(monkeyp
     """Silently calling an absent text encoder would surface as an opaque crash."""
     import torch
 
-    from remove_ai_watermarks._internal import qwen_zimage_pipeline as qz
+    from remove_ai_watermarks._internal import two_stage_pipeline as ts
+    from remove_ai_watermarks._internal.qwen_zimage_pipeline import _QWEN_PROMPT_OUTPUTS
 
     monkeypatch.setenv("HF_HOME", str(tmp_path))
 
     class PromptUnit:
-        output_params = qz._QWEN_PROMPT_OUTPUTS
+        output_params = _QWEN_PROMPT_OUTPUTS
 
         def process(self, _pipe, prompt, edit_image=None):
             raise AssertionError("the text encoder is not loaded")
 
     unit = PromptUnit()
     pipe = MagicMock(units=[unit], device="cpu", torch_dtype=torch.float32)
-    qz._cache_static_prompt_embeddings(pipe, qz._QWEN_PROMPT_OUTPUTS, model_id="model/a", require_cache=True)
+    ts._cache_static_prompt_embeddings(pipe, _QWEN_PROMPT_OUTPUTS, model_id="model/a", require_cache=True)
 
     with pytest.raises(RuntimeError, match="disappeared"):
         unit.process(pipe, "never cached")
@@ -430,7 +433,7 @@ def test_a_missing_cache_fails_loudly_once_the_text_encoder_was_left_out(monkeyp
 def test_sam_pixels_match_model_dtype_without_casting_boxes():
     import torch
 
-    from remove_ai_watermarks._internal.qwen_zimage_pipeline import _prepare_sam_inputs
+    from remove_ai_watermarks._internal.two_stage_pipeline import _prepare_sam_inputs
 
     class Inputs(dict[str, torch.Tensor]):
         def to(self, device: str):
@@ -450,7 +453,7 @@ def test_sam_pixels_match_model_dtype_without_casting_boxes():
 
 
 def test_sam_prompts_match_impact_center_and_clip_masks_to_boxes():
-    from remove_ai_watermarks._internal.qwen_zimage_pipeline import (
+    from remove_ai_watermarks._internal.two_stage_pipeline import (
         _clip_sam_masks_to_boxes,
         _sam_point_prompts,
     )
@@ -470,7 +473,7 @@ def test_sam_prompts_match_impact_center_and_clip_masks_to_boxes():
 
 
 def test_sam_proposal_selection_matches_impact_sub_threshold():
-    from remove_ai_watermarks._internal.qwen_zimage_pipeline import _select_sam_masks
+    from remove_ai_watermarks._internal.two_stage_pipeline import _select_sam_masks
 
     masks = np.zeros((2, 3, 8, 8), dtype=np.float32)
     masks[0, 0, 1:3, 1:3] = 1.0
@@ -500,7 +503,7 @@ def test_sam_proposal_selection_matches_impact_sub_threshold():
 def test_sam_bfloat16_outputs_convert_to_numpy_float32():
     import torch
 
-    from remove_ai_watermarks._internal.qwen_zimage_pipeline import _sam_outputs_to_numpy
+    from remove_ai_watermarks._internal.two_stage_pipeline import _sam_outputs_to_numpy
 
     masks = torch.ones((1, 2, 3, 4, 4), dtype=torch.bfloat16)
     scores = torch.tensor([[[0.95, 0.75, 0.50], [0.99, 0.80, 0.60]]], dtype=torch.bfloat16)
@@ -513,7 +516,7 @@ def test_sam_bfloat16_outputs_convert_to_numpy_float32():
 
 
 def test_face_composite_preserves_every_pixel_outside_mask():
-    from remove_ai_watermarks._internal.qwen_zimage_pipeline import composite_face
+    from remove_ai_watermarks._internal.two_stage_pipeline import composite_face
 
     base = np.full((32, 32, 3), 10, dtype=np.uint8)
     detail = np.full((32, 32, 3), 240, dtype=np.uint8)
@@ -618,7 +621,7 @@ def test_cli_reports_verified_text_manifest_errors(tmp_image_path, tmp_path, mon
 
 
 def test_no_face_path_still_runs_verified_text_restoration(monkeypatch):
-    from remove_ai_watermarks._internal import qwen_zimage_pipeline, text_restoration
+    from remove_ai_watermarks._internal import text_restoration, two_stage_pipeline
     from remove_ai_watermarks._internal.qwen_zimage_pipeline import QwenZImagePipeline
     from remove_ai_watermarks._internal.text_restoration import VerifiedTextLine, VerifiedTextManifest
 
@@ -630,9 +633,9 @@ def test_no_face_path_still_runs_verified_text_restoration(monkeypatch):
     global_result = Image.new("RGB", (32, 32), (70, 80, 90))
     anchor = Image.new("RGB", (32, 32), (100, 110, 120))
     restored = Image.new("RGB", (32, 32), (130, 140, 150))
-    pipeline._qwen_vae_roundtrip = MagicMock(return_value=donor)
+    pipeline._vae_roundtrip = MagicMock(return_value=donor)
     pipeline._run_global = MagicMock(return_value=global_result)
-    monkeypatch.setattr(qwen_zimage_pipeline, "detect_faces", lambda _image: [])
+    monkeypatch.setattr(two_stage_pipeline, "detect_faces", lambda _image: [])
     blend = MagicMock(return_value=anchor)
     restore = MagicMock(return_value=restored)
     monkeypatch.setattr(text_restoration, "blend_fidelity_anchor", blend)
@@ -767,11 +770,9 @@ def test_watermark_remover_rejects_tiled_verified_text_before_pipeline(tmp_path,
 
 
 def test_qwen_tiling_runs_global_tiles_then_one_full_frame_face_stage(monkeypatch):
-    from remove_ai_watermarks._internal.qwen_zimage_pipeline import (
-        QwenZImagePipeline,
-        resolution_adaptive_denoise,
-    )
+    from remove_ai_watermarks._internal.qwen_zimage_pipeline import QwenZImagePipeline
     from remove_ai_watermarks._internal.tiling import plan_tiles
+    from remove_ai_watermarks._internal.two_stage_pipeline import resolution_adaptive_denoise
 
     image = Image.new("RGB", (1500, 1500), (20, 30, 40))
     runtime = QwenZImagePipeline(device="cuda", torch_dtype="bf16")
@@ -787,7 +788,7 @@ def test_qwen_tiling_runs_global_tiles_then_one_full_frame_face_stage(monkeypatc
     monkeypatch.setattr(runtime, "_run_global", fake_global)
     monkeypatch.setattr(runtime, "_run_faces", face_stage)
     monkeypatch.setattr(
-        "remove_ai_watermarks._internal.qwen_zimage_pipeline.detect_faces",
+        "remove_ai_watermarks._internal.two_stage_pipeline.detect_faces",
         lambda _image: [(100, 100, 300, 300)],
     )
     monkeypatch.setattr(runtime, "_sam_masks", lambda _image, _boxes: [np.ones((1500, 1500), dtype=np.uint8)])
@@ -817,21 +818,21 @@ def test_global_only_preload_skips_face_models(monkeypatch):
     from remove_ai_watermarks._internal.qwen_zimage_pipeline import QwenZImagePipeline
 
     runtime = QwenZImagePipeline(device="cuda", torch_dtype="bf16")
-    qwen = MagicMock()
+    global_stage = MagicMock()
     zimage = MagicMock()
     sam = MagicMock()
     yunet = MagicMock()
-    monkeypatch.setattr(runtime, "_load_qwen", qwen)
+    monkeypatch.setattr(runtime, "_load_global", global_stage)
     monkeypatch.setattr(runtime, "_load_zimage", zimage)
     monkeypatch.setattr(runtime, "_load_sam", sam)
     monkeypatch.setattr(
-        "remove_ai_watermarks._internal.qwen_zimage_pipeline._yunet_model_path",
+        "remove_ai_watermarks._internal.two_stage_pipeline._yunet_model_path",
         yunet,
     )
 
     runtime.preload(global_only=True)
 
-    qwen.assert_called_once_with()
+    global_stage.assert_called_once_with()
     zimage.assert_not_called()
     sam.assert_not_called()
     yunet.assert_called_once_with()
@@ -841,21 +842,21 @@ def test_full_preload_still_loads_face_models(monkeypatch):
     from remove_ai_watermarks._internal.qwen_zimage_pipeline import QwenZImagePipeline
 
     runtime = QwenZImagePipeline(device="cuda", torch_dtype="bf16")
-    qwen = MagicMock()
+    global_stage = MagicMock()
     zimage = MagicMock()
     sam = MagicMock()
     yunet = MagicMock()
-    monkeypatch.setattr(runtime, "_load_qwen", qwen)
+    monkeypatch.setattr(runtime, "_load_global", global_stage)
     monkeypatch.setattr(runtime, "_load_zimage", zimage)
     monkeypatch.setattr(runtime, "_load_sam", sam)
     monkeypatch.setattr(
-        "remove_ai_watermarks._internal.qwen_zimage_pipeline._yunet_model_path",
+        "remove_ai_watermarks._internal.two_stage_pipeline._yunet_model_path",
         yunet,
     )
 
     runtime.preload()
 
-    qwen.assert_called_once_with()
+    global_stage.assert_called_once_with()
     zimage.assert_called_once_with()
     sam.assert_called_once_with()
     yunet.assert_called_once_with()
@@ -964,8 +965,8 @@ def test_sdxl_requested_steps_compensate_for_the_diffusers_truncation():
 
 def test_sdxl_zimage_floors_to_its_own_latent_grid():
     """SDXL aligns to 8 pixels where Qwen aligns to 16."""
-    from remove_ai_watermarks._internal.qwen_zimage_pipeline import _target_size
     from remove_ai_watermarks._internal.sdxl_zimage_pipeline import sdxl_target_size
+    from remove_ai_watermarks._internal.two_stage_pipeline import _target_size
 
     assert sdxl_target_size(1122, 1402) == (1120, 1400)
     assert _target_size(1122, 1402) == (1120, 1392)
@@ -973,12 +974,232 @@ def test_sdxl_zimage_floors_to_its_own_latent_grid():
 
 
 def test_sdxl_zimage_inherits_the_face_stage_rather_than_copying_it():
-    """The face stage must not be able to diverge between the two profiles."""
+    """The face stage must not be able to diverge between profiles.
+
+    Both profiles are siblings of the shared two-stage base, not a chain: an SDXL or
+    Flux profile must never inherit from the Qwen profile, and the shared stages live
+    on the base so a change there reaches every profile at once.
+    """
     from remove_ai_watermarks._internal.qwen_zimage_pipeline import QwenZImagePipeline
     from remove_ai_watermarks._internal.sdxl_zimage_pipeline import SdxlZImagePipeline
+    from remove_ai_watermarks._internal.two_stage_pipeline import TwoStageZImagePipeline
 
-    assert issubclass(SdxlZImagePipeline, QwenZImagePipeline)
-    for shared in ("_run_faces", "_sam_masks", "_load_zimage", "_load_sam", "run"):
-        assert getattr(SdxlZImagePipeline, shared) is getattr(QwenZImagePipeline, shared)
+    assert issubclass(SdxlZImagePipeline, TwoStageZImagePipeline)
+    assert issubclass(QwenZImagePipeline, TwoStageZImagePipeline)
+    assert QwenZImagePipeline not in SdxlZImagePipeline.__mro__
+    for shared in ("_run_faces", "_sam_masks", "_load_zimage", "_load_sam", "run", "preload"):
+        base_method = getattr(TwoStageZImagePipeline, shared)
+        assert getattr(SdxlZImagePipeline, shared) is base_method
+        assert getattr(QwenZImagePipeline, shared) is base_method
     # Only the global stage and what it needs may differ.
     assert SdxlZImagePipeline._run_global is not QwenZImagePipeline._run_global
+    assert SdxlZImagePipeline._load_global is not QwenZImagePipeline._load_global
+
+
+def test_chroma_zimage_strength_uses_measured_flat_floors():
+    """The chroma floors come from the four-cohort oracle calibration; they must not
+    drift from their derivation in watermark_profiles."""
+    from remove_ai_watermarks._internal.watermark_profiles import (
+        CHROMA_ZIMAGE_GOOGLE_STRENGTH,
+        CHROMA_ZIMAGE_META_STRENGTH,
+        CHROMA_ZIMAGE_MICROSOFT_STRENGTH,
+        CHROMA_ZIMAGE_OPENAI_STRENGTH,
+        CHROMA_ZIMAGE_UNKNOWN_STRENGTH,
+        normalize_profile,
+        resolve_strength,
+    )
+
+    assert normalize_profile("chroma_zimage") == "chroma-zimage"
+    assert resolve_strength(None, "openai", "chroma-zimage") == pytest.approx(CHROMA_ZIMAGE_OPENAI_STRENGTH)
+    assert pytest.approx(0.09) == CHROMA_ZIMAGE_OPENAI_STRENGTH
+    assert resolve_strength(None, "microsoft", "chroma-zimage") == pytest.approx(CHROMA_ZIMAGE_MICROSOFT_STRENGTH)
+    assert pytest.approx(0.125) == CHROMA_ZIMAGE_MICROSOFT_STRENGTH
+    assert resolve_strength(None, "google", "chroma-zimage") == pytest.approx(CHROMA_ZIMAGE_GOOGLE_STRENGTH)
+    assert pytest.approx(0.40) == CHROMA_ZIMAGE_GOOGLE_STRENGTH
+    assert resolve_strength(None, "meta", "chroma-zimage") == pytest.approx(CHROMA_ZIMAGE_META_STRENGTH)
+    assert pytest.approx(0.17) == CHROMA_ZIMAGE_META_STRENGTH
+    # Unknown follows the strictest measured cohort, as with the other profiles.
+    assert resolve_strength(None, None, "chroma-zimage") == pytest.approx(CHROMA_ZIMAGE_UNKNOWN_STRENGTH)
+    assert CHROMA_ZIMAGE_UNKNOWN_STRENGTH == CHROMA_ZIMAGE_GOOGLE_STRENGTH
+    # An explicit strength still wins, and other profiles are untouched.
+    assert resolve_strength(0.2, "google", "chroma-zimage") == pytest.approx(0.2)
+    assert resolve_strength(None, "openai", "qwen-zimage", size=(2000, 1850)) == pytest.approx(0.07675)
+
+
+def test_chroma_zimage_inherits_the_shared_stages_and_only_swaps_the_global():
+    """Like sdxl-zimage: a sibling of the base, never a chain, with the shared
+    stages inherited verbatim."""
+    from remove_ai_watermarks._internal.chroma_zimage_pipeline import ChromaZImagePipeline
+    from remove_ai_watermarks._internal.qwen_zimage_pipeline import QwenZImagePipeline
+    from remove_ai_watermarks._internal.two_stage_pipeline import TwoStageZImagePipeline
+
+    assert issubclass(ChromaZImagePipeline, TwoStageZImagePipeline)
+    assert QwenZImagePipeline not in ChromaZImagePipeline.__mro__
+    for shared in ("_run_faces", "_sam_masks", "_load_zimage", "_load_sam", "run", "preload"):
+        base_method = getattr(TwoStageZImagePipeline, shared)
+        assert getattr(ChromaZImagePipeline, shared) is base_method
+    assert ChromaZImagePipeline._run_global is not QwenZImagePipeline._run_global
+    assert ChromaZImagePipeline._load_global is not QwenZImagePipeline._load_global
+    assert ChromaZImagePipeline.profile_name == "chroma-zimage"
+
+
+def test_chroma_requested_steps_compensate_for_the_diffusers_truncation():
+    from remove_ai_watermarks._internal.chroma_zimage_pipeline import CHROMA_STEPS, requested_steps
+
+    for strength in (0.09, 0.125, 0.17, 0.40):
+        steps = requested_steps(CHROMA_STEPS, strength)
+        assert int(steps * strength) >= CHROMA_STEPS
+        assert int(CHROMA_STEPS * strength) < CHROMA_STEPS
+
+
+def test_chroma_zimage_uses_its_own_calibrated_prompts():
+    """The floors were measured with the neutral faithful prompt, not the shared
+    canny-stage prompt; swapping them silently moves the oracle boundaries."""
+    from remove_ai_watermarks._internal import chroma_zimage_pipeline as chroma_mod
+    from remove_ai_watermarks._internal.two_stage_pipeline import _GLOBAL_PROMPT
+
+    assert chroma_mod.CHROMA_PROMPT != _GLOBAL_PROMPT
+    assert chroma_mod.CHROMA_PROMPT == "high quality, sharp, detailed, faithful to the original"
+    assert chroma_mod.CHROMA_GUIDANCE == 5.0
+    assert chroma_mod.CHROMA_STEPS == 4
+
+
+def test_chroma_global_stage_calls_diffusers_with_the_calibrated_shape(monkeypatch):
+    """The calibrated call shape must not drift: prompt, guidance, width/height
+    on the /16 grid, effective-step count, and no Canny conditioning. A silent
+    parameter change moves the oracle floors without any test seeing it."""
+    import diffusers
+    import torch
+
+    from remove_ai_watermarks._internal.chroma_zimage_pipeline import (
+        CHROMA_GUIDANCE,
+        ChromaZImagePipeline,
+    )
+
+    calls: dict[str, dict] = {}
+
+    def fake_chroma(*_args, **kwargs):
+        calls["chroma"] = kwargs
+        from PIL import Image
+
+        return type("R", (), {"images": [Image.new("RGB", (kwargs["width"], kwargs["height"]))]})()
+
+    class FakeChromaPipe:
+        def to(self, _device):
+            return self
+
+        @staticmethod
+        def __call__(*args, **kwargs):
+            return fake_chroma(*args, **kwargs)
+
+    monkeypatch.setattr(
+        diffusers.ChromaImg2ImgPipeline,
+        "from_pretrained",
+        staticmethod(lambda *a, **k: FakeChromaPipe()),
+    )
+
+    # _run_global creates a torch.Generator(device="cuda"), which needs a real
+    # CUDA library; patch the module's torch reference to yield a CPU-safe stub.
+    class FakeGenerator:
+        def manual_seed(self, _seed):
+            return self
+
+    monkeypatch.setattr("torch.Generator", lambda device=None: FakeGenerator())
+
+    pipeline = ChromaZImagePipeline(device="cpu", torch_dtype=torch.bfloat16)
+    monkeypatch.setattr(type(pipeline), "_require_cuda", lambda self: None)
+    result = pipeline._run_global(Image.new("RGB", (1122, 1402)), 0.09, 0)
+
+    assert result.size == (1122, 1402)
+    call = calls["chroma"]
+    # The calibrated prompt, NOT the shared canny-stage prompt.
+    assert call["prompt"] == "high quality, sharp, detailed, faithful to the original"
+    assert call["negative_prompt"] == "blurry, lowres, distorted text, garbled text, artifacts"
+    assert call["guidance_scale"] == CHROMA_GUIDANCE
+    # The /16 latent grid, not the raw input size.
+    assert call["width"] == 1120
+    assert call["height"] == 1392
+    # Effective-step compensation: ceil(4 / 0.09) = 45 requested.
+    assert call["num_inference_steps"] == 45
+    assert call["strength"] == 0.09
+    # No Canny conditioning: the calibrated path is a plain strength pass.
+    assert "control_image" not in call
+    assert "controlnet_conditioning_scale" not in call
+
+
+def test_chroma_zimage_floors_to_its_own_latent_grid():
+    """Chroma1 floors to /16, the same grid as Qwen but unlike SDXL's /8."""
+    from remove_ai_watermarks._internal.chroma_zimage_pipeline import chroma_target_size
+    from remove_ai_watermarks._internal.sdxl_zimage_pipeline import sdxl_target_size
+
+    assert chroma_target_size(1122, 1402) == (1120, 1392)
+    assert sdxl_target_size(1122, 1402) == (1120, 1400)
+    assert chroma_target_size(3, 3) == (16, 16)
+
+
+def test_watermark_remover_rejects_text_manifest_for_chroma(tmp_path, monkeypatch):
+    """Verified text restoration needs the Qwen VAE donor; chroma-zimage and
+    sdxl-zimage must both be rejected at the boundary, not deep inside."""
+    from remove_ai_watermarks._internal.text_restoration import VerifiedTextLine, VerifiedTextManifest
+    from remove_ai_watermarks._internal.watermark_remover import WatermarkRemover
+
+    _mock_watermark_runtime_deps(monkeypatch)
+    source = tmp_path / "source.png"
+    Image.new("RGB", (96, 80)).save(source)
+    manifest = VerifiedTextManifest("0" * 64, 96, 80, (VerifiedTextLine((4, 4, 20, 16), "x", "alphabetic"),))
+
+    for profile in ("chroma-zimage", "sdxl-zimage"):
+        remover = WatermarkRemover(device="cuda", pipeline=profile)
+        with pytest.raises(ValueError, match="only by the qwen-zimage profile"):
+            remover.remove_watermark(source, text_manifest=manifest)
+
+
+def test_watermark_remover_dispatches_to_chroma_pipeline(monkeypatch):
+    """The remover must construct ChromaZImagePipeline, not fall through to qwen."""
+    from remove_ai_watermarks._internal import chroma_zimage_pipeline as chroma_module
+    from remove_ai_watermarks._internal.watermark_remover import WatermarkRemover
+
+    captured: dict[str, object] = {}
+
+    class Recorder:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(chroma_module, "ChromaZImagePipeline", Recorder)
+
+    remover = WatermarkRemover.__new__(WatermarkRemover)
+    remover.model_profile = "chroma-zimage"
+    remover.device = "cuda"
+    remover.torch_dtype = None
+    remover.hf_token = None
+    remover._progress_callback = None
+    remover.controlnet_conditioning_scale = 1.0
+    remover.cpu_offload = False
+    remover._qwen_zimage_pipeline = None
+
+    remover._load_qwen_zimage_pipeline()
+
+    assert captured["device"] == "cuda"
+    assert captured["hf_token"] is None
+
+
+def test_chroma_adaptive_polish_defaults_off():
+    """Like qwen-zimage: Chroma1's output already matches the input's detail
+    level, so polishing would add grain to an already-faithful output."""
+    from remove_ai_watermarks._internal.watermark_profiles import resolve_adaptive_polish
+
+    assert resolve_adaptive_polish(None, "chroma-zimage") is False
+    assert resolve_adaptive_polish(True, "chroma-zimage") is True
+
+
+def test_chroma_vae_roundtrip_raises_not_implemented():
+    """The base class provides no VAE donor for chroma-zimage; the failure must
+    be the explicit NotImplementedError, not an opaque crash from a missing
+    Qwen stack."""
+    import torch
+
+    from remove_ai_watermarks._internal.chroma_zimage_pipeline import ChromaZImagePipeline
+
+    pipeline = ChromaZImagePipeline(device="cuda", torch_dtype=torch.bfloat16)
+    with pytest.raises(NotImplementedError, match="does not expose a VAE donor"):
+        pipeline._vae_roundtrip(Image.new("RGB", (32, 32)))

@@ -194,7 +194,7 @@ class TestNoReembeddedWatermark:
 
         pipeline = SdxlZImagePipeline(device="cuda", torch_dtype=None)
         monkeypatch.setattr(type(pipeline), "_require_cuda", lambda self: None)
-        pipeline._load_sdxl()
+        pipeline._load_global()
 
         assert calls["pipeline"].get("add_watermarker") is False
         assert "add_watermarker" not in calls["controlnet"]

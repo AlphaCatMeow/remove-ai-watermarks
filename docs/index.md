@@ -39,3 +39,4 @@ The current behavior is defined by the code, tests, README, and user guides.
 - [SynthID identity follow-up](synthid-robust-identity-research-2026-06-08.md)
 - [Video SynthID quality research](video-synthid-quality-research.md)
 - [Text protection research](text-protection-research.md)
+- [Chroma1 engine research](chroma1-engine-research.md)

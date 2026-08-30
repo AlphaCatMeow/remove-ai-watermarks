@@ -367,7 +367,7 @@ failed encode does not overwrite an existing result.
 
 ## Remove invisible watermarks
 
-Install the removal dependencies first. Both profiles are CUDA-only and both
+Install the removal dependencies first. All profiles are CUDA-only and all
 run the DiffSynth Z-Image face stage, so this is the extra either one needs:
 
 ```bash

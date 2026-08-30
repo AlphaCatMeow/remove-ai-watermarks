@@ -248,7 +248,7 @@ from the test set + this doc).
      watermark. Stop and reconsider.
 2. **PhotoMaker-V1 prototype** in the existing `controlnet` pipeline:
    - Mirror the `_load_controlnet_pipeline` path (removed in 0.24.0 with the
-     controlnet profile; the equivalent seam is now `SdxlZImagePipeline._load_sdxl`):
+     controlnet profile; the equivalent seam is now `SdxlZImagePipeline._load_global`):
      add a PhotoMaker variant that
      loads SDXL + canny ControlNet + PhotoMaker adapter on the same engine.
    - Extract the OpenCLIP face embedding from the watermarked face crops (use

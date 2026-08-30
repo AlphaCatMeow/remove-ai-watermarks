@@ -95,19 +95,21 @@ class InvisibleEngine:
         """Initialize the invisible watermark removal engine.
 
         Args:
-            device: Device for inference. Both profiles are CUDA-only, so the
+            device: Device for inference. All profiles are CUDA-only, so the
                 usable values are "cuda" and None/"auto" (which detects it);
                 anything else raises rather than falling back.
             pipeline: Pipeline profile, one of "qwen-zimage" (DEFAULT;
                 Qwen-Image-2512 Lightning + Canny, then SAM-masked Z-Image face repair)
                 or "sdxl-zimage" (the same recipe and the same face stage on an SDXL
                 global pass, vendor-adaptive strength because an SDXL global stage
-                needs more of it). BOTH ARE CUDA-ONLY -- there is no CPU or MPS path
-                for invisible-watermark removal.
+                needs more of it) or "chroma-zimage" (the same face stage on an
+                Apache-2.0 Chroma1 global pass with its own flat vendor floors;
+                see docs/chroma1-engine-research.md). ALL ARE CUDA-ONLY -- there is
+                no CPU or MPS path for invisible-watermark removal.
             hf_token: Hugging Face API token.
             progress_callback: Optional callback for progress messages.
             controlnet_conditioning_scale: Canny ControlNet structure-preservation
-                strength on the global stage of both profiles.
+                strength on the global stage (not used by chroma-zimage).
             cpu_offload: Offload model components to CPU between CUDA calls instead
                 of keeping the whole pipeline in VRAM, at the cost of speed. For
                 qwen-zimage, force the face stack to offload instead of using automatic
@@ -158,9 +160,9 @@ class InvisibleEngine:
             image_path: Path to the watermarked image.
             output_path: Output path (None = overwrite source).
             strength: Denoising strength (0.0-1.0). None -> the profile's calibrated
-                default (resolution-adaptive for qwen-zimage, vendor-adaptive for
-                sdxl-zimage).
-            seed: Random seed for reproducibility. None resolves to 0, because both
+                default (resolution-adaptive for qwen-zimage, vendor-adaptive flat
+                floors for sdxl-zimage and chroma-zimage).
+            seed: Random seed for reproducibility. None resolves to 0, because all
                 profiles are certified at a fixed seed.
             humanize: Intensity of Analog Humanizer film grain (0 = off).
             unsharp: Final unsharp-mask sharpening strength (0 = off, default).
@@ -246,7 +248,7 @@ class InvisibleEngine:
 
             verified_text = load_verified_text_manifest(text_manifest, reference_pil)
 
-        # Both profiles run at the input's native geometry, so only the explicit max
+        # All profiles run at the input's native geometry, so only the explicit max
         # cap can move it, and it can only ever scale down.
         target = _target_size(image.width, image.height, max_resolution)
         if target is not None:

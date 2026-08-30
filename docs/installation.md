@@ -75,11 +75,14 @@ uv tool install --force "remove-ai-watermarks[qwen-zimage]"
 ```
 
 Both remaining profiles run a Z-Image face stage on the DiffSynth runtime, so
-both need this extra. It includes the `diffusion` dependencies; `diffusion` on its
-own covers the torch and diffusers imports but not the face stage, so it is not
-enough to run a removal.
+both need this extra. The third profile, `chroma-zimage`, uses diffusers'
+ChromaImg2ImgPipeline instead of DiffSynth for its global stage but inherits
+the same face stage, so it needs this extra too. It includes the `diffusion`
+dependencies; `diffusion` on its own covers the torch and diffusers imports
+but not the face stage, so it is not enough to run a removal.
 
-**An NVIDIA GPU is required.** `qwen-zimage` and `sdxl-zimage` are CUDA-only, and
+**An NVIDIA GPU is required.** `qwen-zimage`, `sdxl-zimage` and `chroma-zimage`
+are CUDA-only, and
 construction refuses any other device rather than falling back to a slow or broken
 one. There is no CPU, MPS or XPU path for invisible-watermark removal. Visible-mark
 removal, metadata stripping and every `identify` command still run anywhere.
@@ -241,5 +244,5 @@ image came from a relevant generator, use `--force`.
 
 If the CLI reports that the removal dependencies are unavailable, install the
 `qwen-zimage` extra. `diffusion` alone covers Torch and Diffusers but not the
-DiffSynth face stage that both profiles run. Video SynthID removal is a separate
+DiffSynth face stage that all profiles run. Video SynthID removal is a separate
 path and needs `video` and `diffusion`.

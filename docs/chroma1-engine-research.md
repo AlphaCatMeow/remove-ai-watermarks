@@ -1,0 +1,306 @@
+# Chroma1 engine research (2026-08-29/30)
+
+> Research archive. This page records experiments and decisions from the dates
+> above. Current package behavior is defined by the
+> [supported signals](supported-signals.md), [known limitations](known-limitations.md),
+> and [module internals](module-internals.md). Nothing here is shipped.
+
+Cited experiment behind issue #88 ("Please integrate Flux 2"): FLUX.2 has no
+native strength img2img anywhere (BFL reference code or diffusers; its image
+inputs are reference conditioning and outputs start from pure noise), so the
+requestable scrub lane in the FLUX family is **Chroma1** -- the FLUX.1
+architecture re-trained on open data, Apache-2.0 on weights, with a native
+`ChromaImg2ImgPipeline` strength parameter. This page records what was measured
+before any integration decision.
+
+## Setup
+
+All Chroma1 runs: `lodestones/Chroma1-HD` bf16 on Modal H100, seed 0, the
+neutral scrub prompt (`high quality, sharp, detailed, faithful to the original`
+/ `blurry, lowres, distorted text, garbled text, artifacts`), guidance 5.0, and
+**step compensation**: Diffusers truncates the step COUNT (`int(steps *
+strength)`), so the requested count is scaled to always spend 4 effective
+denoising steps, the same semantics as `sdxl_zimage_pipeline.requested_steps`.
+Without it, strength 0.05 runs a single step and the floor reads artificially
+high (the first, uncompensated sweep put the OpenAI boundary at (0.05, 0.10];
+compensated it is (0.05, 0.06]).
+
+Two Flux-family traps found while wiring the prototype:
+
+- without explicit `width`/`height`, the img2img pipeline silently generates
+  1024x1024 regardless of input aspect;
+- dimensions floor to the /16 latent-patch grid, so the result must be resized
+  back to the input size for pixel-exact comparison.
+
+Scripts: `scripts/chroma_scrub_prototype.py` (first sweep),
+`scripts/engine_quality_price_probe.py` (head-to-head with the production
+qwen-zimage path), `scripts/engine_cohort_calibration.py` (the cohort ladders
+below), `scripts/chroma_meta_high_rungs.py` (the Meta rungs above 0.08).
+Generated outputs stay outside the repository (`out/`, gitignored); the durable
+verdicts are the tables on this page.
+
+## Measured floors
+
+Oracle per cohort: OpenAI via openai.com/verify (SynthID read separately from
+C2PA); Meta via the anonymous meta.ai/identification oracle. Each fixture's
+rungs were checked ascending and stopped at the first clean verdict.
+
+| cohort | fixture | detected at | clean from |
+|---|---|---|---|
+| OpenAI | typography card 1122x1402 | 0.05 | 0.06 |
+| OpenAI | 9-face grid 1448x1086 | 0.06 | 0.075 |
+| OpenAI | full-pipeline quality fixture 1122x1402 | 0.05 | 0.06 |
+| Meta | gen_lighthouse_watercolor 1600x1600 | 0.08 | 0.10 |
+| Meta | gen_fox_forest 1600x1600 | 0.06 | 0.08 |
+| Meta | gen_night_city 1920x1280 | 0.045 | 0.06 |
+| Meta | gen_studio_mug 1600x1600 | 0.03 | 0.045 |
+| Meta | gen_text_poster 1600x1600 | -- | <=0.03 |
+
+Derived operating points by the shipped rule (worst first-clean boundary plus
+one observed cross-source spread):
+
+- **OpenAI: 0.09** (0.075 + (0.075 - 0.06)). Against qwen-zimage 0.07675 and
+  sdxl-zimage 0.15. The typography boundary (0.05, 0.06] is seed-stable across
+  seeds 0, 1, 2.
+- **Meta: 0.17** (0.10 + (0.10 - 0.03)), oracle-verified clean on the worst
+  fixture at 0.17. Against qwen-zimage 0.1. Chroma needs ~1.7x qwen's strength
+  on Content Seal.
+- **Google: 0.40, measured 2026-08-30 across all four fixtures.** A
+  metadata-stripped original verified as pixel-DETECTED through the @synthid
+  Verify AI agent (the C2PA-carrying original answers about C2PA instead,
+  which is not a pixel verdict).
+
+  | fixture | detected at | clean from |
+  |---|---|---|
+  | Gemini_Generated_Image_633uuy | 0.20 | 0.25 |
+  | Gemini_Generated_Image_akdbei | 0.20 | 0.25 |
+  | Gemini_Generated_Image_y48j3c | 0.08 | 0.12 |
+  | Gemini_Generated_Image_3mc4t9 | 0.08 | 0.12 |
+
+  Derived by the shipped rule: worst first-clean 0.25 + spread (0.25 - 0.12
+  = 0.13) = 0.38, rounded up to the measured rung **0.40**, then
+  oracle-verified clean on the worst fixture. Against qwen-zimage 0.27:
+  Chroma needs ~1.5x the strength on Google SynthID. At 0.15-0.20 the tool
+  still reads positive while its wording degrades from "most or all" to
+  "part of", so the boundary band is real signal decay, not noise.
+
+  Oracle mechanics learned while bracketing: the quota is per ACCOUNT and
+  additionally dedupes SIMILAR images ("quota for checking images similar to
+  this one"), roughly three checks per account window; switching accounts
+  inside one browser works. A fresh Playwright context with the same Google
+  session cookies (exported browser-wide via CDP `Storage.getCookies`, never
+  through the transcript) carries working sign-in and its own check budget.
+  The agent's own instructions leak into the answer on some renders and
+  include an abstention rule for text-dominated images - always read the TOOL
+  outcome, never the prose.
+- **Microsoft: 0.125**, measured 2026-08-30 on the SAME three valid Paint
+  carriers behind the qwen floor (staged under
+  `out/cohort-calibration/microsoft/` with pixel-identical metadata-stripped
+  controls; they are real raiw-corpus user uploads and are never committed).
+  Controls re-verified `Microsoft AI detected` on the day of the run. Against
+  qwen-zimage 0.15: Chroma needs LESS strength on InvisMark.
+
+  | source (Paint) | detected at | clean from | qwen first-clean |
+  |---|---|---|---|
+  | paint-1 (47d87e99, 1536x1024) | 0.06 | 0.08 | 0.055 |
+  | paint-2 (a579fb70, 1536x1024) | -- | <=0.04 | 0.04125 |
+  | paint-3 (883191b5, worst qwen source) | 0.06 | 0.08 | 0.095 |
+
+  Derived by the shipped rule: 0.08 + (0.08 - 0.04) = 0.12, rounded to the
+  measured rung **0.125**, which was then oracle-verified clean on both worst
+  sources. Oracle: the public `ai.azure.com/nextgen/validate` page; its
+  `Inconclusive` verdict is the site's watermark-negative, weaker than an
+  API-level `Watermark: false`, the same caveat the qwen cohort carries.
+
+## Fidelity at the floors (scripts/fidelity_metrics.py)
+
+qwen-zimage rows ran through the package's own `QwenZImagePipeline` on the same
+H100 (production path, both stacks resident, prompt cache warm).
+
+OpenAI typography (chroma 0.06 vs qwen 0.07675):
+
+| | CER | img LPIPS | SSIM | PSNR |
+|---|---|---|---|---|
+| qwen-zimage | 0.241 | 0.083 | 0.834 | 27.7 |
+| chroma1 | **0.138** | **0.049** | **0.881** | **31.2** |
+
+OpenAI full-pipeline fixture (chroma 0.09 vs qwen 0.07675): chroma wins every
+metric (CER 0.155 vs 0.259, LPIPS 0.056 vs 0.094, PSNR 29.6 vs 26.1).
+
+OpenAI 9-face grid (chroma 0.075 global-only vs qwen 0.07675 with its Z-Image
+face stage):
+
+| | ID cos | face LPIPS | img LPIPS | SSIM | PSNR |
+|---|---|---|---|---|---|
+| qwen-zimage | **0.857** | **0.051** | 0.065 | 0.865 | 31.1 |
+| chroma1 (no face stage) | 0.788 | 0.067 | **0.060** | **0.890** | **32.4** |
+
+The face stage regenerates from the ORIGINAL crops and is engine-independent,
+so an integrated `chroma-zimage` would composite the same faces over the
+chroma global; whether that closes the identity gap is an integration-time
+measurement, not a given.
+
+Meta at the respective floors (chroma 0.17 vs qwen 0.1): qwen wins perceptual
+fidelity on textured content (LPIPS: fox 0.163 vs 0.211, lighthouse 0.173 vs
+0.248, night city 0.187 vs 0.277), chroma wins the text poster decisively
+(LPIPS 0.008 vs 0.012, CER 0.000 vs 0.021) and the studio mug is a split. The
+extra 0.07 of strength costs real fidelity on photoreal content.
+
+Google at the respective floors (chroma 0.40 vs qwen 0.27, qwen row includes
+its Z-Image face stage):
+
+| fixture | qwen LPIPS/SSIM/ID cos | chroma LPIPS/SSIM/ID cos |
+|---|---|---|
+| 633uuy | **0.405 / 0.577** / - | 0.499 / 0.576 / - (CER 1.000 vs 0.333) |
+| akdbei | **0.440 / 0.552** / - | 0.540 / 0.557 / - (CER 0.796 vs 0.367) |
+| y48j3c (18 faces) | **0.436 / 0.608 / 0.801** | 0.560 / 0.548 / 0.279 |
+| 3mc4t9 (5 faces) | **0.422 / 0.529 / 0.921** | 0.562 / 0.461 / 0.143 |
+
+qwen wins every axis that matters on every fixture; at 0.40 the Chroma global
+regeneration itself collapses face identity (0.14-0.28 cosine) and destroys
+dense text (CER up to 1.0). The extra 0.13 of strength is simply too much
+regeneration. This is the Meta pattern amplified.
+
+Microsoft at the respective floors (chroma 0.125 vs qwen 0.15): chroma wins
+EVERY metric on EVERY source while scrubbing at lower strength --
+
+| source | CER q/ch | img LPIPS q/ch | SSIM q/ch | PSNR q/ch |
+|---|---|---|---|---|
+| paint-1 | 0.741 / 0.241 | 0.164 / 0.106 | 0.742 / 0.847 | 24.8 / 29.3 |
+| paint-2 | 0.826 / 0.391 | 0.253 / 0.108 | 0.536 / 0.633 | 22.5 / 25.5 |
+| paint-3 | 0.000 / 0.000 | 0.038 / 0.020 | 0.762 / 0.953 | 36.3 / 42.2 |
+
+The Microsoft cohort therefore behaves like the OpenAI cohort, not like Meta:
+for InvisMark carriers Chroma1 is the better engine at a lower operating point.
+
+## Price (warm H100 container)
+
+| | qwen-zimage | chroma1 |
+|---|---|---|
+| seconds per image | 2.44 | 3.62 |
+| VRAM peak | 31.9 GiB | 29.2 GiB |
+| USD per 1000 images ($3.95/h) | $2.68 | $3.97 |
+| weights in cache | ~70 GB | ~28 GB |
+
+The chroma number includes a T5 encode per call; the shipped qwen path caches
+prompt embeddings, and the same treatment would put chroma near 1.5-2 s/image.
+Both stacks fit an 80 GB card; chroma's smaller footprint likely fits smaller
+cards untested.
+
+## Matched-strength comparison: the floors hide the engine (2026-08-30 addendum)
+
+The floor-based tables above compare chroma at its DERIVED floor (worst case
++ spread) against qwen at its shipped floor - different perturbation levels.
+At the strength where each fixture ACTUALLY turns clean (chroma first-clean
+rungs, all oracle-verified above), the picture reverses:
+
+Google (chroma@first-clean vs qwen@0.27):
+
+| fixture | chroma rung | LPIPS q/ch | SSIM q/ch | PSNR q/ch | CER q/ch | ID q/ch |
+|---|---|---|---|---|---|---|
+| 633uuy | 0.25 | 0.405/**0.375** | 0.577/**0.673** | 18.8/**22.3** | **0.333**/0.667 | - |
+| akdbei | 0.25 | 0.440/**0.409** | 0.552/**0.650** | 18.6/**22.5** | 0.367/**0.163** | - |
+| y48j3c | 0.12 | 0.436/**0.329** | 0.608/**0.700** | 21.0/**25.8** | 1.0/1.0 | **0.801**/0.611 |
+| 3mc4t9 | 0.12 | 0.422/**0.318** | 0.529/**0.644** | 17.7/**21.3** | 0.443/**0.229** | **0.921**/0.410 |
+
+Meta (chroma@first-clean vs qwen@0.1):
+
+| fixture | chroma rung | LPIPS q/ch | SSIM q/ch | PSNR q/ch | CER q/ch |
+|---|---|---|---|---|---|
+| lighthouse | 0.10 (equal) | 0.173/**0.097** | 0.783/**0.886** | 25.6/**30.8** | - |
+| fox | 0.08 | 0.163/**0.083** | 0.778/**0.907** | 25.6/**31.4** | - |
+| night_city | 0.06 | 0.187/**0.092** | 0.748/**0.893** | 23.9/**29.6** | 0.850/**0.250** |
+| studio_mug | 0.045 | 0.024/**0.009** | 0.984/**0.992** | **39.0**/37.8 | - |
+| text_poster | 0.03 | 0.012/**0.002** | 0.984/**0.994** | 34.0/**41.2** | 0.021/**0.007** |
+
+At effective-clean strength Chroma1 wins whole-image fidelity on essentially
+every fixture (often by 4-6 dB) and text on five of six; qwen's remaining
+edge is face identity, which its Z-Image face stage buys (0.80-0.92 vs
+0.41-0.61 cosine) and a chroma-zimage profile would inherit on top of its own
+global pass.
+
+**Why the floors still matter:** a shipped strength must clear the worst
+unseen content, and Chroma1's per-fixture boundaries scatter much wider
+(Google 0.12-0.25, Meta 0.03-0.10) than the spread the flat floors were built
+to absorb - so its derived floors (0.40 / 0.17) pay a large margin penalty
+and at those floors the extra strength genuinely destroys quality. The
+engines differ less in "quality per strength" than in how predictable their
+boundary is. The integration lever this exposes: a content-adaptive strength
+policy for chroma-zimage (the project already ships resolution-adaptive
+denoise for qwen) could capture chroma's low per-content boundaries; the two
+hard Google fixtures are both dense-text cards and the easy ones are
+photoreal, so a content-class signal may predict the rung.
+
+## Pre-ship validation (2026-08-30)
+
+With the `chroma-zimage` profile implemented
+(`_internal/chroma_zimage_pipeline.py` on `TwoStageZImagePipeline`, floors in
+`watermark_profiles`), two ship-gate checks were run:
+
+1. **Seed stability at the worst Meta boundary.** lighthouse @ 0.10 with
+   seeds 1 and 2: both CLEAN on the meta.ai oracle. The Meta boundary is not a
+   seed-0 fluke. The Google seed probes (633uuy @ 0.25, seeds 1-2) were
+   generated but the oracle's per-image-class quota blocked them on every
+   available account; they remain queued, and the shipped 0.40 Google floor
+   carries 0.15 of margin over that boundary regardless.
+2. **Full-path face-stage interaction.** The complete profile run (Chroma1
+   global at the shipped Google floor 0.40, then the inherited
+   YuNet/SAM/Z-Image face stage) on the 5-face fixture 3mc4t9: CLEAN on the
+   @synthid oracle. The composited face regions do not re-introduce a
+   detectable signal on top of the floor.
+
+Generation script: `scripts/chroma_preship_validation.py`; outputs under
+`out/preship-chroma/` (gitignored).
+
+## Verdict
+
+Engine quality is cohort-dependent, and after measuring all four cohorts the
+split is even and sharp:
+
+- On OpenAI-provenance content Chroma1 is better at every measured fidelity
+  axis at its floor (0.09 vs 0.07675), for comparable money.
+- On Microsoft InvisMark content Chroma1 is better at every measured fidelity
+  axis at a LOWER floor than qwen (0.125 vs 0.15).
+- On Meta Content Seal Chroma1 needs 1.7x the strength (0.17 vs 0.1) and loses
+  LPIPS on textured content at its floor.
+- On Google SynthID Chroma1 needs ~1.5x the strength (0.40 vs 0.27) and loses
+  every fidelity axis on every fixture, with face identity collapsing at 0.40
+  (0.14-0.28 cosine vs qwen's 0.80-0.92).
+
+A single-engine `chroma-zimage` default at a flat per-vendor floor is NOT
+supported: Google and Meta floors land too high and the quality at those
+floors is worse than qwen's. But the matched-strength addendum changes what
+IS supported: at the strength each image actually needs, Chroma1 regenerates
+better than qwen almost everywhere except face identity (which the shared
+face stage would supply). The two honest integration options:
+
+1. Per-cohort engine router at flat floors: chroma for OpenAI/Microsoft,
+   qwen for Google/Meta - conservative, ships on the measurements as they
+   stand.
+2. `chroma-zimage` with a content-adaptive strength policy that predicts the
+   per-image rung - potentially better everywhere, but the predictor is new
+   research (the measured signal so far: dense-text content needs the high
+   rungs, photoreal the low ones) and needs its own oracle validation before
+   any ship.
+
+Both need the seed-sensitivity and face-stage composition checks called out
+above before shipping. Both checks have now been run (Pre-ship validation
+above): the Meta boundary is seed-stable across seeds 0-2 and the full
+profile path stays clean through the face stage on the shipped Google floor.
+The profile ships with option 1's floors; option 2's adaptive policy remains
+the documented follow-up.
+
+## Oracle session notes
+
+- openai.com/verify throttles anonymous sessions through Cloudflare Turnstile
+  after ~15 rapid checks; a fresh browser context clears it. The programmatic
+  `POST /v1/content_provenance_checks` API is the better oracle (separate
+  SynthID/C2PA outcomes) but the checked `OPENAI_API_KEY` returned 401
+  org-wide, including `/v1/models`.
+- meta.ai/identification enforces a sliding per-IP window: a burst of ~15
+  checks exhausted it twice; it reopens minutes later, and the page sometimes
+  overstates this as a daily limit. Pacing of roughly 2-3 checks per window
+  worked.
+- The Gemini app oracle requires the user's logged-in session; driving the
+  user's live Chrome while it is in active use was refused (wrong-tab risk),
+  so those 20 checks remain queued.

@@ -1,9 +1,9 @@
-"""The qwen-zimage recipe with an SDXL global stage.
+"""The sdxl-zimage recipe with an SDXL global stage.
 
 Only the global regeneration model changes. The face stage is inherited verbatim
-from :class:`QwenZImagePipeline` -- same YuNet detection, same SAM masks, same
+from :class:`TwoStageZImagePipeline` -- same YuNet detection, same SAM masks, same
 Z-Image Turbo repair of the original crops, same feathered compositing -- so a
-change there cannot silently diverge between the two profiles.
+change there cannot silently diverge between the profiles.
 
 Three pieces cannot be shared, because they are bound to the architecture: the
 ControlNet, the four-step distillation LoRA, and the sampler. Strength is bound to
@@ -19,13 +19,14 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
 from PIL import Image
 
-from remove_ai_watermarks._internal.qwen_zimage_pipeline import (
-    GLOBAL_STEPS,
-    QwenZImagePipeline,
+from remove_ai_watermarks._internal.two_stage_pipeline import (
+    _GLOBAL_NEGATIVE,
+    _GLOBAL_PROMPT,
+    TwoStageZImagePipeline,
     build_canny_control_image,
 )
 from remove_ai_watermarks._internal.watermark_profiles import (
@@ -40,6 +41,10 @@ log = logging.getLogger(__name__)
 SDXL_VAE_MODEL_ID = "madebyollin/sdxl-vae-fp16-fix"
 # SDXL aligns to an 8-pixel latent grid, against Qwen's 16.
 _LATENT_GRID = 8
+# SDXL-Lightning's own four-step distillation, at the strength its authors document.
+# The reference graph loads the Qwen LoRA at 0.8; carrying that number to a different
+# LoRA on a different architecture would be imitation, not parity.
+SDXL_STEPS = 4
 
 
 def sdxl_target_size(width: int, height: int) -> tuple[int, int]:
@@ -63,14 +68,16 @@ def requested_steps(effective_steps: int, strength: float) -> int:
 
 
 @dataclass
-class SdxlZImagePipeline(QwenZImagePipeline):
+class SdxlZImagePipeline(TwoStageZImagePipeline):
     """Lazy runtime for the SDXL global stage plus the inherited face stage."""
+
+    profile_name: ClassVar[str] = "sdxl-zimage"
 
     def __post_init__(self) -> None:
         super().__post_init__()
         self._sdxl_pipe: Any = None
 
-    def _load_sdxl(self) -> Any:
+    def _load_global(self) -> Any:
         if self._sdxl_pipe is not None:
             return self._sdxl_pipe
         self._require_cuda()
@@ -96,9 +103,6 @@ class SdxlZImagePipeline(QwenZImagePipeline):
             add_watermarker=False,
             **token,
         ).to(self.device)
-        # SDXL's own four-step distillation, at the strength its authors document.
-        # The reference graph loads the Qwen LoRA at 0.8; carrying that number to a
-        # different LoRA on a different architecture would be imitation, not parity.
         pipe.load_lora_weights(hf_hub_download(SDXL_LIGHTNING_MODEL_ID, SDXL_LIGHTNING_PATTERN, **token))
         pipe.fuse_lora()
         # SDXL-Lightning is distilled against trailing timestep spacing.
@@ -106,29 +110,19 @@ class SdxlZImagePipeline(QwenZImagePipeline):
         self._sdxl_pipe = pipe
         return pipe
 
-    def preload(self, *, global_only: bool = False) -> None:
-        """Eagerly load the mandatory stage and, by default, the face stack."""
-        from remove_ai_watermarks._internal.qwen_zimage_pipeline import _yunet_model_path
-
-        self._load_sdxl()
-        _yunet_model_path()
-        if not global_only:
-            self._load_zimage()
-            self._load_sam()
-
     def _run_global(self, image: Image.Image, strength: float, seed: int | None) -> Image.Image:
         import torch
 
-        pipe = self._load_sdxl()
+        pipe = self._load_global()
         target = sdxl_target_size(image.width, image.height)
         prepared = image if image.size == target else image.resize(target, Image.Resampling.LANCZOS)
         control = build_canny_control_image(prepared)
-        steps = requested_steps(GLOBAL_STEPS, strength)
-        self._progress(f"Running SDXL Canny pass: strength={strength:.4f}, steps={GLOBAL_STEPS} of {steps}...")
+        steps = requested_steps(SDXL_STEPS, strength)
+        self._progress(f"Running SDXL Canny pass: strength={strength:.4f}, steps={SDXL_STEPS} of {steps}...")
         generator = torch.Generator(device=self.device).manual_seed(seed) if seed is not None else None
         result = pipe(
-            prompt=self._global_prompt(),
-            negative_prompt=self._global_negative(),
+            prompt=_GLOBAL_PROMPT,
+            negative_prompt=_GLOBAL_NEGATIVE,
             image=prepared,
             control_image=control,
             controlnet_conditioning_scale=float(self.controlnet_conditioning_scale),
@@ -140,15 +134,3 @@ class SdxlZImagePipeline(QwenZImagePipeline):
         if result.size != image.size:
             result = result.resize(image.size, Image.Resampling.LANCZOS)
         return result.convert("RGB")
-
-    @staticmethod
-    def _global_prompt() -> str:
-        from remove_ai_watermarks._internal.qwen_zimage_pipeline import _GLOBAL_PROMPT
-
-        return _GLOBAL_PROMPT
-
-    @staticmethod
-    def _global_negative() -> str:
-        from remove_ai_watermarks._internal.qwen_zimage_pipeline import _GLOBAL_NEGATIVE
-
-        return _GLOBAL_NEGATIVE

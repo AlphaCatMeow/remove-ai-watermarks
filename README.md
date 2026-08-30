@@ -192,7 +192,7 @@ remains useful for unusually important files or after provider changes, but it
 is not a product result state.
 
 For invisible watermark removal, install the `qwen-zimage` extra. **An NVIDIA GPU
-is required**: both profiles are CUDA-only, and there is no CPU or MPS fallback.
+is required**: all profiles are CUDA-only, and there is no CPU or MPS fallback.
 
 ```bash
 uv tool install --force "remove-ai-watermarks[qwen-zimage]"
@@ -243,7 +243,9 @@ uv run remove-ai-watermarks visible demo_banana_before.png \
 `qwen-zimage` is the default profile: a Qwen-Image-2512 Lightning pass under Canny
 ControlNet, followed by SAM-masked Z-Image repair of any detected face. The
 alternative, `sdxl-zimage`, swaps the global stage for SDXL and keeps the same face
-stage. Both are CUDA only.
+stage. A third profile, `chroma-zimage`, uses the Apache-2.0 Chroma1 global pass
+with its own flat vendor floors; see `docs/chroma1-engine-research.md` for the
+calibration. All are CUDA only.
 
 ```bash
 uv tool install --force "remove-ai-watermarks[qwen-zimage]"
@@ -416,7 +418,7 @@ invisible removal.
   The shipped profile is oracle-certified, but no public local decoder can
   certify an arbitrary output at runtime. Recheck unusually important outputs
   after provider changes.
-- Invisible-watermark removal requires CUDA. Both profiles refuse any other
+- Invisible-watermark removal requires CUDA. All profiles refuse any other
   device at construction rather than falling back to one that cannot run them.
   Visible removal, metadata stripping and `identify` still run anywhere.
 - Provider watermark systems can change. Validate important outputs with the

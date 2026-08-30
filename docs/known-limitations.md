@@ -185,7 +185,7 @@ path has not yet answered.
 
 ### Strength is content and seed dependent
 
-The two profiles resolve an unset strength differently, because different things
+The profiles resolve an unset strength differently, because different things
 were measured for each.
 
 `qwen-zimage` reads unknown content from the resolution-adaptive denoise curve.
@@ -208,10 +208,23 @@ values are flat rather than a curve because flat values are what was measured: e
 verdict came from a fixed strength at one size, and no size dependence has been
 established for that stage.
 
-An explicit `--strength` overrides both. The defaults are operating points, not
-universal guarantees. Near a removal threshold, different content or a different
-random seed may change the verifier result, which is why both profiles are
-certified at a fixed seed. The live resolver is
+`chroma-zimage` also reads a flat ladder from the provenance cohort, measured
+2026-08-29/30 across the four vendor oracles (full record:
+[`chroma1-engine-research.md`](chroma1-engine-research.md)):
+
+- OpenAI: `0.09` (below qwen's `0.07675` is false economy neither way -- the
+  matched-strength fidelity favors Chroma1 on this cohort);
+- Microsoft InvisMark: `0.125` (below qwen's `0.15`);
+- Google: `0.40` (above qwen's `0.27`; at this floor the regeneration destroys
+  dense text and collapses face identity -- the tradeoff that motivates the
+  documented content-adaptive follow-up);
+- Meta Content Seal: `0.17` (above qwen's `0.1`);
+- unknown: `0.40`, following the strictest measured cohort.
+
+An explicit `--strength` overrides all three. The defaults are operating points,
+not universal guarantees. Near a removal threshold, different content or a
+different random seed may change the verifier result, which is why the profiles
+are certified at a fixed seed. The live resolver is
 [`watermark_profiles.py`](../src/remove_ai_watermarks/_internal/watermark_profiles.py).
 
 ### Pipelines have different quality tradeoffs
@@ -272,7 +285,7 @@ device and re-reads every parameter from disk on each stage transition.
 
 Invisible-watermark removal refuses any device but CUDA at construction. There is
 no MPS out-of-memory fallback that continues on CPU, and no lighter profile to
-drop to: both remaining profiles need an NVIDIA GPU.
+drop to: all three profiles need an NVIDIA GPU.
 
 When a run does not fit, the levers are `--tile` (native geometry, tiled
 diffusion), `--max-resolution` (an explicit downscale), and `--cpu-offload`.

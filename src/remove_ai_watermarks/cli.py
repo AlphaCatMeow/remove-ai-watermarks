@@ -162,7 +162,7 @@ def _resolved_strength_for_display(
 ) -> float:
     """Resolve the same profile-specific strength the engine will execute.
 
-    One call for both profiles, so the printed value cannot drift from the executed
+    One call for every profile, so the printed value cannot drift from the executed
     one; the size is what qwen-zimage derives its strength from.
     """
     from PIL import Image
@@ -254,8 +254,10 @@ _PIPELINE_CHOICES = list(PROFILE_CHOICES)
 _PIPELINE_HELP = (
     "Pipeline profile. qwen-zimage (DEFAULT) = Qwen-Image-2512 + Lightning + Canny, "
     "followed by SAM-masked Z-Image face repair; sdxl-zimage = the same recipe and the "
-    "same face stage on an SDXL global pass, which needs more denoise. Both are "
-    "CUDA-ONLY -- install the qwen-zimage extra. There is no CPU or MPS profile for "
+    "same face stage on an SDXL global pass, which needs more denoise; chroma-zimage = "
+    "the same face stage on an Apache-2.0 Chroma1 global pass with lower OpenAI and "
+    "Microsoft floors and higher Google/Meta floors (docs/chroma1-engine-research.md). "
+    "All are CUDA-ONLY -- install the qwen-zimage extra. There is no CPU or MPS profile for "
     "invisible-watermark removal."
 )
 
@@ -304,7 +306,7 @@ _seed_option = click.option(
     "--seed",
     type=int,
     default=None,
-    help="Random seed for reproducibility. Default 0: both profiles are certified "
+    help="Random seed for reproducibility. Default 0: all profiles are certified "
     "at a fixed seed, because SynthID removal near the strength floor is seed-dependent.",
 )
 _hf_token_option = click.option("--hf-token", type=str, default=None, help="Hugging Face API token.")

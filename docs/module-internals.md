@@ -940,12 +940,12 @@ is the source of truth for:
 - profile names and their underscore spellings;
 - the fixed seed;
 - the SDXL global-stage checkpoint id (`SDXL_MODEL_ID`) and the Canny ControlNet id;
-- strength resolution for both profiles.
+- strength resolution for every profile.
 
-The current profiles are `qwen-zimage` (the default) and `sdxl-zimage`, and both
-are CUDA-only. `controlnet`, `sdxl`, `qwen` and `default` were removed rather than
-kept as a CPU path, and are rejected rather than aliased onward. There is no
-content-dependent automatic router.
+The current profiles are `qwen-zimage` (the default), `sdxl-zimage`, and
+`chroma-zimage`, and all three are CUDA-only. `controlnet`, `sdxl`, `qwen` and
+`default` were removed rather than kept as a CPU path, and are rejected rather
+than aliased onward. There is no content-dependent automatic router.
 
 `qwen-zimage` normally resolves global denoise from image area for unknown content.
 Measured provider cohorts bypass that curve with flat operating points. The values,
@@ -963,8 +963,10 @@ by the profile, so none of them appears in `WatermarkRemover.__init__`,
 then rejected several frames down; a signature that refuses the argument outright
 fails where the caller can act on it, and stops a wrapper from threading a value
 that would silently do nothing. The step count and CFG live with the stage that
-runs them (`GLOBAL_STEPS`, `FACE_STEPS`, `GLOBAL_CFG`, `FACE_CFG` in
-`qwen_zimage_pipeline.py`). The dtype is likewise profile-owned: see "Face-stage
+runs them: `GLOBAL_STEPS`/`GLOBAL_CFG` with the Qwen global stage
+(`qwen_zimage_pipeline.py`), `SDXL_STEPS` with the SDXL one
+(`sdxl_zimage_pipeline.py`), and `FACE_STEPS`/`FACE_CFG` with the shared face
+stage (`two_stage_pipeline.py`). The dtype is likewise profile-owned: see "Face-stage
 dtype" for what an override cost the last time one existed.
 
 `device` is the exception and remains a library parameter: `None` or `"auto"`
@@ -991,7 +993,7 @@ same pixels. They diverged before, in opposite directions, for exactly this knob
 
 The global and face prompts are calibrated model inputs, and the Canny edge map
 uses fixed thresholds of `_CANNY_LOW = 13` / `_CANNY_HIGH = 64`
-(`qwen_zimage_pipeline.py`). Treat those values as behavioral compatibility
+(`two_stage_pipeline.py`). Treat those values as behavioral compatibility
 contracts: a refactor must preserve them, and any deliberate change requires
 image-quality evaluation rather than only a unit-test pass. The prompt and
 edge-map regression guards are
@@ -1039,8 +1041,19 @@ Regression coverage:
 
 ### Qwen plus Z-Image
 
+The profiles are siblings of one shared recipe rather than a chain:
+[`_internal/two_stage_pipeline.py`](../src/remove_ai_watermarks/_internal/two_stage_pipeline.py)
+holds `TwoStageZImagePipeline`, the base that owns everything profile-independent
+(the Z-Image face stage with YuNet detection and SAM masks, sizing, compositing,
+the prompt cache, and the `run`/`preload` orchestration). A profile subclass
+implements `_load_global` and `_run_global` for its regeneration model and may
+implement `_vae_roundtrip` to expose that stack's VAE as a verified-text donor;
+nothing else differs, and a test asserts the shared methods are the same objects
+on every subclass. Adding a third global stage means implementing those hooks,
+not inheriting from another profile's pipeline.
+
 [`_internal/qwen_zimage_pipeline.py`](../src/remove_ai_watermarks/_internal/qwen_zimage_pipeline.py)
-implements the fixed CUDA-only two-stage profile:
+implements the fixed CUDA-only two-stage profile on that base:
 
 1. Qwen Image with Canny conditioning regenerates the frame.
 2. YuNet locates faces, SAM builds masks, and Z-Image regenerates the selected
@@ -1140,13 +1153,43 @@ oracle outcomes, and the DiffSynth/GGUF, scheduler, detector, and seed caveats a
 recorded in
 [`data/evaluations/fidelity/upstream-v2-reproduction-2026-08-13.csv`](../data/evaluations/fidelity/upstream-v2-reproduction-2026-08-13.csv).
 
+### Chroma1 plus Z-Image
+
+[`_internal/chroma_zimage_pipeline.py`](../src/remove_ai_watermarks/_internal/chroma_zimage_pipeline.py)
+runs the same two-stage recipe on a Chroma1-HD (`lodestones/Chroma1-HD`,
+Apache-2.0) global pass through diffusers' `ChromaImg2ImgPipeline`. It is the
+answer to issue #88's FLUX.2 request through the model that actually exposes
+strength-controlled img2img in that family; the full research record,
+including why FLUX.2 itself is not integrable this way, is
+[`chroma1-engine-research.md`](chroma1-engine-research.md).
+
+The profile swaps only the global stage (same inheritance invariant as
+sdxl-zimage, asserted by the same test shape). Three things are bound to the
+calibration and must not drift: the NEUTRAL prompt (`high quality, sharp,
+detailed, faithful to the original` -- deliberately NOT the shared canny-stage
+prompt, which was never calibrated against Chroma1), guidance 5.0, and the
+four-EFFECTIVE-step schedule with `requested_steps` compensation (the same
+Diffusers truncation trap sdxl-zimage documents). There is no Canny
+conditioning: the floors were measured on a plain strength pass.
+
+The flat vendor floors (`CHROMA_ZIMAGE_*_STRENGTH` in watermark_profiles):
+OpenAI 0.09 and Microsoft 0.125 (both BELOW qwen's, with better
+matched-strength fidelity), Google 0.40 and Meta 0.17 (both ABOVE qwen's,
+because Chroma1's per-fixture boundaries scatter wider). The
+matched-strength addendum in the research doc is the honest read: at the
+strength each image actually needs, Chroma1 regenerates better almost
+everywhere except face identity (which the inherited Z-Image face stage
+supplies); at the flat worst-case floors it destroys dense text and face
+identity. A content-adaptive strength policy is the documented follow-up.
+
 ### SDXL plus Z-Image
 
 [`_internal/sdxl_zimage_pipeline.py`](../src/remove_ai_watermarks/_internal/sdxl_zimage_pipeline.py)
-runs the same two-stage recipe on an SDXL global pass. `SdxlZImagePipeline` subclasses
-`QwenZImagePipeline` and overrides only `_run_global` and `preload`, so the face stage
-is inherited rather than copied and cannot drift between the profiles; a test asserts
-the shared methods are the same objects.
+runs the same two-stage recipe on an SDXL global pass. `SdxlZImagePipeline`
+subclasses `TwoStageZImagePipeline` and implements only the global stage
+(`_load_global`, `_run_global`), so the face stage is inherited rather than copied
+and cannot drift between the profiles; a test asserts the shared methods are the
+same objects.
 
 Four things are architecture-bound and swap with the model: the ControlNet
 (`xinsir/controlnet-canny-sdxl-1.0`), the four-step distillation LoRA
@@ -1184,7 +1227,7 @@ avoid model downloads, so nothing exercised the loader. The lesson is narrower t
 was a dtype the subclass silently changed out from under it.
 
 Note what the seam is, because it decides where the fix belongs.
-`SdxlZImagePipeline._load_sdxl` hardcodes fp16 for its own ControlNet, VAE and
+`SdxlZImagePipeline._load_global` hardcodes fp16 for its own ControlNet, VAE and
 pipeline, so `self.torch_dtype` was never actually the global stage's dtype on this
 profile -- its only remaining readers were face-stage code. SAM was the second one:
 it never crashed, because it casts its own inputs and leaves through `.float()`, but it
@@ -1271,7 +1314,7 @@ within one pipeline.
 `_cache_static_prompt_embeddings` therefore persists what the text encoder produced
 under `_model_cache_dir()/prompt-embeddings`, keyed by cache version, model id,
 pipeline output params, and the exact prompt string. Once that file exists,
-`_load_qwen` and `_load_zimage` drop the text-encoder `ModelConfig` from the model
+`_load_global` and `_load_zimage` drop the text-encoder `ModelConfig` from the model
 stack entirely and serve the stored tensors instead. Measured on an H100 volume in
 August 2026, that removes **15.45 GiB** (Qwen2.5-VL) and **7.49 GiB** (Z-Image) of a
 **87.6 GiB** per-request read, worth a median **11.76 s** and **4.10 s** of load time
