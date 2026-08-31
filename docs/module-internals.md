@@ -1184,7 +1184,15 @@ research doc is the honest read: at the strength each image actually needs,
 Chroma1 regenerates better almost everywhere except face identity (which the
 inherited Z-Image face stage supplies); at the flat worst-case floors it
 destroys dense text and face identity. The Google face-content arm is the
-first shipped piece of the content-adaptive policy.
+first shipped piece of the content-adaptive policy. A Meta arm was measured
+on 2026-08-30/31 (docs/chroma1-engine-research.md, expansion section) and
+does not ship: first-cleans from 0.03 to 0.10 form a continuum,
+`flat_ratio` overlaps the hard and easy clusters, and a high-flat
+easy-arm would misroute the harvest-1 portraits. The worst seed-0
+first-clean is still 0.10; botanical seeds 1 and 2 stay DETECTED at
+that rung, which is the margin the 0.17 floor already holds. OpenAI stays on the flat 0.09 floor: extra SynthID-positive carriers
+clear at or below 0.06, including a 2-face file, and only the 9-face
+grid needs 0.075 (seed-stable on 0, 1, 2 via openai.com/research/verify).
 
 ### SDXL plus Z-Image
 

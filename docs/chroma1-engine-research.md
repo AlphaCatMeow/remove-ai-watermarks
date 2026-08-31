@@ -35,7 +35,10 @@ Two Flux-family traps found while wiring the prototype:
 Scripts: `scripts/chroma_scrub_prototype.py` (first sweep),
 `scripts/engine_quality_price_probe.py` (head-to-head with the production
 qwen-zimage path), `scripts/engine_cohort_calibration.py` (the cohort ladders
-below), `scripts/chroma_meta_high_rungs.py` (the Meta rungs above 0.08).
+below), `scripts/chroma_meta_high_rungs.py` (the Meta rungs above 0.08),
+`scripts/chroma_muse_expansion.py` (harvest-2 Meta API fixtures),
+`scripts/chroma_openai_expansion.py` (extra OpenAI SynthID carriers),
+`scripts/chroma_seed_probes.py` (seed-1/2 at measured first-cleans).
 Generated outputs stay outside the repository (`out/`, gitignored); the durable
 verdicts are the tables on this page.
 
@@ -244,8 +247,28 @@ With the `chroma-zimage` profile implemented
    boundary is seed-dependent, which validates the flat 0.40 floor's 0.15
    margin exactly the way the qwen SDXL precedent did (the same image at the
    same strength passing or failing run-to-run near the threshold). Seed 2
-   was blocked by the oracle's per-image-class quota; it is queued but the
-   conclusion is already established by the seed-1 flip.
+   of `seedprobe_google_633uuy_s0.25_seed2.png` was checked twice on
+   2026-08-31 after a human drag-drop. Work Gemini (u/2, Pro,
+   `https://gemini.google.com/u/2/app/ebc7c19d22f85bb9`) with the
+   ordinary question "Is there a SynthID watermark in this image?"
+   auto-titled "SynthID Watermark Detection Results" and returned "No
+   reliable signals were detected indicating how the content was created,
+   and you should look for other supporting evidence from trusted
+   sources." Plus `@synthid` (u/0,
+   `https://gemini.google.com/u/0/app/658b1470307811b7`) with the built-in
+   verification question auto-titled "SynthID Image Verification Results"
+   and returned "No digital watermark from Google AI was detected in this
+   image, indicating that it was not created or edited using Google's AI
+   models." Both are CLEAN. An earlier Plus `@synthid` attempt on the
+   same file hung on "Connecting to Verify AI" with auto-title "SynthID
+   Image Verification Failed"; Flash prose abstained because "the tool
+   response does not confirm" Google AI, which is not a tool verdict.
+   Workspace Gemini's More-uploads menu does not list Photos, but a
+   human drag-drop of a local PNG does attach; one Workspace account in
+   the same Chrome has no Gemini app. Seed 0 CLEAN / seed 1 DETECTED /
+   seed 2 CLEAN at 0.25
+   leaves the 633uuy boundary seed-dependent on the Plus `@synthid`
+   path; the 0.40 floor is already established by the seed-1 flip.
 2. **Full-path face-stage interaction.** The complete profile run (Chroma1
    global at the shipped Google floor 0.40, then the inherited
    YuNet/SAM/Z-Image face stage) on the 5-face fixture 3mc4t9: CLEAN on the
@@ -293,19 +316,190 @@ profile path stays clean through the face stage on the shipped Google floor.
 The profile ships with option 1's floors plus a content-adaptive Google arm
 (face content resolves to 0.125 instead of 0.40, keyed on YuNet detection).
 Option 2's full adaptive policy for the remaining cohorts remains the
-documented follow-up.
+documented follow-up. The Meta arm was measured on 2026-08-30/31 and
+does not have a shippable split; see the expansion section below.
+
+## Meta content-adaptive expansion (2026-08-30/31)
+
+Goal: test whether `flat_ratio` (fraction of 16x16 blocks with luma std < 8)
+predicts Chroma1's first-clean Content Seal boundary well enough to ship a
+Meta arm analogous to Google's face-count split.
+
+**Harvest 1, from a 495-file spaces dump, was not a diverse expansion.**
+Seven "unique" files were staged under `out/cohort-calibration/meta/muse-*`
+(gitignored). After control checks on `meta.ai/identification`:
+
+| fixture | control | first-clean | note |
+|---|---|---|---|
+| muse-1 | CLEAN | -- | seal did not survive the metadata-stripped control |
+| muse-2 | DETECTED | (0.08, 0.10] | photoreal portrait; 0.06 and 0.08 DETECTED, 0.10 CLEAN |
+| muse-3 | DETECTED | (0.015, 0.03] | photoreal portrait, different subject |
+| muse-4 | DETECTED | (0.08, 0.10] | same subject as muse-2/6/7; 0.06 and 0.08 DETECTED, 0.10 CLEAN |
+| muse-5 | -- | -- | byte-identical to committed `gen_lighthouse_watercolor.webp` |
+| muse-6 | DETECTED | (0.06, 0.08] | same subject as muse-4; 0.06 DETECTED, 0.08 CLEAN |
+| muse-7 | DETECTED | (0.045, 0.06] | same subject as muse-2/4/6; 0.045 DETECTED, 0.06 CLEAN |
+
+Five valid new points, four of them near-duplicate portraits of one
+subject, with first-clean already spanning 0.06-0.10 **inside that
+subject**. Google's shipped split had zero overlap between classes and
+identical boundaries inside a class. This harvest cannot support a
+predictor.
+
+`flat_ratio` on the original five plus the new portraits is not monotonic
+with first-clean either (studio_mug 0.973 / 0.045 easy; lighthouse 0.602 /
+0.10 hard; muse-4 0.789 / 0.10 hard). OpenAI stays unshippable for the
+same reason as before: one text fixture vs one face fixture, and the face
+fixture was the harder one, the opposite of Google's split.
+
+**Harvest 2** takes six files from the 2026-08-26 Muse Image API corpus
+(61 independent `muse-image-1.0` generations, no hash overlap with the
+committed five), chosen to span class and `flat_ratio`:
+
+| fixture | class | flat_ratio | edge_density |
+|---|---|---|---|
+| architecture_mosque | dense architecture | 0.037 | 0.367 |
+| product_sneaker | product / high-flat | 0.874 | 0.018 |
+| text_poster_bakery | text | 0.368 | 0.191 |
+| portrait_weathered_fisherman | photoreal portrait | 0.470 | 0.108 |
+| illustration_watercolor_botanical | illustration | 0.442 | 0.089 |
+| scene_tokyo_alley | busy scene | 0.258 | 0.175 |
+
+Script: `scripts/chroma_muse_expansion.py`. Outputs under
+`out/cohort-calibration/meta-api/` (gitignored). Chroma1 ladders (seven
+rungs, seed 0, four effective steps) ran for all six. Oracle
+2026-08-31, anonymous `playwright-isolated` against
+`meta.ai/identification`. All six controls DETECTED (valid carriers).
+
+| fixture | flat_ratio | detected at | clean from |
+|---|---|---|---|
+| architecture_mosque | 0.037 | 0.08 | 0.10 |
+| illustration_watercolor_botanical | 0.442 | 0.08 | 0.10 |
+| scene_tokyo_alley | 0.258 | 0.06 | 0.08 |
+| text_poster_bakery | 0.368 | 0.045 | 0.06 |
+| portrait_weathered_fisherman | 0.470 | 0.045 | 0.06 |
+| product_sneaker | 0.874 | 0.03 | 0.045 |
+
+The worst first-clean is still 0.10, the same as the committed
+lighthouse, so the shipped Meta floor 0.17 does not move.
+
+**No Meta adaptive arm.** Google's shipped split had zero overlap
+between classes and identical first-cleans inside a class. Combined
+with the original five, Meta first-cleans are a continuum from 0.03 to
+0.10, and `flat_ratio` does not separate them:
+
+- the 0.10 cluster is mosque 0.037, botanical 0.442, and lighthouse
+  0.602;
+- the 0.045 cluster is sneaker 0.874 and studio_mug 0.973;
+- harvest-1 photoreal portraits were high-flat (0.75-0.85) AND hard
+  (0.08-0.10), so a high-flat easy-arm would misroute them.
+
+A content-class rule fails the same way: two text posters first-clean
+at 0.03 and 0.06, and two watercolor-like images (lighthouse, botanical)
+share 0.10 with dense architecture.
+
+The leftover rungs were finished in a 2026-08-31 evening UTC
+anonymous isolated session (fresh-navigation, wait for "Upload
+another file"; all ten `POST /api/ai-detector` calls returned 200):
+
+| check | verdict |
+|---|---|
+| muse-2 @ 0.08 | DETECTED |
+| muse-3 @ 0.015 / 0.03 / 0.045 | DETECTED / CLEAN / CLEAN |
+| muse-7 @ 0.045 / 0.06 | DETECTED / CLEAN |
+| mosque @ 0.10 seeds 1, 2 | CLEAN / CLEAN |
+| botanical @ 0.10 seeds 1, 2 | DETECTED / DETECTED |
+
+botanical's seed-0 first-clean of 0.10 is not seed-stable;
+lighthouse @ 0.10 seeds 1 and 2 were CLEAN. That is the same class
+of run-to-run flip the 0.17 floor's margin exists for. No
+Google-style binary split: harvest-1 first-cleans now span 0.03
+(muse-3) through 0.10 (muse-2/4), and 0.06-0.10 inside one subject
+(muse-7 / muse-6 / muse-2).
+
+## OpenAI content-adaptive expansion (2026-08-31)
+
+Goal: test whether face_count or `flat_ratio` predicts Chroma1's OpenAI
+SynthID first-clean the way YuNet does for Google.
+
+Committed three (YuNet + `flat_ratio` on the files, first-cleans from the
+2026-08-29/30 web oracle):
+
+| fixture | faces | flat_ratio | first-clean |
+|---|---|---|---|
+| typography 02_03_55 | 0 | 0.642 | 0.06 |
+| quality 02_02_23 | 0 | 0.695 | 0.06 |
+| 9-face grid 05_30 | 9 | 0.473 | 0.075 |
+
+Face content is the harder of the two classes, the opposite of Google.
+Two zero-face cards share a boundary, which is a hint, not a split.
+
+**Images API is not a carrier source.** `gpt-image-1` and `gpt-image-1.5`
+generations (medium, 1024) carry C2PA (`detected`) but SynthID
+`not_detected` on `POST /v1/content_provenance_checks`. Contrastive-pair
+"openai" recreations are also SynthID-negative. New ChatGPT-UI downloads
+are not in the tree beyond the three committed files.
+
+**Spaces harvest (one day of `_full_scan`, 2026-07-24):** 41 files with
+OpenAI C2PA, of which 7 checked by the provenance API were SynthID
+`DETECTED` (one `NOT_DETECTED`). Four diverse DETECTED files were staged
+under `out/cohort-calibration/openai-expand/` (gitignored; user uploads,
+not committed) and given a Chroma1 ladder (0.04-0.12, seed 0) by
+`scripts/chroma_openai_expansion.py`:
+
+| id | faces | flat_ratio |
+|---|---|---|
+| dense_ed68 | 0 | 0.118 |
+| midflat_038c | 0 | 0.323 |
+| textlike_3b17 | 0 | 0.649 |
+| faces2_4dab | 2 | 0.279 |
+
+The provenance API then 429'd. The same checks were finished on
+`https://openai.com/research/verify/` (the page reports SynthID and C2PA
+separately under View details). Chroma PNG outputs have no C2PA, so a
+"No OpenAI signals detected" heading is a pixel-SynthID negative.
+
+| id | faces | @0.04 | @0.05 | @0.06 |
+|---|---|---|---|---|
+| dense_ed68 | 0 | CLEAN | CLEAN | CLEAN |
+| midflat_038c | 0 | -- | -- | CLEAN |
+| textlike_3b17 | 0 | -- | -- | CLEAN |
+| faces2_4dab | 2 | -- | -- | CLEAN |
+
+9-face grid @ 0.075, seeds 1 and 2: both CLEAN (SynthID not detected).
+The committed seed-0 first-clean is not a fluke.
+
+**No OpenAI adaptive arm.** Zero-face extras clear at or below 0.06, the
+2-face extra also clears at 0.06, and only the 9-face grid needs 0.075.
+That is not a YuNet split: `face_count > 0` would over-strengthen the
+2-face file, and a high face-count cutoff would be one fixture. The
+spread (0.075 - 0.06) is already absorbed by the shipped 0.09 floor.
+Images API generations remain non-carriers (C2PA only).
 
 ## Oracle session notes
 
 - openai.com/verify throttles anonymous sessions through Cloudflare Turnstile
   after ~15 rapid checks; a fresh browser context clears it. The programmatic
   `POST /v1/content_provenance_checks` API is the better oracle (separate
-  SynthID/C2PA outcomes) but the checked `OPENAI_API_KEY` returned 401
-  org-wide, including `/v1/models`.
+  SynthID/C2PA outcomes). The `OPENAI_API_KEY` in the main-checkout `.env`
+  returned 401 org-wide, including `/v1/models`, through the 2026-08-30
+  calibration; it was replaced on 2026-08-31 and both `/v1/models` and
+  a provenance check on a committed ChatGPT original then succeeded
+  (DETECTED).
 - meta.ai/identification enforces a sliding per-IP window: a burst of ~15
   checks exhausted it twice; it reopens minutes later, and the page sometimes
   overstates this as a daily limit. Pacing of roughly 2-3 checks per window
-  worked.
-- The Gemini app oracle requires the user's logged-in session; driving the
-  user's live Chrome while it is in active use was refused (wrong-tab risk),
-  so those 20 checks remain queued.
+  worked. On 2026-08-31 an anonymous isolated session got a real 429 from
+  `POST /api/ai-detector` with page text "You’ve reached the daily limit
+  for identifications. Try again tomorrow" after about six checks in the
+  UTC morning and again after about fifteen in the UTC afternoon, so the
+  daily-limit wording is not always overstated; the afternoon window was
+  large enough to finish harvest 2. An evening isolated session the same
+  day got ten 200s and finished the leftover harvest-1 rungs plus the
+  mosque/botanical seed probes.
+- The Gemini app oracle requires the user's logged-in session. A human
+  drag-drop of a local PNG works on Work Gemini (u/2, 2026-08-31) and on
+  Plus (u/0 the same day); Playwright cannot drive the OS picker, and
+  the first `input[type=file].accept` is documents/code only. Plus
+  `@synthid` hung once after attach, then returned a tool CLEAN on a
+  second human-drag chat. Do not drive the live Chrome while it is in
+  active use (wrong-tab risk).
