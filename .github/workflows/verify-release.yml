@@ -70,7 +70,7 @@ jobs:
           set -euo pipefail
           echo "Installing remove-ai-watermarks==$VERSION in a clean environment..."
           export PATH="$HOME/.local/bin:$PATH"
-          result=$(uvx "remove-ai-watermarks==$VERSION" remove-ai-watermarks --version 2>&1) \
+          result=$(uvx --from "remove-ai-watermarks==$VERSION" remove-ai-watermarks --version 2>&1) \
             || { echo "::error::Clean install failed: $result"; exit 1; }
           echo "  Clean install: $result"
 
