@@ -1174,13 +1174,17 @@ conditioning: the floors were measured on a plain strength pass.
 
 The flat vendor floors (`CHROMA_ZIMAGE_*_STRENGTH` in watermark_profiles):
 OpenAI 0.09 and Microsoft 0.125 (both BELOW qwen's, with better
-matched-strength fidelity), Google 0.40 and Meta 0.17 (both ABOVE qwen's,
-because Chroma1's per-fixture boundaries scatter wider). The
-matched-strength addendum in the research doc is the honest read: at the
-strength each image actually needs, Chroma1 regenerates better almost
-everywhere except face identity (which the inherited Z-Image face stage
-supplies); at the flat worst-case floors it destroys dense text and face
-identity. A content-adaptive strength policy is the documented follow-up.
+matched-strength fidelity), Google 0.40 for zero-face content / 0.125 when
+faces are detected (a content-adaptive arm from the clean face-count split
+in the calibration: both text cards need 0.25, both face fixtures clear at
+0.12, so the YuNet detector -- already loaded for the face stage -- routes
+the operating point), and Meta 0.17 (ABOVE qwen's, because Chroma1's
+per-fixture boundaries scatter wider). The matched-strength addendum in the
+research doc is the honest read: at the strength each image actually needs,
+Chroma1 regenerates better almost everywhere except face identity (which the
+inherited Z-Image face stage supplies); at the flat worst-case floors it
+destroys dense text and face identity. The Google face-content arm is the
+first shipped piece of the content-adaptive policy.
 
 ### SDXL plus Z-Image
 

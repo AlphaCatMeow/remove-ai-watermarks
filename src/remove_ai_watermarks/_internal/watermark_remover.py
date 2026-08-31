@@ -188,6 +188,26 @@ class WatermarkRemover:
 
         remove_ai_metadata(output_path, output_path, keep_standard=True)
 
+    def _resolve_chroma_strength(
+        self,
+        strength: float | None,
+        vendor: str | None,
+        source: Image.Image,
+    ) -> float:
+        """Resolve strength, running face detection for the chroma Google arm.
+
+        The content-adaptive Google floor needs a face count. YuNet is fast
+        (~50 ms) and the model download is already managed by the shared base.
+        """
+        if self.model_profile != CHROMA_ZIMAGE_PROFILE or (vendor or "").casefold() != "google":
+            return resolve_strength(strength, vendor, self.model_profile, size=source.size)
+        if strength is not None:
+            return strength
+        from remove_ai_watermarks._internal.two_stage_pipeline import detect_faces
+
+        face_count = len(detect_faces(source))
+        return resolve_strength(strength, vendor, self.model_profile, size=source.size, face_count=face_count)
+
     def remove_watermark(
         self,
         image_path: Path,
@@ -213,7 +233,7 @@ class WatermarkRemover:
         with Image.open(image_path) as opened:
             source = opened.convert("RGB")
 
-        resolved_strength = resolve_strength(strength, vendor, self.model_profile, size=source.size)
+        resolved_strength = self._resolve_chroma_strength(strength, vendor, source)
         if not 0.0 <= resolved_strength <= 1.0:
             raise ValueError(f"Strength must be between 0.0 and 1.0, got {resolved_strength}")
         if text_manifest is not None and self.model_profile in (SDXL_ZIMAGE_PROFILE, CHROMA_ZIMAGE_PROFILE):

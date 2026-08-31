@@ -1204,3 +1204,34 @@ def test_chroma_vae_roundtrip_raises_not_implemented():
     pipeline = ChromaZImagePipeline(device="cuda", torch_dtype=torch.bfloat16)
     with pytest.raises(NotImplementedError, match="does not expose a VAE donor"):
         pipeline._vae_roundtrip(Image.new("RGB", (32, 32)))
+
+
+def test_chroma_google_face_content_gets_the_lower_adaptive_floor():
+    """Face content on Google SynthID clears at 0.125, not 0.40.
+
+    The four-fixture calibration showed a clean face-count split: both zero-face
+    text cards need 0.25, both face fixtures clear at 0.12. The adaptive arm
+    saves face identity (0.611 vs 0.279 cosine) and 6.4 dB PSNR on face content.
+    """
+    from remove_ai_watermarks._internal.watermark_profiles import (
+        CHROMA_ZIMAGE_GOOGLE_FACE_STRENGTH,
+        CHROMA_ZIMAGE_GOOGLE_STRENGTH,
+        resolve_strength,
+    )
+
+    assert pytest.approx(0.125) == CHROMA_ZIMAGE_GOOGLE_FACE_STRENGTH
+    # Face content gets the lower adaptive floor.
+    assert resolve_strength(None, "google", "chroma-zimage", face_count=17) == pytest.approx(0.125)
+    assert resolve_strength(None, "google", "chroma-zimage", face_count=1) == pytest.approx(0.125)
+    # Zero-face content gets the flat floor (text/graphic cohort).
+    assert resolve_strength(None, "google", "chroma-zimage", face_count=0) == pytest.approx(0.40)
+    assert pytest.approx(0.40) == CHROMA_ZIMAGE_GOOGLE_STRENGTH
+    # No face_count hint: conservative (flat floor).
+    assert resolve_strength(None, "google", "chroma-zimage") == pytest.approx(0.40)
+    # Other vendors ignore face_count: the split is Google-SynthID-specific.
+    assert resolve_strength(None, "openai", "chroma-zimage", face_count=5) == pytest.approx(0.09)
+    assert resolve_strength(None, "meta", "chroma-zimage", face_count=5) == pytest.approx(0.17)
+    # An explicit strength still wins over the adaptive arm.
+    assert resolve_strength(0.20, "google", "chroma-zimage", face_count=17) == pytest.approx(0.20)
+    # Other profiles are untouched by the face_count parameter.
+    assert resolve_strength(None, "google", "qwen-zimage", size=(2000, 1850), face_count=17) == pytest.approx(0.27)

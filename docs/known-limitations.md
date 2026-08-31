@@ -215,9 +215,11 @@ established for that stage.
 - OpenAI: `0.09` (below qwen's `0.07675` is false economy neither way -- the
   matched-strength fidelity favors Chroma1 on this cohort);
 - Microsoft InvisMark: `0.125` (below qwen's `0.15`);
-- Google: `0.40` (above qwen's `0.27`; at this floor the regeneration destroys
-  dense text and collapses face identity -- the tradeoff that motivates the
-  documented content-adaptive follow-up);
+- Google: `0.40` for zero-face content (above qwen's `0.27`; at this floor the
+  regeneration destroys dense text and collapses face identity -- the tradeoff
+  that motivates the adaptive arm below), or `0.125` when YuNet detects at
+  least one face (both measured face fixtures clear at 0.12 with zero
+  cross-source spread; oracle-verified 2026-08-30);
 - Meta Content Seal: `0.17` (above qwen's `0.1`);
 - unknown: `0.40`, following the strictest measured cohort.
 

@@ -153,6 +153,19 @@ CHROMA_ZIMAGE_GOOGLE_STRENGTH = 0.40
 CHROMA_ZIMAGE_META_STRENGTH = 0.17
 CHROMA_ZIMAGE_UNKNOWN_STRENGTH = CHROMA_ZIMAGE_GOOGLE_STRENGTH
 
+# Content-adaptive Google floor: the four-fixture calibration showed a clean
+# face-count split. Both zero-face fixtures (dense-text cards 633uuy and akdbei)
+# need 0.25 first-clean; both face fixtures (y48j3c with 17 detected faces and
+# 3mc4t9 with 7) clear at 0.12. The flat 0.40 floor is the zero-face policy
+# (worst 0.25 + spread 0.13 = 0.38, rounded to 0.40). Face content can use the
+# measured 0.125 rung instead: both face fixtures first-cleaned at 0.12, and
+# with identical boundaries the cross-source spread is zero, so 0.125 (the next
+# measured rung above 0.12) is the operating point. This split is
+# Google-SynthID-specific: OpenAI's face fixture was HARDER than its text
+# fixture (0.075 vs 0.06), so no other cohort gets an adaptive arm.
+# Oracle-verified 2026-08-30; see docs/chroma1-engine-research.md.
+CHROMA_ZIMAGE_GOOGLE_FACE_STRENGTH = 0.125
+
 _CHROMA_ZIMAGE_STRENGTH_BY_VENDOR: dict[str, float] = {
     "openai": CHROMA_ZIMAGE_OPENAI_STRENGTH,
     "google": CHROMA_ZIMAGE_GOOGLE_STRENGTH,
@@ -204,6 +217,7 @@ def resolve_strength(
     pipeline: str | None = None,
     *,
     size: tuple[int, int] | None = None,
+    face_count: int | None = None,
 ) -> float:
     """Resolve a user override or the calibrated policy for a profile and vendor.
 
@@ -222,7 +236,10 @@ def resolve_strength(
     if normalized == SDXL_ZIMAGE_PROFILE:
         return _SDXL_ZIMAGE_STRENGTH_BY_VENDOR.get((vendor or "").casefold(), SDXL_ZIMAGE_UNKNOWN_STRENGTH)
     if normalized == CHROMA_ZIMAGE_PROFILE:
-        return _CHROMA_ZIMAGE_STRENGTH_BY_VENDOR.get((vendor or "").casefold(), CHROMA_ZIMAGE_UNKNOWN_STRENGTH)
+        vendor_key = (vendor or "").casefold()
+        if vendor_key == "google" and face_count is not None and face_count > 0:
+            return CHROMA_ZIMAGE_GOOGLE_FACE_STRENGTH
+        return _CHROMA_ZIMAGE_STRENGTH_BY_VENDOR.get(vendor_key, CHROMA_ZIMAGE_UNKNOWN_STRENGTH)
     if size is None:
         raise ValueError("qwen-zimage resolves strength from image area, so size is required")
     vendor_strength = _QWEN_ZIMAGE_FLAT_STRENGTH_BY_VENDOR.get((vendor or "").casefold())

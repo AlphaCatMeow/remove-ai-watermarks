@@ -287,8 +287,10 @@ Both need the seed-sensitivity and face-stage composition checks called out
 above before shipping. Both checks have now been run (Pre-ship validation
 above): the Meta boundary is seed-stable across seeds 0-2 and the full
 profile path stays clean through the face stage on the shipped Google floor.
-The profile ships with option 1's floors; option 2's adaptive policy remains
-the documented follow-up.
+The profile ships with option 1's floors plus a content-adaptive Google arm
+(face content resolves to 0.125 instead of 0.40, keyed on YuNet detection).
+Option 2's full adaptive policy for the remaining cohorts remains the
+documented follow-up.
 
 ## Oracle session notes
 
