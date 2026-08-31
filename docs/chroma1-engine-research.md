@@ -239,10 +239,13 @@ With the `chroma-zimage` profile implemented
 
 1. **Seed stability at the worst Meta boundary.** lighthouse @ 0.10 with
    seeds 1 and 2: both CLEAN on the meta.ai oracle. The Meta boundary is not a
-   seed-0 fluke. The Google seed probes (633uuy @ 0.25, seeds 1-2) were
-   generated but the oracle's per-image-class quota blocked them on every
-   available account; they remain queued, and the shipped 0.40 Google floor
-   carries 0.15 of margin over that boundary regardless.
+   seed-0 fluke. The Google seed probes (633uuy @ 0.25) delivered a critical
+   finding: **seed 0 was CLEAN but seed 1 was DETECTED** -- the 633uuy
+   boundary is seed-dependent, which validates the flat 0.40 floor's 0.15
+   margin exactly the way the qwen SDXL precedent did (the same image at the
+   same strength passing or failing run-to-run near the threshold). Seed 2
+   was blocked by the oracle's per-image-class quota; it is queued but the
+   conclusion is already established by the seed-1 flip.
 2. **Full-path face-stage interaction.** The complete profile run (Chroma1
    global at the shipped Google floor 0.40, then the inherited
    YuNet/SAM/Z-Image face stage) on the 5-face fixture 3mc4t9: CLEAN on the
