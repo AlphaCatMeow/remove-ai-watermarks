@@ -60,12 +60,16 @@ jobs:
           "
 
       # -- Clean install from PyPI ---------------------------------------------
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
       - name: Verify clean install
         env:
           VERSION: ${{ steps.v.outputs.version }}
         run: |
           set -euo pipefail
           echo "Installing remove-ai-watermarks==$VERSION in a clean environment..."
+          export PATH="$HOME/.local/bin:$PATH"
           result=$(uvx "remove-ai-watermarks==$VERSION" remove-ai-watermarks --version 2>&1) \
             || { echo "::error::Clean install failed: $result"; exit 1; }
           echo "  Clean install: $result"
