@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from PIL import Image
 
 from remove_ai_watermarks._internal.watermark_profiles import (
+    AUTO_PROFILE,
     CHROMA_ZIMAGE_PROFILE,
     DEFAULT_PROFILE,
     INVISIBLE_EXTRA,
@@ -18,6 +19,7 @@ from remove_ai_watermarks._internal.watermark_profiles import (
     REMOVAL_MODULES,
     SDXL_ZIMAGE_PROFILE,
     normalize_profile,
+    resolve_auto_profile,
     resolve_seed,
     resolve_strength,
 )
@@ -110,6 +112,10 @@ class WatermarkRemover:
         self.model_profile = normalize_profile(pipeline)
         if self.model_profile not in PROFILE_CHOICES:
             raise ValueError(f"Unsupported pipeline '{pipeline}'. Use one of: {', '.join(PROFILE_CHOICES)}.")
+        # The auto profile resolves to a concrete engine per-image in
+        # remove_watermark, once the provenance vendor is known. It never
+        # resolves to sdxl-zimage, so the dtype below is correct either way.
+        self._auto = self.model_profile == AUTO_PROFILE
         # There is no ``model_id`` parameter and no ``model_id`` attribute: each
         # profile pins a fixed model stack, and the dtype below is bound to that
         # stack's weights. Both used to be constructor overrides that existed only to
@@ -132,11 +138,8 @@ class WatermarkRemover:
             # SDXL ships fp16 weights and an fp16-safe VAE; bf16 would give up the
             # variant without buying anything on this architecture.
             self.torch_dtype = torch.float16  # type: ignore[union-attr]
-        elif self.model_profile == CHROMA_ZIMAGE_PROFILE:
-            # Chroma1-HD is calibrated bf16 end to end (the floors were measured
-            # with bf16 weights); the inherited face stage is bf16 regardless.
-            self.torch_dtype = torch.bfloat16  # type: ignore[union-attr]
         else:
+            # qwen-zimage, chroma-zimage, and auto all resolve to bf16 engines.
             self.torch_dtype = torch.bfloat16  # type: ignore[union-attr]
 
         self.cpu_offload = cpu_offload
@@ -233,6 +236,14 @@ class WatermarkRemover:
         with Image.open(image_path) as opened:
             source = opened.convert("RGB")
 
+        # The auto router resolves per-image once the provenance vendor is
+        # known, BEFORE the strength resolution so the right engine's floors
+        # are used. If the vendor changed the engine, reset the cached pipeline.
+        if self._auto:
+            resolved = resolve_auto_profile(vendor)
+            if resolved != self.model_profile:
+                self.model_profile = resolved
+                self._qwen_zimage_pipeline = None
         resolved_strength = self._resolve_chroma_strength(strength, vendor, source)
         if not 0.0 <= resolved_strength <= 1.0:
             raise ValueError(f"Strength must be between 0.0 and 1.0, got {resolved_strength}")

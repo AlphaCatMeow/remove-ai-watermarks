@@ -1251,3 +1251,62 @@ def test_chroma_google_face_content_gets_the_lower_adaptive_floor():
     assert resolve_strength(0.20, "google", "chroma-zimage", face_count=17) == pytest.approx(0.20)
     # Other profiles are untouched by the face_count parameter.
     assert resolve_strength(None, "google", "qwen-zimage", size=(2000, 1850), face_count=17) == pytest.approx(0.27)
+
+
+def test_auto_profile_routes_to_the_measured_engine_per_vendor():
+    """--pipeline auto picks the engine the four-cohort calibration supports:
+    chroma-zimage for OpenAI/Microsoft, qwen-zimage for Google/Meta/unknown."""
+    from remove_ai_watermarks._internal.watermark_profiles import (
+        CHROMA_ZIMAGE_PROFILE,
+        QWEN_ZIMAGE_PROFILE,
+        normalize_profile,
+        resolve_auto_profile,
+    )
+
+    assert normalize_profile("auto") == "auto"
+    assert resolve_auto_profile("openai") == CHROMA_ZIMAGE_PROFILE
+    assert resolve_auto_profile("microsoft") == CHROMA_ZIMAGE_PROFILE
+    assert resolve_auto_profile("google") == QWEN_ZIMAGE_PROFILE
+    assert resolve_auto_profile("meta") == QWEN_ZIMAGE_PROFILE
+    assert resolve_auto_profile(None) == QWEN_ZIMAGE_PROFILE
+    assert resolve_auto_profile("unknown") == QWEN_ZIMAGE_PROFILE
+
+
+def test_auto_profile_strength_uses_the_resolved_engine_floors(tmp_path, monkeypatch):
+    """After auto resolves to chroma-zimage for an OpenAI file, the strength
+    must be chroma's 0.09 floor, not qwen's 0.07675."""
+    from remove_ai_watermarks._internal.watermark_remover import WatermarkRemover
+
+    _mock_watermark_runtime_deps(monkeypatch)
+    source = tmp_path / "source.png"
+    Image.new("RGB", (64, 48)).save(source)
+
+    remover = WatermarkRemover(device="cuda", pipeline="auto")
+    assert remover.model_profile == "auto"
+
+    runtime = MagicMock()
+    runtime.run.return_value = Image.new("RGB", (64, 48), (50, 60, 70))
+    monkeypatch.setattr(remover, "_load_qwen_zimage_pipeline", lambda: runtime)
+
+    remover.remove_watermark(source, vendor="openai")
+
+    # Auto resolved to chroma-zimage for the OpenAI vendor.
+    assert remover.model_profile == "chroma-zimage"
+    _, kwargs = runtime.run.call_args
+    assert kwargs["strength"] == pytest.approx(0.09)
+
+
+def test_auto_profile_text_manifest_stays_on_qwen(tmp_path, monkeypatch):
+    """Auto routes OpenAI to chroma-zimage, which rejects text manifests;
+    the rejection must reach the caller at the boundary."""
+    from remove_ai_watermarks._internal.text_restoration import VerifiedTextLine, VerifiedTextManifest
+    from remove_ai_watermarks._internal.watermark_remover import WatermarkRemover
+
+    _mock_watermark_runtime_deps(monkeypatch)
+    source = tmp_path / "source.png"
+    Image.new("RGB", (96, 80)).save(source)
+    manifest = VerifiedTextManifest("0" * 64, 96, 80, (VerifiedTextLine((4, 4, 20, 16), "x", "alphabetic"),))
+
+    remover = WatermarkRemover(device="cuda", pipeline="auto")
+    with pytest.raises(ValueError, match="only by the qwen-zimage profile"):
+        remover.remove_watermark(source, vendor="openai", text_manifest=manifest)

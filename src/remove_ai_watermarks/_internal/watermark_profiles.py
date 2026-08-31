@@ -25,8 +25,9 @@ CONTROLNET_CANNY_MODEL = "xinsir/controlnet-canny-sdxl-1.0"
 QWEN_ZIMAGE_PROFILE = "qwen-zimage"
 SDXL_ZIMAGE_PROFILE = "sdxl-zimage"
 CHROMA_ZIMAGE_PROFILE = "chroma-zimage"
+AUTO_PROFILE = "auto"
 DEFAULT_PROFILE = QWEN_ZIMAGE_PROFILE
-PROFILE_CHOICES = (QWEN_ZIMAGE_PROFILE, SDXL_ZIMAGE_PROFILE, CHROMA_ZIMAGE_PROFILE)
+PROFILE_CHOICES = (QWEN_ZIMAGE_PROFILE, SDXL_ZIMAGE_PROFILE, CHROMA_ZIMAGE_PROFILE, AUTO_PROFILE)
 
 # The modules a real removal run needs, and the extra that installs them. Both live
 # here, in the only profile module that imports nothing heavy, because the CLI's
@@ -47,10 +48,11 @@ INVISIBLE_EXTRA = "'remove-ai-watermarks[qwen-zimage]'"
 PROFILE_ADAPTIVE_POLISH = {
     QWEN_ZIMAGE_PROFILE: False,
     SDXL_ZIMAGE_PROFILE: True,
-    # Chroma1's output matches the input's detail level, like qwen-zimage: the
-    # matched-strength calibration measured LPIPS/SSIM parity or better, so
-    # polishing would add grain to an already-faithful output.
     CHROMA_ZIMAGE_PROFILE: False,
+    # Auto resolves to qwen-zimage or chroma-zimage, both of which keep the
+    # input's detail level. If it ever resolves to an engine that needs polish,
+    # the resolved profile's own default applies.
+    AUTO_PROFILE: False,
 }
 
 SDXL_LIGHTNING_MODEL_ID = "ByteDance/SDXL-Lightning"
@@ -176,7 +178,23 @@ _ALIASES = {
     "qwen_zimage": QWEN_ZIMAGE_PROFILE,
     "sdxl_zimage": SDXL_ZIMAGE_PROFILE,
     "chroma_zimage": CHROMA_ZIMAGE_PROFILE,
+    "auto": AUTO_PROFILE,
 }
+
+# The per-cohort engine router: which profile wins on which vendor, from the
+# 2026-08-29/30 four-cohort calibration (docs/chroma1-engine-research.md).
+# chroma-zimage has lower floors AND better matched-strength fidelity on OpenAI
+# and Microsoft; qwen-zimage wins on Google and Meta. Unknown stays on qwen
+# (the shipped default, conservative).
+_ENGINE_BY_VENDOR: dict[str, str] = {
+    "openai": CHROMA_ZIMAGE_PROFILE,
+    "microsoft": CHROMA_ZIMAGE_PROFILE,
+}
+
+
+def resolve_auto_profile(vendor: str | None) -> str:
+    """Pick the engine for --pipeline auto from the provenance vendor."""
+    return _ENGINE_BY_VENDOR.get((vendor or "").casefold(), QWEN_ZIMAGE_PROFILE)
 
 
 def normalize_profile(profile: str) -> str:
