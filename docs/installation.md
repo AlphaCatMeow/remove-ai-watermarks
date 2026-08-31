@@ -115,7 +115,7 @@ application actually uses:
 | `diffusion` | Torch and Diffusers runtime; video SynthID regeneration | `pixels`, Torch, Diffusers | Yes |
 | `migan` | MI-GAN ONNX fill backend | `visible`, ONNX Runtime | Model download, no Torch |
 | `lama` | big-LaMa ONNX fill backend | `visible`, ONNX Runtime | Model download, no Torch |
-| `qwen-zimage` | Invisible image-watermark removal, both CUDA-only profiles | `diffusion`, DiffSynth | Yes |
+| `qwen-zimage` | Invisible image-watermark removal, all CUDA-only profiles | `diffusion`, DiffSynth | Yes |
 | `text-restoration` | Opt-in verified Qwen-VAE glyph restoration | `qwen-zimage`, `lama` | Yes |
 | `text-draft` | Draft OCR proposals for operator verification | PaddleOCR, PaddlePaddle | Model download, no Torch |
 | `all` | Every production feature available on the active Python | All compatible rows above | Yes |

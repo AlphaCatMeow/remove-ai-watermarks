@@ -461,9 +461,9 @@ conditioning, never by copying original pixels.**
 
 > **Superseded in 0.24.0.** The `controlnet`, `sdxl`, `qwen` and `default` profiles
 > were removed, and a retired name is now rejected at parse time rather than routed
-> onward. `--pipeline` accepts only `qwen-zimage` (the default) and `sdxl-zimage`;
-> both are CUDA-only, both condition their global stage on a canny edge map, and both
-> run the same Z-Image face stage. The bullets below are a record of what was measured
+> onward. Current `--pipeline` values are `qwen-zimage` (the default),
+> `sdxl-zimage`, `chroma-zimage`, and `auto`; all are CUDA-only and share the
+> Z-Image face stage. The bullets below are a record of what was measured
 > on the removed profiles, kept because the oracle verdicts are still the evidence the
 > current design rests on.
 

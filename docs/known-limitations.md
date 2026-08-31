@@ -73,10 +73,12 @@ as SynthID lives in the pixels everywhere, including inside the glyphs, so
 frozen text regions would keep the watermark
 ([text protection research](text-protection-research.md)).
 
-`qwen-zimage` is the default profile and `sdxl-zimage` the only alternative.
-Both are CUDA only and differ only in the global regeneration model: each
-conditions that stage on a canny edge map, which preserves structure but not
-identity or exact texture, and each then runs the same face stage.
+`qwen-zimage` is the default profile. `sdxl-zimage` and `chroma-zimage` keep
+the same face stage and swap the global model. `auto` picks chroma-zimage for
+OpenAI and Microsoft provenance and qwen-zimage otherwise. All are CUDA only.
+Qwen and SDXL condition the global stage on a canny edge map, which preserves
+structure but not identity or exact texture. Chroma1 is a plain strength pass
+without Canny.
 Existing face evaluations favor `qwen-zimage`, but there is no blanket fidelity
 ordering across content types. A fixed-seed, three-scene text comparison at the
 profile defaults found no stable winner: SDXL won one poster, Qwen won one, and
@@ -235,6 +237,8 @@ are certified at a fixed seed. The live resolver is
 | --- | --- |
 | `qwen-zimage` | CUDA only, large model stack, and limited broad certification across seeds and content. |
 | `sdxl-zimage` | CUDA only. Its strength ladder is flat per vendor, not a resolution curve, because flat values are what was measured. |
+| `chroma-zimage` | CUDA only. Higher Google and Meta floors than qwen; Google face content uses 0.125 instead of 0.40. |
+| `auto` | CUDA only. Routes OpenAI and Microsoft to chroma-zimage and everything else to qwen-zimage. |
 
 Only manually verified `vae-glyphs` is an optional production stage, and it is
 experimental rather than a default.

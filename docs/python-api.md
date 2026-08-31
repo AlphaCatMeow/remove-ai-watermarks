@@ -596,7 +596,7 @@ from pathlib import Path
 from remove_ai_watermarks.invisible_engine import InvisibleEngine
 
 engine = InvisibleEngine(
-    pipeline="qwen-zimage",  # the default; also "sdxl-zimage" or "chroma-zimage"
+    pipeline="qwen-zimage",  # the default; also "sdxl-zimage", "chroma-zimage", or "auto"
     device=None,
     cpu_offload=False,
 )
@@ -628,8 +628,10 @@ Qwen:
 engine = InvisibleEngine(pipeline="sdxl-zimage")
 ```
 
-The `qwen-zimage` extra is required for all three profiles: each runs the same
-DiffSynth Z-Image face stage.
+The `qwen-zimage` extra is required for every profile, including `auto`: each
+concrete engine runs the same DiffSynth Z-Image face stage. `pipeline="auto"`
+selects chroma-zimage for OpenAI and Microsoft provenance and qwen-zimage
+otherwise, after the vendor is known and before strength resolution.
 
 The opt-in verified-text stage uses the same `text_manifest` argument as the CLI:
 

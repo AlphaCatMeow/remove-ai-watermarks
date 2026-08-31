@@ -942,10 +942,12 @@ is the source of truth for:
 - the SDXL global-stage checkpoint id (`SDXL_MODEL_ID`) and the Canny ControlNet id;
 - strength resolution for every profile.
 
-The current profiles are `qwen-zimage` (the default), `sdxl-zimage`, and
-`chroma-zimage`, and all three are CUDA-only. `controlnet`, `sdxl`, `qwen` and
-`default` were removed rather than kept as a CPU path, and are rejected rather
-than aliased onward. There is no content-dependent automatic router.
+The current profiles are `qwen-zimage` (the default), `sdxl-zimage`,
+`chroma-zimage`, and `auto`, and all four are CUDA-only. `controlnet`, `sdxl`,
+`qwen` and `default` were removed rather than kept as a CPU path, and are
+rejected rather than aliased onward. `auto` is a per-cohort engine router:
+chroma-zimage for OpenAI and Microsoft, qwen-zimage for Google, Meta, and
+unknown. It is not a content-class split inside one engine.
 
 `qwen-zimage` normally resolves global denoise from image area for unknown content.
 Measured provider cohorts bypass that curve with flat operating points. The values,
