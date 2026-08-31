@@ -1086,8 +1086,21 @@ def test_chroma_global_stage_calls_diffusers_with_the_calibrated_shape(monkeypat
         return type("R", (), {"images": [Image.new("RGB", (kwargs["width"], kwargs["height"]))]})()
 
     class FakeChromaPipe:
+        text_encoder = object()  # truthy: the encoder is loaded
+
         def to(self, _device):
             return self
+
+        @staticmethod
+        def encode_prompt(*args, **kwargs):
+            import torch
+
+            n = 8  # sequence length stub
+            embed = torch.zeros(1, n, 64)  # prompt embeds stub
+            neg_embed = torch.zeros(1, n, 64)
+            mask = torch.ones(1, n, dtype=torch.long)
+            neg_mask = torch.ones(1, n, dtype=torch.long)
+            return embed, None, mask, neg_embed, None, neg_mask
 
         @staticmethod
         def __call__(*args, **kwargs):
@@ -1113,9 +1126,12 @@ def test_chroma_global_stage_calls_diffusers_with_the_calibrated_shape(monkeypat
 
     assert result.size == (1122, 1402)
     call = calls["chroma"]
-    # The calibrated prompt, NOT the shared canny-stage prompt.
-    assert call["prompt"] == "high quality, sharp, detailed, faithful to the original"
-    assert call["negative_prompt"] == "blurry, lowres, distorted text, garbled text, artifacts"
+    # The calibrated prompt is cached on first encode; every subsequent call
+    # passes prompt_embeds (not the raw prompt string), skipping the T5 inference.
+    assert "prompt" not in call, "cached path must not send the raw prompt"
+    assert "prompt_embeds" in call, "cached path must pass pre-computed embeddings"
+    assert "negative_prompt_embeds" in call
+    # The negative prompt is baked into the cached embeddings too.
     assert call["guidance_scale"] == CHROMA_GUIDANCE
     # The /16 latent grid, not the raw input size.
     assert call["width"] == 1120
