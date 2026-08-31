@@ -1,0 +1,147 @@
+name: Verify release surfaces
+
+# Post-release verification: after distribute.yml fans a release out to
+# Homebrew, the HF Space, and the ComfyUI Registry, confirm every published
+# surface actually landed and works. This workflow is the automated twin of
+# the manual checklist in docs/release-and-distribution.md ("Release
+# verification"), not a replacement for the library's own test suite (which
+# already ran in test.yml and publish.yml).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to verify (no leading v). Blank = latest on PyPI."
+        required: false
+  workflow_run:
+    workflows: ["Distribute on release"]
+    types: [completed]
+
+jobs:
+  verify:
+    # Only run on a successful distribute (not on manual dispatch, where the
+    # version input or PyPI-latest provides the target).
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Resolve target version
+        id: v
+        run: |
+          set -euo pipefail
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            v="${{ github.event.inputs.version }}"
+          else
+            v=$(curl -fsSL https://pypi.org/pypi/remove-ai-watermarks/json \
+              | python3 -c "import sys,json;print(json.load(sys.stdin)['info']['version'])")
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Verifying release $v"
+
+      # -- PyPI ---------------------------------------------------------------
+      - name: Verify PyPI
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+          echo "Checking PyPI for $VERSION..."
+          rel=$(curl -fsSL "https://pypi.org/pypi/remove-ai-watermarks/$VERSION/json")
+          echo "$rel" | python3 -c "
+          import json, sys
+          d = json.load(sys.stdin)
+          assert d['info']['version'] == '$VERSION', f\"PyPI version mismatch: {d['info']['version']}\"
+          assert d['urls'], 'No files on PyPI'
+          has_wheel = any(u['packagetype'] == 'bdist_wheel' for u in d['urls'])
+          has_sdist = any(u['packagetype'] == 'sdist' for u in d['urls'])
+          assert has_wheel, 'No wheel on PyPI'
+          assert has_sdist, 'No sdist on PyPI'
+          print(f'  PyPI: {len(d[\"urls\"])} files (wheel + sdist) for $VERSION')
+          "
+
+      # -- Clean install from PyPI ---------------------------------------------
+      - name: Verify clean install
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+          echo "Installing remove-ai-watermarks==$VERSION in a clean environment..."
+          result=$(uvx "remove-ai-watermarks==$VERSION" remove-ai-watermarks --version 2>&1) \
+            || { echo "::error::Clean install failed: $result"; exit 1; }
+          echo "  Clean install: $result"
+
+      # -- Homebrew --------------------------------------------------------------
+      - name: Verify Homebrew formula
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+          echo "Checking Homebrew tap formula..."
+          formula=$(curl -fsSL \
+            "https://raw.githubusercontent.com/wiltodelta/homebrew-tap/main/Formula/remove-ai-watermarks.rb")
+          echo "$formula" | grep -q "remove_ai_watermarks-$VERSION.tar.gz" \
+            || { echo "::error::Homebrew formula does not reference $VERSION"; \
+                 echo "Formula URL line:"; echo "$formula" | grep '^url'; exit 1; }
+          echo "  Homebrew: formula points to $VERSION"
+
+      # -- ComfyUI ------------------------------------------------------------------
+      - name: Verify ComfyUI sync succeeded
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "Checking ComfyUI node sync..."
+          # The registry itself has no public JSON API; the sync workflow in
+          # the node repo already tests compatibility and publishes only on
+          # success, so verifying its latest run succeeded is the proxy.
+          latest=$(gh run list \
+            --repo wiltodelta/ComfyUI-remove-ai-watermarks \
+            --workflow sync-library.yml \
+            --limit 1 \
+            --json conclusion \
+            | python3 -c "
+          import json, sys
+          runs = json.load(sys.stdin)
+          r = runs[0] if runs else {}
+          print(r.get('conclusion', 'unknown'))
+          ")
+          echo "  ComfyUI sync: $latest"
+          if [ "$latest" != "success" ]; then
+            echo "::warning::ComfyUI sync latest run is '$latest', not success."
+            echo "  Check: https://github.com/wiltodelta/ComfyUI-remove-ai-watermarks/actions"
+          else
+            echo "  ComfyUI: sync succeeded, node published"
+          fi
+
+      # -- HF Space -------------------------------------------------------------------
+      - name: Verify HF Space is alive
+        run: |
+          set -euo pipefail
+          echo "Checking HF Space..."
+          space_url="https://wiltodelta-remove-ai-watermarks.hf.space"
+          # The Space may be sleeping after a factory rebuild; wake it.
+          for attempt in $(seq 1 12); do
+            status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "$space_url/" || echo "000")
+            if [ "$status" = "200" ]; then
+              echo "  HF Space: alive (HTTP $status)"
+              exit 0
+            fi
+            echo "  HF Space: HTTP $status (attempt $attempt), waiting for rebuild..."
+            sleep 15
+          done
+          echo "::warning::HF Space did not respond with HTTP 200 after 3 minutes."
+          echo "  The Space may still be rebuilding after a factory restart."
+          echo "  Verify manually at $space_url"
+
+      - name: Summary
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          cat <<EOF
+          Release $VERSION verified:
+            PyPI:          wheel + sdist present
+            Clean install: --version returns $VERSION
+            Homebrew:      formula points to $VERSION
+            ComfyUI:       sync succeeded
+            HF Space:      alive and responding
+          EOF

@@ -121,7 +121,11 @@ without removing schema 1 so long-lived consumers can update separately. A packa
 release must never silently substitute its latest schema when a caller explicitly
 requests an older supported one.
 
-After publication, verify:
+After publication, the `verify-release.yml` workflow runs automatically once
+`distribute.yml` completes and checks every surface below. It can also be
+dispatched manually with a specific version. The ComfyUI check verifies the
+sync workflow's latest run succeeded rather than querying the registry directly
+(the registry has no public JSON API). The full checklist for completeness:
 
 - both wheel and source distribution exist on PyPI;
 - the package version matches the tag;
