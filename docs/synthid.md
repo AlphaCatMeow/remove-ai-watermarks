@@ -779,5 +779,6 @@ initially took a flat `0.30` floor instead of the area curve. The later provider
 remeasurement established a common pass at `0.25` across three valid sources and
 separately repeated `QWEN_ZIMAGE_GOOGLE_STRENGTH = 0.27` across those sources and
 three accounts. OpenAI now has its own measured flat operating point; unknown
-content keeps the resolution curve. An explicit strength still wins. Certification artifacts: raiw-app
-`data/certification/text-restoration-2026-08-18/` (the failing re-baseline).
+content keeps the resolution curve. An explicit strength still wins.
+Certification artifacts: private archive `text-restoration-2026-08-18` (the
+failing re-baseline).

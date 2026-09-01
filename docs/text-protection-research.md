@@ -367,5 +367,5 @@ against base MAEs of 24.7/16.8/10.2. Since 0.27.1 the anchor is off by default
 (`fidelity_anchor` parameter on `remove_watermark` / `InvisibleOptions` /
 `--fidelity-anchor`); Google rows were not re-queried because the default
 strength leaves that fixture's base detected (the vendor-strength lane tracks
-that separately). Certification artifacts: raiw-app
-`data/certification/text-restoration-2026-08-19-A1/` (sha256-stamped rows).
+that separately). Certification artifacts: private archive
+`text-restoration-2026-08-19-A1` (sha256-stamped rows).
