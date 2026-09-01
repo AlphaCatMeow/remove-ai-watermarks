@@ -850,6 +850,17 @@ box grows), not the whole `footprint_mask`. Baidu extends right to the corner ta
 and LiblibAI extends left to the triangle logo; both inherit every guard around
 that arithmetic.
 
+Doubao is the deliberate exception because its captured alpha supplies more
+information than a rectangle. Its continuous top-hat response locates the mark,
+then `DoubaoEngine.footprint_mask` resizes the alpha to that same winning
+`match_box` and masks only the glyphs. The canonical 2048-pixel fixture has bright
+branch texture behind the bottom-edge wordmark; bounding the thresholded response,
+padding it, and dilating it produced a solid 404-by-134 mask clamped to the bottom
+and right edges. OpenCV then had no context beyond either edge and filled the hole
+with large triangular wedges. The aligned sparse mask keeps both frame edges
+untouched and still clears the detector. `force` cannot align a missing detection,
+so it retains the shared geometry-box fallback.
+
 Yuanbao uses the polarity-independent `contrast` front end because its standard
 two-line mark can be light on dark scenes or dark on light scenes. Its detector
 and footprint both use the same best-match box. The separate one-line overlay

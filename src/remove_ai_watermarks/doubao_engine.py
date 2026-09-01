@@ -5,8 +5,10 @@ Doubao (ByteDance) stamps every generated image with a visible "豆包AI生成"
 label mandated by China's TC260 standard, a near-white semi-transparent overlay.
 
 Detection matches the bundled glyph silhouette against the corner candidate; removal
-is the shared **localize -> fill** (the glyph-bbox :meth:`footprint_mask` feeds
-``region_eraser``), NOT reverse-alpha. This module shares
+is the shared **localize -> fill**. Doubao reuses that aligned silhouette as a sparse
+glyph footprint instead of bounding the thresholded corner response: bright scene
+texture behind this bottom-edge mark can otherwise expand a solid mask to the frame
+edges, where classical inpainting has no outside context. This module shares
 :class:`remove_ai_watermarks._text_mark_engine.TextMarkEngine` and
 supplies only Doubao's tuned :class:`TextMarkConfig` (bottom-right corner,
 ``assets/doubao_alpha.png`` -- the detection silhouette, rebuilt by
@@ -22,8 +24,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from remove_ai_watermarks import _text_mark_engine
-from remove_ai_watermarks._text_mark_engine import TextMarkConfig, TextMarkEngine
+import cv2
+import numpy as np
+
+from remove_ai_watermarks import _text_mark_engine, image_io
+from remove_ai_watermarks._text_mark_engine import TextMarkConfig, TextMarkDetection, TextMarkEngine
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -62,11 +67,19 @@ DETECT_MIN_COVERAGE = 0.04
 DETECT_NCC_THRESHOLD = 0.50
 
 # Detection-silhouette geometry, emitted by scripts/visible_alpha_solve.py at the
-# captured width. Sizes the glyph silhouette for the TM_CCOEFF_NORMED detection match
-# (removal is the template-free glyph-bbox footprint mask, not this template).
+# captured width. Sizes the glyph silhouette for the TM_CCOEFF_NORMED detection match;
+# Doubao also reuses the aligned alpha as its sparse removal footprint.
 _ALPHA_NATIVE_WIDTH = 2048
 _ALPHA_WIDTH_FRAC = 0.1636  # asset width / image width -- sizes the detection silhouette
 _ALPHA_HEIGHT_FRAC = 0.0405
+
+# The captured alpha is also the removal footprint after the detector aligns it.
+# Keep faint anti-aliased edges, then grow by one pixel so cv2 does not leave a halo.
+# A solid enclosing rectangle is unsafe here: the mark sits close to two frame edges,
+# and a textured branch in the canonical sample made the thresholded response reach
+# both edges before OpenCV inpainted the whole block into triangular wedges.
+_FOOTPRINT_ALPHA_FLOOR = 0.05
+_FOOTPRINT_DILATE = 1
 
 _CONFIG = TextMarkConfig(
     name="Doubao",
@@ -115,3 +128,52 @@ class DoubaoEngine(TextMarkEngine):
 
     def __init__(self) -> None:
         super().__init__(_CONFIG)
+
+    def footprint_mask(
+        self,
+        image: NDArray[Any] | None,
+        *,
+        force: bool = False,
+        dilate: int | None = None,
+        detection: TextMarkDetection | None = None,
+    ) -> NDArray[Any] | None:
+        """Return the detector-aligned Doubao glyph footprint.
+
+        The continuous top-hat response is suitable for locating the wordmark but is
+        not a safe removal mask: unrelated bright texture can join the response and
+        enlarge its bounding rectangle. The detector already carries the winning
+        template box, so resize the captured alpha to that exact box and mask only its
+        glyphs. Explicit ``force`` has no trustworthy alignment and retains the shared
+        geometry-box behavior.
+        """
+        if force:
+            return super().footprint_mask(image, force=True, dilate=dilate, detection=detection)
+        if image is None or image.size == 0:
+            return None
+
+        image = image_io.to_bgr(image)
+        det = detection if detection is not None else self.detect(image)
+        if not det.detected or det.match_box is None:
+            return super().footprint_mask(image, force=False, dilate=dilate, detection=det)
+        alpha = _alpha_template()
+        if alpha is None:
+            return super().footprint_mask(image, force=False, dilate=dilate, detection=det)
+
+        loc = self.locate(image)
+        x0, y0, x1, y1 = det.match_box  # inclusive ROI-local coordinates
+        x0, y0 = max(0, x0), max(0, y0)
+        x1, y1 = min(loc.w - 1, x1), min(loc.h - 1, y1)
+        if x1 < x0 or y1 < y0:
+            return None
+        glyph_w, glyph_h = x1 - x0 + 1, y1 - y0 + 1
+        aligned = cv2.resize(alpha, (glyph_w, glyph_h), interpolation=cv2.INTER_LINEAR)
+
+        local_mask = np.zeros((loc.h, loc.w), np.uint8)
+        local_mask[y0 : y0 + glyph_h, x0 : x0 + glyph_w] = (aligned > _FOOTPRINT_ALPHA_FLOOR).astype(np.uint8) * 255
+        radius = _FOOTPRINT_DILATE if dilate is None else max(0, dilate)
+        if radius > 0:
+            kernel = np.ones((2 * radius + 1, 2 * radius + 1), np.uint8)
+            local_mask = cv2.dilate(local_mask, kernel)
+        mask = np.zeros(image.shape[:2], np.uint8)
+        mask[loc.y : loc.y + loc.h, loc.x : loc.x + loc.w] = local_mask
+        return mask

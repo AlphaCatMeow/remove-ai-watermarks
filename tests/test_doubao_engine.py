@@ -114,13 +114,33 @@ class TestRealSample:
         assert before.detected
         out, region = registry.get_mark("doubao").remove(img, backend="cv2")
         assert region is not None
-        assert DoubaoEngine().detect(out).confidence < before.confidence
+        after = DoubaoEngine().detect(out)
+        assert not after.detected
+        assert after.confidence < before.confidence
 
     def test_far_region_untouched(self):
         img = load_image_bgr(SAMPLE)
         out, _ = registry.get_mark("doubao").remove(img, backend="cv2")
         h, w = img.shape[:2]
         assert np.array_equal(img[: h // 2, : w // 2], out[: h // 2, : w // 2])
+
+    def test_footprint_stays_on_glyphs_and_off_frame_edges(self):
+        """Do not turn textured content behind the mark into a solid edge mask.
+
+        The sample's branch contributes bright top-hat pixels below the wordmark.
+        Bounding that response and dilating it used to clamp a solid 404x134 mask
+        to both frame edges, so OpenCV propagated the remaining context into large
+        triangular artifacts. The detector already aligned the captured glyph; the
+        removal footprint must follow that glyph instead of the background response.
+        """
+        img = load_image_bgr(SAMPLE)
+        mask = DoubaoEngine().footprint_mask(img)
+        assert mask is not None
+        assert not mask[-1].any()
+        assert not mask[:, -1].any()
+        ys, xs = np.where(mask > 0)
+        bounding_area = (int(xs.max()) - int(xs.min()) + 1) * (int(ys.max()) - int(ys.min()) + 1)
+        assert np.count_nonzero(mask) < 0.65 * bounding_area
 
 
 # ── Alpha asset + footprint mask + localize -> fill removal ─────────
@@ -159,7 +179,7 @@ class TestFootprintMaskAndRemoval:
         ("w", "h"),
         [
             (_ALPHA_NATIVE_WIDTH, _ALPHA_NATIVE_WIDTH),  # captured width
-            (1773, 2364),  # 3:4 portrait -> template-free footprint generalizes
+            (1773, 2364),  # 3:4 portrait -> aligned footprint generalizes
         ],
     )
     def test_fill_removes_and_leaves_far_region(self, w, h):

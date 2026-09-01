@@ -5,8 +5,8 @@ A single catalog that ties each known visible mark to (a) where it usually sits,
 registry detects every known mark in its usual place and removes the ones
 present.
 
-**Localize -> fill.** A known mark is removed by LOCALIZING it (a template-free,
-version-robust detector that returns a binary footprint MASK) and then handing
+**Localize -> fill.** A known mark is removed by LOCALIZING it (a version-robust
+detector that returns a binary footprint MASK) and then handing
 that mask to ONE shared, swappable fill backend (``region_eraser``: cv2 Telea/NS,
 MI-GAN, or big-LaMa). No mark carries a reverse-alpha step any more: the old
 ``original = (wm - a*logo)/(1-a)`` recovery depended on a fixed captured alpha map
@@ -519,8 +519,9 @@ def _gemini_mask(
 # The text-mark engines share the TextMarkEngine interface, so one parameterized
 # adapter pair drives all of them -- a new
 # text mark is one `_text_mark(...)` row below, not another copy-paste of these
-# bodies. Detection matches the glyph silhouette; the mask is the template-free
-# glyph-bbox footprint (see TextMarkEngine.footprint_mask).
+# bodies. Detection matches the glyph silhouette; the default mask is the
+# template-free glyph-bbox footprint (see TextMarkEngine.footprint_mask), while an
+# engine may override it when the mark has a measured safer footprint.
 def _text_mark_detect(key: str, label: str, location: str) -> Callable[..., MarkDetection]:
     def detect(image: NDArray[Any], *, provenance: bool = False) -> MarkDetection:
         d = _engine(key).detect(image, provenance=provenance)
